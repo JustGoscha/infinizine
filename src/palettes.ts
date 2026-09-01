@@ -104,11 +104,27 @@ export function shades(hex: string): string[] {
   if (s < 0.08) {
     return [0.85, 0.68, 0.5, 0.34, 0.2, 0.08].map((tl) => hslToHex(h, s, tl));
   }
-  // Strictly monotonic light→dark ramp through the base color's hue/saturation:
-  // evenly spaced between a light and a dark endpoint, no in-between jumps.
+  // Painterly ramp: monotonic light→dark, but hue drifts the way artists shade —
+  // tints lean warm (toward yellow), shades lean cool (toward blue-violet),
+  // with saturation easing in the lights and deepening in the darks.
   const hi = Math.min(0.9, l + 0.35);
   const lo = Math.max(0.1, l - 0.35);
-  return [0, 1, 2, 3, 4, 5].map((i) => hslToHex(h, s, hi + ((lo - hi) * i) / 5));
+  const WARM = 55 / 360;
+  const COOL = 255 / 360;
+  const shiftHue = (from: number, to: number, amount: number) => {
+    let d = to - from;
+    d -= Math.round(d); // shortest way around the wheel
+    return (from + d * amount + 1) % 1;
+  };
+  return [0, 1, 2, 3, 4, 5].map((i) => {
+    const L = hi + ((lo - hi) * i) / 5;
+    if (L > l) {
+      const t = (L - l) / Math.max(0.001, hi - l);
+      return hslToHex(shiftHue(h, WARM, t * 0.22), s * (1 - 0.25 * t), L);
+    }
+    const t = (l - L) / Math.max(0.001, l - lo);
+    return hslToHex(shiftHue(h, COOL, t * 0.3), Math.min(1, s * (1 + 0.2 * t)), L);
+  });
 }
 
 function hexToHsl(hex: string) {
