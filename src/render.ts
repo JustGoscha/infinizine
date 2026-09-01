@@ -78,15 +78,12 @@ export class Renderer {
     ctx.scale(z, z);
     ctx.translate(-camera.x, -camera.y);
 
-    // Pages under ink; when presenting, no frames — instead clip all ink to the pages
+    // When presenting, clip all ink to the current page (frames aren't drawn)
     if (presenting) {
-      // Only the current page — nothing outside it
       const p = this.input.presentPage;
       const clip = new Path2D();
       if (p) clip.rect(p.x, p.y, p.w, p.h);
-      ctx.clip(clip); // same desk ground as edit mode — only the ink gets clipped
-    } else {
-      for (const page of this.store.doc.pages) this.drawPage(page, z);
+      ctx.clip(clip);
     }
 
     // Elements, culled; 'back' layer first, then 'front' (paint-behind toggle)
@@ -297,6 +294,11 @@ export class Renderer {
     }
     if (live && live.layer !== 'back') drawLive();
     ctx.globalAlpha = 1;
+
+    // Page borders sit on top of everything
+    if (!presenting) {
+      for (const page of this.store.doc.pages) this.drawPage(page, z);
+    }
 
     // Animation areas (frames + label), edit mode only
     if (!presenting) {
