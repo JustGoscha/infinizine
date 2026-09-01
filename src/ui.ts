@@ -141,6 +141,10 @@ export function buildUI(
       <button id="pm-move" title="Move page">${svg('<path d="M12 3 V21 M3 12 H21"/><path d="M12 3 L9.6 5.4 M12 3 L14.4 5.4 M12 21 L9.6 18.6 M12 21 L14.4 18.6 M3 12 L5.4 9.6 M3 12 L5.4 14.4 M21 12 L18.6 9.6 M21 12 L18.6 14.4"/>')}</button>
       <button id="pm-add" title="Add page (same size)">${svg('<path d="M12 5 V19 M5 12 H19"/>')}</button>
       <button id="pm-delete" title="Delete page">${svg('<path d="M4 7 H20 M9 7 V5 A1 1 0 0 1 10 4 H14 A1 1 0 0 1 15 5 V7 M6.5 7 L7.5 20 H16.5 L17.5 7"/>')}</button>
+      <span class="pm-sep"></span>
+      <div class="pm-formats">
+        ${FORMATS.map((f) => `<button class="pm-format" data-f="${f.format}">${f.label}</button>`).join('')}
+      </div>
     </div>
   `;
 
@@ -178,7 +182,22 @@ export function buildUI(
     const slot = document.createElement('button');
     slot.className = 'tool tool-slot';
     slot.dataset.group = g.id;
+    // touch: long-press opens the flyout; tap activates (or toggles when already active)
+    let slotLp = 0;
+    let slotLongPressed = false;
+    slot.addEventListener('pointerdown', (e) => {
+      if (e.pointerType === 'mouse' || g.tools.length < 2) return;
+      slotLp = window.setTimeout(() => {
+        slotLongPressed = true;
+        closeToolFlyouts();
+        wrap.classList.add('open');
+      }, 300);
+    });
+    const cancelSlotLp = () => clearTimeout(slotLp);
+    slot.addEventListener('pointerup', cancelSlotLp);
+    slot.addEventListener('pointerleave', cancelSlotLp);
     slot.addEventListener('click', () => {
+      if (slotLongPressed) { slotLongPressed = false; return; }
       const activeInGroup = g.tools.includes(state.tool);
       if (activeInGroup && g.tools.length > 1) {
         const wasOpen = wrap.classList.contains('open');
@@ -527,6 +546,13 @@ export function buildUI(
     hidePageMenu();
     invalidate();
   });
+  root.querySelectorAll('#page-menu .pm-format').forEach((b) =>
+    b.addEventListener('click', () => {
+      store.setPagesFormat((b as HTMLElement).dataset.f as PageFormat);
+      hidePageMenu();
+      invalidate();
+    }),
+  );
   document.addEventListener('pointerdown', (e) => {
     if (!(e.target as HTMLElement).closest?.('#page-menu')) hidePageMenu();
   });

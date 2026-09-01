@@ -171,6 +171,18 @@ html, body {
   z-index: 30;
 }
 .tool-wrap.open .tool-flyout { display: flex; }
+/* hover bridge + hover-to-open on desktop: one hit to reach any tool */
+.tool-flyout::after {
+  content: '';
+  position: absolute;
+  top: 100%;
+  left: -12px;
+  right: -12px;
+  height: 22px;
+}
+@media (hover: hover) {
+  .tool-wrap.multi:hover .tool-flyout { display: flex; }
+}
 .tool-flyout .tool.active { transform: none; }
 .layer-toggle svg { width: 22px; height: 22px; display: block; margin: auto; }
 .layer-toggle { display: grid; place-items: center; }
@@ -656,6 +668,16 @@ body.presenting .topbar { display: none; }
 }
 .page-menu button:active { background: var(--ink); color: var(--card); }
 .page-menu svg { width: 20px; height: 20px; }
+.pm-sep { width: 1.5px; background: var(--line); margin: 4px 2px; }
+.pm-formats { display: flex; gap: 2px; align-items: center; }
+.page-menu .pm-format {
+  width: auto;
+  padding: 0 8px;
+  font-family: inherit;
+  font-size: 12px;
+  font-weight: 600;
+  color: var(--ink-soft);
+}
 
 #page-popover { display: flex; gap: 8px; }
 #page-popover.hidden { display: none; }

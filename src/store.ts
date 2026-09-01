@@ -14,6 +14,7 @@ type Op =
   | { type: 'add-page'; page: Page }
   | { type: 'delete-page'; page: Page }
   | { type: 'move-page'; id: string; dx: number; dy: number }
+  | { type: 'pages-format'; before: { id: string; w: number; h: number }[]; after: { id: string; w: number; h: number }[] }
   | { type: 'add-area'; area: AnimArea; elements: Element[] }
   | { type: 'delete-area'; area: AnimArea; elements: Element[] }
   | { type: 'add-frame'; areaId: string; layerId: string; frame: AnimFrame; index: number; elements: Element[] }
@@ -127,6 +128,13 @@ export class Store {
         if (pg) { pg.x += op.dx; pg.y += op.dy; }
         break;
       }
+      case 'pages-format': {
+        for (const size of op.after) {
+          const pg = d.pages.find((p) => p.id === size.id);
+          if (pg) { pg.w = size.w; pg.h = size.h; }
+        }
+        break;
+      }
       case 'add-area':
         d.areas.push(op.area);
         d.elements.push(...op.elements);
@@ -220,6 +228,7 @@ export class Store {
       case 'add-page': return { type: 'delete-page', page: op.page };
       case 'delete-page': return { type: 'add-page', page: op.page };
       case 'move-page': return { ...op, dx: -op.dx, dy: -op.dy };
+      case 'pages-format': return { ...op, before: op.after, after: op.before };
       case 'add-area': return { ...op, type: 'delete-area' };
       case 'delete-area': return { ...op, type: 'add-area' };
       case 'add-frame': return { ...op, type: 'delete-frame' };
@@ -285,6 +294,18 @@ export class Store {
     if (dx || dy) this.commit({ type: 'move-page', id, dx, dy });
   }
   deletePage(page: Page) { this.commit({ type: 'delete-page', page }); }
+
+  /** All pages share one size: switch every page to the given format. */
+  setPagesFormat(format: PageFormat) {
+    const { w, h } = PAGE_SIZES[format];
+    const pages = this.doc.pages;
+    if (!pages.length || pages.every((p) => p.w === w && p.h === h)) return;
+    this.commit({
+      type: 'pages-format',
+      before: pages.map((p) => ({ id: p.id, w: p.w, h: p.h })),
+      after: pages.map((p) => ({ id: p.id, w, h })),
+    });
+  }
 
   /** New page with the same size, placed right of the source with the standard gap. */
   addPageAfter(src: Page): Page {
