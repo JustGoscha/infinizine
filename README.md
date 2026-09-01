@@ -19,8 +19,8 @@ Pages are the manuscript; the endless canvas around them holds the mess: sketche
 ## Run
 
 ```sh
-npm install
-npm run dev
+bun install
+bun run dev
 ```
 
 Open http://localhost:5173 — works in the browser and on iPad (Apple Pencil supported).
