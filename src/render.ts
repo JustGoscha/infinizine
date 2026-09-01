@@ -67,7 +67,7 @@ export class Renderer {
     // Desk (chosen paper color)
     ctx.fillStyle = paper;
     ctx.fillRect(0, 0, vw, vh);
-    if (!presenting) this.drawDots(vw, vh, paper);
+    if (!presenting) this.drawPattern(vw, vh, paper);
 
     const view = camera.viewport(vw, vh);
     const z = camera.zoom;
@@ -443,12 +443,14 @@ export class Renderer {
     }
   }
 
-  private drawDots(vw: number, vh: number, paper: string) {
+  private drawPattern(vw: number, vh: number, paper: string) {
+    const pattern = this.store.doc.pattern ?? 'dots';
+    if (pattern === 'blank') return;
     const { camera, ctx } = this;
-    // light dots on dark paper, dark dots on light paper
+    // light marks on dark paper, dark marks on light paper
     const n = parseInt(paper.slice(1), 16);
     const lum = ((n >> 16) & 255) * 0.299 + ((n >> 8) & 255) * 0.587 + (n & 255) * 0.114;
-    const dotColor = lum < 128 ? 'rgba(255,255,255,0.14)' : 'rgba(120,105,80,0.18)';
+    const dark = lum < 128;
     const spacingWorld = 48;
     let s = spacingWorld * camera.zoom;
     while (s < 26) s *= 2;
@@ -456,12 +458,23 @@ export class Renderer {
     const originScreen = camera.worldToScreen(0, 0, vw, vh);
     const ox = ((originScreen.x % s) + s) % s;
     const oy = ((originScreen.y % s) + s) % s;
-    ctx.fillStyle = dotColor;
-    for (let x = ox; x < vw; x += s) {
-      for (let y = oy; y < vh; y += s) {
-        ctx.fillRect(x - 1, y - 1, 2, 2);
+    if (pattern === 'dots') {
+      ctx.fillStyle = dark ? 'rgba(255,255,255,0.14)' : 'rgba(120,105,80,0.18)';
+      for (let x = ox; x < vw; x += s) {
+        for (let y = oy; y < vh; y += s) {
+          ctx.fillRect(x - 1, y - 1, 2, 2);
+        }
       }
+      return;
     }
+    ctx.strokeStyle = dark ? 'rgba(255,255,255,0.07)' : 'rgba(120,105,80,0.1)';
+    ctx.lineWidth = 1;
+    ctx.beginPath();
+    if (pattern === 'grid') {
+      for (let x = ox; x < vw; x += s) { ctx.moveTo(x, 0); ctx.lineTo(x, vh); }
+    }
+    for (let y = oy; y < vh; y += s) { ctx.moveTo(0, y); ctx.lineTo(vw, y); }
+    ctx.stroke();
   }
 
   private drawPage(page: Page, z: number) {

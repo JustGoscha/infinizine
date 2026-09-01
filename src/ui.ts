@@ -115,6 +115,7 @@ const MORE_FORMATS: Fmt[] = [
   { label: 'IG portrait 4:5', ...mm(216, 270) },
   { label: 'Story 9:16', ...mm(135, 240) },
   { label: 'Screen 16:9', ...mm(240, 135) },
+  { label: 'Screen 4:3', ...mm(240, 180) },
 ];
 
 const CUSTOM_FORMATS_KEY = 'infinizine-custom-formats';
@@ -340,6 +341,20 @@ export function buildUI(
       ).join('')}</div>
       <label class="pal-custom">custom <input type="color" id="custom-color" value="${state.color}"></label>
       <div class="paper-row">
+        <span class="paper-label">pattern</span>
+        ${['blank', 'dots', 'grid', 'lines']
+          .map((pt) => `<button class="pattern-dot ${((store.doc.pattern ?? 'dots') === pt) ? 'active' : ''}" data-p="${pt}" title="${pt}">${
+            pt === 'dots'
+              ? svg('<circle cx="7" cy="7" r="1.2" fill="currentColor"/><circle cx="17" cy="7" r="1.2" fill="currentColor"/><circle cx="7" cy="17" r="1.2" fill="currentColor"/><circle cx="17" cy="17" r="1.2" fill="currentColor"/>')
+              : pt === 'grid'
+                ? svg('<path d="M9 4v16 M15 4v16 M4 9h16 M4 15h16"/>')
+                : pt === 'lines'
+                  ? svg('<path d="M4 8h16 M4 13h16 M4 18h16"/>')
+                  : svg('<rect x="5" y="5" width="14" height="14" rx="2"/>')
+          }</button>`)
+          .join('')}
+      </div>
+      <div class="paper-row">
         <span class="paper-label">paper</span>
         ${['#FFFFFF', '#F7F4EC', '#F3ECDD', '#ECECEA', '#1E1C1A']
           .map((c) => `<button class="paper-dot ${((store.doc.paper ?? '#F7F4EC') === c) ? 'active' : ''}" data-c="${c}" style="background:${c}"></button>`)
@@ -347,6 +362,12 @@ export function buildUI(
         <input type="color" id="paper-color" value="${store.doc.paper ?? '#F7F4EC'}">
       </div>
     `;
+    palettePop.querySelectorAll('.pattern-dot').forEach((b) =>
+      b.addEventListener('click', () => {
+        store.setPattern((b as HTMLElement).dataset.p as 'blank' | 'dots' | 'grid' | 'lines');
+        buildPalettePopover();
+      }),
+    );
     palettePop.querySelectorAll('.paper-dot').forEach((b) =>
       b.addEventListener('click', () => {
         store.setPaper((b as HTMLElement).dataset.c!);

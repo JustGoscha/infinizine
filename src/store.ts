@@ -470,4 +470,10 @@ export class Store {
     this.scheduleSave();
     this.onChange();
   }
+
+  setPattern(pattern: 'blank' | 'dots' | 'grid' | 'lines') {
+    this.doc.pattern = pattern;
+    this.scheduleSave();
+    this.onChange();
+  }
 }

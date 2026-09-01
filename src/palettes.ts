@@ -66,6 +66,27 @@ export const PALETTES: PalettePreset[] = [
     name: 'Blueprint',
     hues: ['#EAF0F6', '#12233D', '#7E93AC', '#1F5FBF', '#E0533D'],
   },
+  // all-color palettes — no whites, blacks, or neutrals
+  {
+    id: 'markers',
+    name: 'Marker Set',
+    hues: ['#FF6B35', '#004E89', '#1B998B', '#FFBC42', '#D7263D', '#6A4C93'],
+  },
+  {
+    id: 'fauve',
+    name: 'Fauvist',
+    hues: ['#E84545', '#2B6CB0', '#2F9E44', '#F2B705', '#8A4F7D'],
+  },
+  {
+    id: 'gelato',
+    name: 'Gelato',
+    hues: ['#FF8FA3', '#FFD166', '#8ECAE6', '#B5E48C', '#CDB4DB'],
+  },
+  {
+    id: 'jungle',
+    name: 'Jungle',
+    hues: ['#1E5128', '#4E9F3D', '#D8973C', '#A63C06', '#256D85'],
+  },
 ];
 
 export function getPalette(id: string): PalettePreset {

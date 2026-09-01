@@ -642,6 +642,19 @@ body.presenting .topbar { display: none; }
 }
 .paper-dot.active { outline: 2px solid var(--ink); outline-offset: 2px; }
 .paper-row input { width: 34px; height: 26px; border: none; background: none; cursor: pointer; }
+.pattern-dot {
+  width: 30px;
+  height: 30px;
+  border: 1.5px solid var(--line);
+  border-radius: 8px;
+  background: transparent;
+  color: var(--ink-soft);
+  cursor: pointer;
+  display: grid;
+  place-items: center;
+}
+.pattern-dot svg { width: 18px; height: 18px; }
+.pattern-dot.active { border-color: var(--ink); color: var(--ink); box-shadow: 0 0 0 1px var(--ink); }
 
 .page-menu {
   position: fixed;

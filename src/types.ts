@@ -97,6 +97,7 @@ export interface Doc {
   name: string;
   palette: string; // active palette preset id
   paper?: string; // canvas/paper background color (default warm cream)
+  pattern?: 'blank' | 'dots' | 'grid' | 'lines'; // paper pattern (default dots)
   elements: Element[];
   pages: Page[];
   areas: AnimArea[];
