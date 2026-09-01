@@ -282,12 +282,13 @@ export function buildUI(
   // Inline palette: 5–6 dots; shades appear on hover (desktop) or long-press (touch)
   function buildPalRow() {
     palRow.innerHTML = '';
-    for (const hue of getPalette(store.doc.palette).hues) {
+    const preset = getPalette(store.doc.palette);
+    for (const hue of preset.hues) {
       const wrap = document.createElement('div');
       wrap.className = 'pal-wrap';
       const fly = document.createElement('div');
       fly.className = 'shade-flyout';
-      for (const c of shades(hue)) {
+      for (const c of shades(hue, preset.drama)) {
         const s = document.createElement('button');
         s.className = 'pal-shade';
         s.style.background = c;
@@ -994,13 +995,12 @@ export function buildUI(
     root.querySelectorAll<HTMLElement>('.size').forEach((b) =>
       b.classList.toggle('active', Number(b.dataset.w) === state.baseWidth),
     );
+    const drama = getPalette(store.doc.palette).drama;
     palRow.querySelectorAll<HTMLElement>('.pal-main').forEach((d) => {
       const hue = d.dataset.hue!;
-      d.classList.toggle(
-        'active',
-        hue === state.color || shades(hue).includes(state.color),
-      );
-      if (shades(hue).includes(state.color) && hue !== state.color) d.style.background = state.color;
+      const sh = shades(hue, drama);
+      d.classList.toggle('active', hue === state.color || sh.includes(state.color));
+      if (sh.includes(state.color) && hue !== state.color) d.style.background = state.color;
       else d.style.background = hue;
     });
     // Layer symbol: current-color stroke over / behind a white square
