@@ -26,19 +26,19 @@ export const PALETTES: PalettePreset[] = [
   },
   {
     id: 'vibrant',
-    drama: 0.75,
+    drama: 0.9,
     name: 'Vibrant',
     hues: ['#FFFFFF', '#141414', '#B3ADA1', '#FF3B30', '#0A84FF', '#FFC800'],
   },
   {
     id: 'autumn',
-    drama: 0.7,
+    drama: 0.85,
     name: 'Autumn',
     hues: ['#F8F1E3', '#2E2016', '#A78A63', '#B5471D', '#5A6B2F'],
   },
   {
     id: 'riso',
-    drama: 0.9,
+    drama: 1.1,
     name: 'Riso',
     hues: ['#FFFDF6', '#1F2A44', '#B9B3A8', '#FF48B0', '#0078BF'],
   },
@@ -68,7 +68,7 @@ export const PALETTES: PalettePreset[] = [
   },
   {
     id: 'sunset',
-    drama: 0.85,
+    drama: 1.1,
     name: 'Sunset',
     hues: ['#FFF8F0', '#33202A', '#B08D8A', '#E2725B', '#8A4F7D', '#F2B95F'],
   },
@@ -81,13 +81,13 @@ export const PALETTES: PalettePreset[] = [
   // all-color palettes — no whites, blacks, or neutrals
   {
     id: 'markers',
-    drama: 0.8,
+    drama: 1.0,
     name: 'Marker Set',
     hues: ['#FF6B35', '#004E89', '#1B998B', '#FFBC42', '#D7263D', '#6A4C93'],
   },
   {
     id: 'fauve',
-    drama: 1.0,
+    drama: 1.4,
     name: 'Fauvist',
     hues: ['#E84545', '#2B6CB0', '#2F9E44', '#F2B705', '#8A4F7D'],
   },
@@ -99,7 +99,7 @@ export const PALETTES: PalettePreset[] = [
   },
   {
     id: 'jungle',
-    drama: 0.7,
+    drama: 0.9,
     name: 'Jungle',
     hues: ['#1E5128', '#4E9F3D', '#D8973C', '#A63C06', '#256D85'],
   },
