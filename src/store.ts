@@ -1,6 +1,6 @@
 // Document store: state, undo/redo, localStorage persistence, page placement.
 
-import { AnimArea, AnimFrame, AnimLayer, Doc, Element, Page, PageFormat, PAGE_SIZES, emptyDoc, uid } from './types';
+import { AnimArea, AnimFrame, AnimLayer, Doc, Element, Page, emptyDoc, uid } from './types';
 
 type TextContent = { text: string; w: number; h: number; font?: string; fontSize?: number };
 type TextMetrics = { x: number; w: number; h: number; fontSize: number };
@@ -296,8 +296,7 @@ export class Store {
   deletePage(page: Page) { this.commit({ type: 'delete-page', page }); }
 
   /** All pages share one size: switch every page to the given format. */
-  setPagesFormat(format: PageFormat) {
-    const { w, h } = PAGE_SIZES[format];
+  setPagesFormat({ w, h }: { w: number; h: number }) {
     const pages = this.doc.pages;
     if (!pages.length || pages.every((p) => p.w === w && p.h === h)) return;
     this.commit({
@@ -323,8 +322,8 @@ export class Store {
   }
 
   /** New page placed right of the last page (with padding), or at the given center. */
-  addPage(format: PageFormat, center?: { x: number; y: number }): Page {
-    const { w, h } = PAGE_SIZES[format];
+  addPage(size: { w: number; h: number }, center?: { x: number; y: number }): Page {
+    const { w, h } = size;
     const pages = this.doc.pages;
     let x: number, y: number;
     if (pages.length) {

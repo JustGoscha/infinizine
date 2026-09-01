@@ -26,7 +26,7 @@ store.onChange = () => {
 
 // First run: start with one A4 page waiting (the journaler's greeting)
 if (store.doc.pages.length === 0 && store.doc.elements.length === 0) {
-  store.addPage('A4', { x: 0, y: 0 });
+  store.addPage({ w: 420, h: 594 }, { x: 0, y: 0 }); // A4
 }
 
 window.addEventListener('resize', () => renderer.invalidate());

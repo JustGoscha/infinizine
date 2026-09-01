@@ -4,7 +4,7 @@ import { InputState, Tool } from './input';
 import { Store } from './store';
 import { Camera } from './camera';
 import { PALETTES, getPalette, shades } from './palettes';
-import { PageFormat, uid } from './types';
+import { UNITS_PER_MM, uid } from './types';
 import { layoutText, layoutHeight, FONTS } from './text';
 import { markdownToHtml, htmlToMarkdown, autoTransform, caretToEnd } from './richedit';
 
@@ -89,12 +89,47 @@ const SIZES = [
   { w: 6, label: 'L' },
 ];
 
-const FORMATS: { format: PageFormat; label: string }[] = [
-  { format: 'A4', label: 'A4' },
-  { format: 'A4-landscape', label: 'A4 wide' },
-  { format: 'A5', label: 'A5' },
-  { format: 'square', label: 'Square' },
+interface Fmt { label: string; w: number; h: number } // w/h in world units (2/mm)
+const mm = (w: number, h: number) => ({ w: w * UNITS_PER_MM, h: h * UNITS_PER_MM });
+
+const PRIMARY_FORMATS: Fmt[] = [
+  { label: 'A4', ...mm(210, 297) },
+  { label: 'A4 wide', ...mm(297, 210) },
+  { label: 'A5', ...mm(148, 210) },
+  { label: 'Square', ...mm(240, 240) },
 ];
+
+const MORE_FORMATS: Fmt[] = [
+  { label: 'A3', ...mm(297, 420) },
+  { label: 'A6', ...mm(105, 148) },
+  { label: 'B5', ...mm(176, 250) },
+  { label: 'Letter', ...mm(216, 279) },
+  { label: 'Legal', ...mm(216, 356) },
+  { label: 'Tabloid', ...mm(279, 432) },
+  { label: 'Half letter', ...mm(140, 216) },
+  { label: 'US comic', ...mm(168, 260) },
+  { label: 'Manga B6', ...mm(128, 182) },
+  { label: 'Zine pocket', ...mm(110, 178) },
+  { label: 'Postcard', ...mm(148, 105) },
+  { label: 'Bookmark', ...mm(50, 175) },
+  { label: 'IG portrait 4:5', ...mm(216, 270) },
+  { label: 'Story 9:16', ...mm(135, 240) },
+  { label: 'Screen 16:9', ...mm(240, 135) },
+];
+
+const CUSTOM_FORMATS_KEY = 'infinizine-custom-formats';
+function customFormats(): Fmt[] {
+  try {
+    return JSON.parse(localStorage.getItem(CUSTOM_FORMATS_KEY) ?? '[]');
+  } catch {
+    return [];
+  }
+}
+function saveCustomFormat(f: Fmt) {
+  try {
+    localStorage.setItem(CUSTOM_FORMATS_KEY, JSON.stringify([...customFormats(), f]));
+  } catch { /* ignore */ }
+}
 
 export function buildUI(
   root: HTMLElement,
@@ -143,7 +178,8 @@ export function buildUI(
       <button id="pm-delete" title="Delete page">${svg('<path d="M4 7 H20 M9 7 V5 A1 1 0 0 1 10 4 H14 A1 1 0 0 1 15 5 V7 M6.5 7 L7.5 20 H16.5 L17.5 7"/>')}</button>
       <span class="pm-sep"></span>
       <div class="pm-formats">
-        ${FORMATS.map((f) => `<button class="pm-format" data-f="${f.format}">${f.label}</button>`).join('')}
+        ${PRIMARY_FORMATS.map((f, i) => `<button class="pm-format" data-i="${i}">${f.label}</button>`).join('')}
+        <button class="pm-format" id="pm-more-formats" title="More formats">···</button>
       </div>
     </div>
   `;
@@ -345,19 +381,62 @@ export function buildUI(
   });
 
   const addPageBtn = root.querySelector('#add-page') as HTMLButtonElement;
-  pagePop.innerHTML = FORMATS.map(
-    (f) => `<button class="page-format" data-f="${f.format}">${f.label}</button>`,
-  ).join('');
-  pagePop.querySelectorAll('.page-format').forEach((b) =>
-    b.addEventListener('click', () => {
-      const format = (b as HTMLElement).dataset.f as PageFormat;
-      const page = store.addPage(format, { x: camera.x, y: camera.y });
-      camera.x = page.x + page.w / 2;
-      camera.y = page.y + page.h / 2;
+
+  // Format panel (shared by first-page picker and the page menu's "more"):
+  // primary + extended presets + saved custom formats + a custom W×H creator.
+  let onPickFormat: (f: Fmt) => void = () => {};
+  function buildFormatPanel() {
+    const all = [...PRIMARY_FORMATS, ...MORE_FORMATS, ...customFormats()];
+    pagePop.innerHTML = `
+      <div class="fmt-grid">${all
+        .map(
+          (f, i) => `<button class="fmt" data-i="${i}">
+            <span class="fmt-label">${f.label}</span>
+            <span class="fmt-dims">${Math.round(f.w / UNITS_PER_MM)}×${Math.round(f.h / UNITS_PER_MM)}mm</span>
+          </button>`,
+        )
+        .join('')}</div>
+      <div class="fmt-custom">
+        <span class="fmt-custom-label">custom</span>
+        <input id="fmt-name" type="text" placeholder="name" maxlength="16">
+        <input id="fmt-w" type="number" min="10" max="2000" placeholder="W"> ×
+        <input id="fmt-h" type="number" min="10" max="2000" placeholder="H"> mm
+        <button id="fmt-add">Add</button>
+      </div>
+    `;
+    pagePop.querySelectorAll('.fmt').forEach((b) =>
+      b.addEventListener('click', () => {
+        const f = all[Number((b as HTMLElement).dataset.i)];
+        pagePop.classList.add('hidden');
+        onPickFormat(f);
+        invalidate();
+      }),
+    );
+    (pagePop.querySelector('#fmt-add') as HTMLButtonElement).addEventListener('click', () => {
+      const wMm = Number((pagePop.querySelector('#fmt-w') as HTMLInputElement).value);
+      const hMm = Number((pagePop.querySelector('#fmt-h') as HTMLInputElement).value);
+      if (!wMm || !hMm) return;
+      const name = (pagePop.querySelector('#fmt-name') as HTMLInputElement).value.trim() || `${wMm}×${hMm}`;
+      const f: Fmt = { label: name, ...mm(wMm, hMm) };
+      saveCustomFormat(f);
       pagePop.classList.add('hidden');
+      onPickFormat(f);
       invalidate();
-    }),
-  );
+    });
+  }
+
+  function openFormatPanel(pick: (f: Fmt) => void) {
+    onPickFormat = pick;
+    palettePop.classList.add('hidden');
+    buildFormatPanel();
+    pagePop.classList.remove('hidden');
+  }
+
+  const createFirstPage = (f: Fmt) => {
+    const page = store.addPage({ w: f.w, h: f.h }, { x: camera.x, y: camera.y });
+    camera.x = page.x + page.w / 2;
+    camera.y = page.y + page.h / 2;
+  };
   addPageBtn.addEventListener('click', () => {
     palettePop.classList.add('hidden');
     const pages = store.doc.pages;
@@ -370,7 +449,7 @@ export function buildUI(
       invalidate();
       return;
     }
-    pagePop.classList.toggle('hidden');
+    openFormatPanel(createFirstPage);
   });
 
   // ---------- text tool: draw a rectangle, text wraps inside it ----------
@@ -546,13 +625,17 @@ export function buildUI(
     hidePageMenu();
     invalidate();
   });
-  root.querySelectorAll('#page-menu .pm-format').forEach((b) =>
+  root.querySelectorAll('#page-menu .pm-format[data-i]').forEach((b) =>
     b.addEventListener('click', () => {
-      store.setPagesFormat((b as HTMLElement).dataset.f as PageFormat);
+      store.setPagesFormat(PRIMARY_FORMATS[Number((b as HTMLElement).dataset.i)]);
       hidePageMenu();
       invalidate();
     }),
   );
+  (root.querySelector('#pm-more-formats') as HTMLButtonElement).addEventListener('click', () => {
+    hidePageMenu();
+    openFormatPanel((f) => store.setPagesFormat(f));
+  });
   document.addEventListener('pointerdown', (e) => {
     if (!(e.target as HTMLElement).closest?.('#page-menu')) hidePageMenu();
   });

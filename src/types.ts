@@ -82,8 +82,6 @@ export interface TextBox {
 
 export type Element = Stroke | FillShape | TextBox;
 
-export type PageFormat = 'A4' | 'A4-landscape' | 'square' | 'A5';
-
 export interface Page {
   id: string;
   x: number; // world coords of top-left
@@ -104,13 +102,8 @@ export interface Doc {
   areas: AnimArea[];
 }
 
-export const PAGE_SIZES: Record<PageFormat, { w: number; h: number }> = {
-  // A4 at ~2px/mm world units → 420×594
-  'A4': { w: 420, h: 594 },
-  'A4-landscape': { w: 594, h: 420 },
-  'A5': { w: 297, h: 420 },
-  'square': { w: 480, h: 480 },
-};
+// World units are ~2 per mm (A4 → 420×594)
+export const UNITS_PER_MM = 2;
 
 let counter = 0;
 export function uid(prefix: string): string {
