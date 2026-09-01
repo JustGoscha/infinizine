@@ -143,6 +143,7 @@ export function buildUI(
     <header class="topbar">
       <div class="wordmark">INFINI<span class="zine"><i>Z</i><i>I</i><i>N</i><i>E</i></span></div>
       <div class="top-actions">
+        <button class="chip" id="docs" title="My zines">${svg('<path d="M4 7 V19 A1.5 1.5 0 0 0 5.5 20.5 H18.5 A1.5 1.5 0 0 0 20 19 V9.5 A1.5 1.5 0 0 0 18.5 8 H12 L10 5.5 H5.5 A1.5 1.5 0 0 0 4 7 Z"/>')}</button>
         <button class="chip" id="undo" title="Undo (⌘Z)">↩</button>
         <button class="chip" id="redo" title="Redo (⇧⌘Z)">↪</button>
         <button class="chip" id="finger-toggle" title="Finger drawing"></button>
@@ -171,6 +172,7 @@ export function buildUI(
       <div class="divider"></div>
       <button class="add-page" id="add-page" title="New page">${svg('<path d="M7 3.5 H13.5 L18 8 V20.5 H7 Z"/><path d="M13.5 3.5 V8 H18"/><path d="M12.5 11.5 v5 M10 14 h5"/>')}</button>
     </div>
+    <div class="popover top-pop hidden" id="docs-popover"></div>
     <div class="popover hidden" id="palette-popover"></div>
     <div class="popover hidden" id="page-popover"></div>
     <div class="page-menu hidden" id="page-menu">
@@ -889,6 +891,96 @@ export function buildUI(
       invalidate();
     });
   }
+
+  // ---------- zine library (save / open / export / import) ----------
+  const docsBtn = root.querySelector('#docs') as HTMLButtonElement;
+  const docsPop = root.querySelector('#docs-popover') as HTMLElement;
+
+  function buildDocsPopover() {
+    const docs = store.listDocs();
+    docsPop.innerHTML = `
+      <div class="docs-current">
+        <input id="doc-name" type="text" value="${store.doc.name.replace(/"/g, '&quot;')}" maxlength="40" title="Zine name">
+      </div>
+      <div class="docs-list">${docs
+        .map(
+          (m) => `<div class="doc-row ${m.id === store.docId ? 'active' : ''}" data-id="${m.id}">
+            <span class="doc-row-name">${m.name}</span>
+            <span class="doc-row-date">${new Date(m.updated).toLocaleDateString()}</span>
+            <button class="doc-del" data-id="${m.id}" title="Delete">✕</button>
+          </div>`,
+        )
+        .join('')}</div>
+      <div class="docs-actions">
+        <button id="doc-new">＋ New zine</button>
+        <button id="doc-export">Export</button>
+        <button id="doc-import">Import</button>
+        <input id="doc-file" type="file" accept=".zine,.json,application/json" hidden>
+      </div>
+    `;
+    const nameInput = docsPop.querySelector('#doc-name') as HTMLInputElement;
+    nameInput.addEventListener('change', () => store.renameDoc(nameInput.value));
+    nameInput.addEventListener('keydown', (e) => {
+      e.stopPropagation();
+      if (e.key === 'Enter') nameInput.blur();
+    });
+    docsPop.querySelectorAll('.doc-row').forEach((row) =>
+      row.addEventListener('click', (e) => {
+        if ((e.target as HTMLElement).classList.contains('doc-del')) return;
+        store.openDoc((row as HTMLElement).dataset.id!);
+        state.selection.clear();
+        docsPop.classList.add('hidden');
+        invalidate();
+      }),
+    );
+    docsPop.querySelectorAll('.doc-del').forEach((b) =>
+      b.addEventListener('click', () => {
+        const id = (b as HTMLElement).dataset.id!;
+        const meta = store.listDocs().find((m) => m.id === id);
+        if (!window.confirm(`Delete "${meta?.name ?? 'zine'}"? This cannot be undone.`)) return;
+        store.deleteDoc(id);
+        state.selection.clear();
+        buildDocsPopover();
+        invalidate();
+      }),
+    );
+    (docsPop.querySelector('#doc-new') as HTMLButtonElement).addEventListener('click', () => {
+      store.newDoc();
+      state.selection.clear();
+      docsPop.classList.add('hidden');
+      invalidate();
+    });
+    (docsPop.querySelector('#doc-export') as HTMLButtonElement).addEventListener('click', () => {
+      const blob = new Blob([store.exportJSON()], { type: 'application/json' });
+      const a = document.createElement('a');
+      a.href = URL.createObjectURL(blob);
+      a.download = `${store.doc.name || 'zine'}.zine`;
+      a.click();
+      URL.revokeObjectURL(a.href);
+    });
+    const fileInput = docsPop.querySelector('#doc-file') as HTMLInputElement;
+    (docsPop.querySelector('#doc-import') as HTMLButtonElement).addEventListener('click', () => fileInput.click());
+    fileInput.addEventListener('change', async () => {
+      const f = fileInput.files?.[0];
+      if (!f) return;
+      const ok = store.importJSON(await f.text());
+      if (ok) {
+        state.selection.clear();
+        docsPop.classList.add('hidden');
+        invalidate();
+      } else {
+        fileInput.value = '';
+        window.alert('Not a valid .zine file.');
+      }
+    });
+  }
+
+  docsBtn.addEventListener('click', () => {
+    palettePop.classList.add('hidden');
+    pagePop.classList.add('hidden');
+    if (docsPop.classList.contains('hidden')) buildDocsPopover();
+    docsPop.classList.toggle('hidden');
+  });
 
   // ---------- presentation mode ----------
   const presentUi = root.querySelector('#present-ui') as HTMLElement;

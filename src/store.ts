@@ -29,50 +29,156 @@ type Op =
   | { type: 'rename-area'; areaId: string; before: string; after: string }
   | { type: 'rename-anim-layer'; areaId: string; layerId: string; before: string; after: string };
 
-const STORAGE_KEY = 'infinicanvas-doc-v1';
+// Zine library: an index of saved documents + one localStorage entry per doc.
+const LEGACY_KEY = 'infinicanvas-doc-v1';
+const INDEX_KEY = 'infinizine-docs';
+const DOC_PREFIX = 'infinizine-doc-';
+const CURRENT_KEY = 'infinizine-current';
+
+export interface DocMeta { id: string; name: string; updated: number }
+
+function normalizeDoc(doc: Doc): Doc {
+  doc.areas ??= []; // older saves predate animation areas
+  for (const a of doc.areas) {
+    // migrate area-level frames (older builds) into layer 0's own track
+    const legacy = (a as unknown as { frames?: AnimFrame[] }).frames;
+    for (const l of a.layers ?? []) l.frames ??= legacy ?? [{ id: uid('fr'), duration: 1 }];
+    if (a.layers?.length) {
+      for (let i = 1; i < a.layers.length; i++) {
+        if (a.layers[i].frames === legacy) a.layers[i].frames = [{ id: uid('fr'), duration: 1 }];
+      }
+    }
+    delete (a as unknown as { frames?: AnimFrame[] }).frames;
+  }
+  return doc;
+}
 
 export class Store {
   doc: Doc;
+  docId: string;
   private undoStack: Op[] = [];
   private redoStack: Op[] = [];
   private saveTimer: number | undefined;
   onChange: () => void = () => {};
 
   constructor() {
-    this.doc = this.load() ?? emptyDoc();
+    this.migrateLegacy();
+    const current = localStorage.getItem(CURRENT_KEY) ?? this.listDocs()[0]?.id;
+    const loaded = current ? this.loadDoc(current) : null;
+    this.docId = loaded && current ? current : uid('doc');
+    this.doc = loaded ?? emptyDoc();
+    if (!loaded) this.saveNow();
   }
 
-  private load(): Doc | null {
+  private migrateLegacy() {
     try {
-      const raw = localStorage.getItem(STORAGE_KEY);
+      const raw = localStorage.getItem(LEGACY_KEY);
+      if (!raw || localStorage.getItem(INDEX_KEY)) return;
+      const id = uid('doc');
+      localStorage.setItem(DOC_PREFIX + id, raw);
+      localStorage.setItem(INDEX_KEY, JSON.stringify([{ id, name: 'Untitled', updated: Date.now() }]));
+      localStorage.setItem(CURRENT_KEY, id);
+      localStorage.removeItem(LEGACY_KEY);
+    } catch { /* ignore */ }
+  }
+
+  private loadDoc(id: string): Doc | null {
+    try {
+      const raw = localStorage.getItem(DOC_PREFIX + id);
       if (!raw) return null;
       const doc = JSON.parse(raw) as Doc;
       if (doc.version !== 1) return null;
-      doc.areas ??= []; // older saves predate animation areas
-      for (const a of doc.areas) {
-        // migrate area-level frames (older builds) into layer 0's own track
-        const legacy = (a as unknown as { frames?: AnimFrame[] }).frames;
-        for (const l of a.layers ?? []) l.frames ??= legacy ?? [{ id: uid('fr'), duration: 1 }];
-        if (a.layers?.length) {
-          for (let i = 1; i < a.layers.length; i++) {
-            if (a.layers[i].frames === legacy) a.layers[i].frames = [{ id: uid('fr'), duration: 1 }];
-          }
-        }
-        delete (a as unknown as { frames?: AnimFrame[] }).frames;
-      }
-      return doc;
+      return normalizeDoc(doc);
     } catch {
       return null;
     }
   }
 
+  listDocs(): DocMeta[] {
+    try {
+      const list = JSON.parse(localStorage.getItem(INDEX_KEY) ?? '[]') as DocMeta[];
+      return list.sort((a, b) => b.updated - a.updated);
+    } catch {
+      return [];
+    }
+  }
+
+  private saveNow() {
+    try {
+      localStorage.setItem(DOC_PREFIX + this.docId, JSON.stringify(this.doc));
+      const rest = this.listDocs().filter((m) => m.id !== this.docId);
+      rest.unshift({ id: this.docId, name: this.doc.name, updated: Date.now() });
+      localStorage.setItem(INDEX_KEY, JSON.stringify(rest));
+      localStorage.setItem(CURRENT_KEY, this.docId);
+    } catch { /* storage may be unavailable; drawing still works */ }
+  }
+
   private scheduleSave() {
     clearTimeout(this.saveTimer);
-    this.saveTimer = window.setTimeout(() => {
-      try {
-        localStorage.setItem(STORAGE_KEY, JSON.stringify(this.doc));
-      } catch { /* storage may be unavailable; drawing still works */ }
-    }, 400);
+    this.saveTimer = window.setTimeout(() => this.saveNow(), 400);
+  }
+
+  private switchTo(id: string, doc: Doc) {
+    this.saveNow(); // flush the outgoing doc
+    this.docId = id;
+    this.doc = doc;
+    this.undoStack = [];
+    this.redoStack = [];
+    this.saveNow();
+    this.onChange();
+  }
+
+  openDoc(id: string) {
+    if (id === this.docId) return;
+    const doc = this.loadDoc(id);
+    if (doc) this.switchTo(id, doc);
+  }
+
+  newDoc() {
+    const doc = emptyDoc();
+    doc.name = `Zine ${this.listDocs().length + 1}`;
+    this.switchTo(uid('doc'), doc);
+  }
+
+  deleteDoc(id: string) {
+    try {
+      localStorage.removeItem(DOC_PREFIX + id);
+      localStorage.setItem(INDEX_KEY, JSON.stringify(this.listDocs().filter((m) => m.id !== id)));
+    } catch { /* ignore */ }
+    if (id === this.docId) {
+      const next = this.listDocs()[0];
+      if (next) this.openDoc(next.id);
+      else this.newDoc();
+    } else {
+      this.onChange();
+    }
+  }
+
+  renameDoc(name: string) {
+    const n = name.trim();
+    if (!n || n === this.doc.name) return;
+    this.doc.name = n;
+    this.saveNow();
+    this.onChange();
+  }
+
+  /** Self-contained export: plain JSON, the whole document. */
+  exportJSON(): string {
+    return JSON.stringify({ ...this.doc, app: 'infinizine' }, null, 2);
+  }
+
+  importJSON(text: string): boolean {
+    try {
+      const doc = JSON.parse(text) as Doc;
+      if (doc.version !== 1 || !Array.isArray(doc.elements)) return false;
+      normalizeDoc(doc);
+      doc.pages ??= [];
+      doc.name ||= 'Imported zine';
+      this.switchTo(uid('doc'), doc);
+      return true;
+    } catch {
+      return false;
+    }
   }
 
   private commit(op: Op) {
