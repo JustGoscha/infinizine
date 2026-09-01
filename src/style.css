@@ -266,14 +266,16 @@ html, body {
 .add-page {
   width: 44px;
   height: 44px;
-  border-radius: 50%;
-  border: 1.5px dashed var(--ink-soft);
+  border-radius: 14px;
+  border: none;
   background: transparent;
   color: var(--ink);
-  font-size: 22px;
   cursor: pointer;
+  display: grid;
+  place-items: center;
 }
-.add-page:active { transform: scale(0.92); }
+.add-page svg { width: 23px; height: 23px; }
+.add-page:active { transform: scale(0.92); background: var(--ink); color: var(--card); }
 
 /* ---------- typeface bar (floats over the text field while editing) ---------- */
 .font-bar {

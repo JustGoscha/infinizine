@@ -169,7 +169,7 @@ export function buildUI(
       <div class="pal-row" id="pal-row"></div>
       <button class="pal-more" id="pal-more" title="Palettes">···</button>
       <div class="divider"></div>
-      <button class="add-page" id="add-page" title="New page">＋</button>
+      <button class="add-page" id="add-page" title="New page">${svg('<path d="M7 3.5 H13.5 L18 8 V20.5 H7 Z"/><path d="M13.5 3.5 V8 H18"/><path d="M12.5 11.5 v5 M10 14 h5"/>')}</button>
     </div>
     <div class="popover hidden" id="palette-popover"></div>
     <div class="popover hidden" id="page-popover"></div>
