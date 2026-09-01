@@ -451,10 +451,12 @@ export class Renderer {
     const n = parseInt(paper.slice(1), 16);
     const lum = ((n >> 16) & 255) * 0.299 + ((n >> 8) & 255) * 0.587 + (n & 255) * 0.114;
     const dark = lum < 128;
-    const spacingWorld = 48;
+    // world-anchored: 5mm cells (10 world units) like real paper, scaling with zoom;
+    // double/halve in mm steps only when cells get too dense/sparse on screen
+    const spacingWorld = 10; // 5mm
     let s = spacingWorld * camera.zoom;
-    while (s < 26) s *= 2;
-    while (s > 104) s /= 2;
+    while (s < 14) s *= 2;
+    while (s > 120) s /= 2;
     const originScreen = camera.worldToScreen(0, 0, vw, vh);
     const ox = ((originScreen.x % s) + s) % s;
     const oy = ((originScreen.y % s) + s) % s;
