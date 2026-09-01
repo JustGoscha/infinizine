@@ -1,0 +1,453 @@
+// Document store: state, undo/redo, localStorage persistence, page placement.
+
+import { AnimArea, AnimFrame, AnimLayer, Doc, Element, Page, PageFormat, PAGE_SIZES, emptyDoc, uid } from './types';
+
+type TextContent = { text: string; w: number; h: number; font?: string; fontSize?: number };
+type TextMetrics = { x: number; w: number; h: number; fontSize: number };
+
+type Op =
+  | { type: 'add-elements'; elements: Element[] }
+  | { type: 'delete-elements'; elements: Element[] }
+  | { type: 'move-elements'; ids: string[]; dx: number; dy: number }
+  | { type: 'update-text'; id: string; before: TextContent; after: TextContent }
+  | { type: 'resize-text'; id: string; before: TextMetrics; after: TextMetrics }
+  | { type: 'add-page'; page: Page }
+  | { type: 'delete-page'; page: Page }
+  | { type: 'move-page'; id: string; dx: number; dy: number }
+  | { type: 'add-area'; area: AnimArea; elements: Element[] }
+  | { type: 'delete-area'; area: AnimArea; elements: Element[] }
+  | { type: 'add-frame'; areaId: string; layerId: string; frame: AnimFrame; index: number; elements: Element[] }
+  | { type: 'delete-frame'; areaId: string; layerId: string; frame: AnimFrame; index: number; elements: Element[] }
+  | { type: 'add-anim-layer'; areaId: string; alayer: AnimLayer; index: number; elements: Element[] }
+  | { type: 'delete-anim-layer'; areaId: string; alayer: AnimLayer; index: number; elements: Element[] }
+  | { type: 'move-anim-layer'; areaId: string; from: number; to: number }
+  | { type: 'move-area'; id: string; dx: number; dy: number }
+  | { type: 'resize-area'; id: string; before: { x: number; y: number; w: number; h: number }; after: { x: number; y: number; w: number; h: number } }
+  | { type: 'frame-duration'; areaId: string; layerId: string; frameId: string; before: number; after: number }
+  | { type: 'area-settings'; areaId: string; before: { fps: number; loop: boolean; clip: boolean }; after: { fps: number; loop: boolean; clip: boolean } }
+  | { type: 'rename-area'; areaId: string; before: string; after: string }
+  | { type: 'rename-anim-layer'; areaId: string; layerId: string; before: string; after: string };
+
+const STORAGE_KEY = 'infinicanvas-doc-v1';
+
+export class Store {
+  doc: Doc;
+  private undoStack: Op[] = [];
+  private redoStack: Op[] = [];
+  private saveTimer: number | undefined;
+  onChange: () => void = () => {};
+
+  constructor() {
+    this.doc = this.load() ?? emptyDoc();
+  }
+
+  private load(): Doc | null {
+    try {
+      const raw = localStorage.getItem(STORAGE_KEY);
+      if (!raw) return null;
+      const doc = JSON.parse(raw) as Doc;
+      if (doc.version !== 1) return null;
+      doc.areas ??= []; // older saves predate animation areas
+      for (const a of doc.areas) {
+        // migrate area-level frames (older builds) into layer 0's own track
+        const legacy = (a as unknown as { frames?: AnimFrame[] }).frames;
+        for (const l of a.layers ?? []) l.frames ??= legacy ?? [{ id: uid('fr'), duration: 1 }];
+        if (a.layers?.length) {
+          for (let i = 1; i < a.layers.length; i++) {
+            if (a.layers[i].frames === legacy) a.layers[i].frames = [{ id: uid('fr'), duration: 1 }];
+          }
+        }
+        delete (a as unknown as { frames?: AnimFrame[] }).frames;
+      }
+      return doc;
+    } catch {
+      return null;
+    }
+  }
+
+  private scheduleSave() {
+    clearTimeout(this.saveTimer);
+    this.saveTimer = window.setTimeout(() => {
+      try {
+        localStorage.setItem(STORAGE_KEY, JSON.stringify(this.doc));
+      } catch { /* storage may be unavailable; drawing still works */ }
+    }, 400);
+  }
+
+  private commit(op: Op) {
+    this.apply(op);
+    this.undoStack.push(op);
+    if (this.undoStack.length > 300) this.undoStack.shift();
+    this.redoStack = [];
+    this.scheduleSave();
+    this.onChange();
+  }
+
+  private apply(op: Op) {
+    const d = this.doc;
+    switch (op.type) {
+      case 'add-elements':
+        // 'back' ink goes behind everything, including earlier back-layer ink
+        for (const el of op.elements) {
+          if (el.layer === 'back') d.elements.unshift(el);
+          else d.elements.push(el);
+        }
+        break;
+      case 'delete-elements': {
+        const ids = new Set(op.elements.map((e) => e.id));
+        d.elements = d.elements.filter((e) => !ids.has(e.id));
+        break;
+      }
+      case 'move-elements': this.translate(op.ids, op.dx, op.dy); break;
+      case 'update-text': {
+        const el = d.elements.find((e) => e.id === op.id);
+        if (el && el.kind === 'text') {
+          el.text = op.after.text;
+          el.w = op.after.w;
+          el.h = op.after.h;
+          if (op.after.font) el.font = op.after.font;
+          if (op.after.fontSize) el.fontSize = op.after.fontSize;
+        }
+        break;
+      }
+      case 'resize-text': {
+        const el = d.elements.find((e) => e.id === op.id);
+        if (el && el.kind === 'text') {
+          el.x = op.after.x;
+          el.w = op.after.w;
+          el.h = op.after.h;
+          el.fontSize = op.after.fontSize;
+        }
+        break;
+      }
+      case 'add-page': d.pages.push(op.page); break;
+      case 'delete-page': d.pages = d.pages.filter((p) => p.id !== op.page.id); break;
+      case 'move-page': {
+        const pg = d.pages.find((p) => p.id === op.id);
+        if (pg) { pg.x += op.dx; pg.y += op.dy; }
+        break;
+      }
+      case 'add-area':
+        d.areas.push(op.area);
+        d.elements.push(...op.elements);
+        break;
+      case 'delete-area': {
+        d.areas = d.areas.filter((a) => a.id !== op.area.id);
+        const ids = new Set(op.elements.map((e) => e.id));
+        d.elements = d.elements.filter((e) => !ids.has(e.id));
+        break;
+      }
+      case 'add-frame': {
+        this.animLayer(op.areaId, op.layerId)?.frames.splice(op.index, 0, op.frame);
+        d.elements.push(...op.elements);
+        break;
+      }
+      case 'delete-frame': {
+        const l = this.animLayer(op.areaId, op.layerId);
+        if (l) l.frames = l.frames.filter((f) => f.id !== op.frame.id);
+        const ids = new Set(op.elements.map((e) => e.id));
+        d.elements = d.elements.filter((e) => !ids.has(e.id));
+        break;
+      }
+      case 'add-anim-layer': {
+        this.area(op.areaId)?.layers.splice(op.index, 0, op.alayer);
+        d.elements.push(...op.elements);
+        break;
+      }
+      case 'delete-anim-layer': {
+        const a = this.area(op.areaId);
+        if (a) a.layers = a.layers.filter((l) => l.id !== op.alayer.id);
+        const ids = new Set(op.elements.map((e) => e.id));
+        d.elements = d.elements.filter((e) => !ids.has(e.id));
+        break;
+      }
+      case 'move-anim-layer': {
+        const a = this.area(op.areaId);
+        if (a && op.to >= 0 && op.to < a.layers.length) {
+          const [l] = a.layers.splice(op.from, 1);
+          a.layers.splice(op.to, 0, l);
+        }
+        break;
+      }
+      case 'move-area': {
+        const a = this.area(op.id);
+        if (a) { a.x += op.dx; a.y += op.dy; }
+        break;
+      }
+      case 'resize-area': {
+        const a = this.area(op.id);
+        if (a) { a.x = op.after.x; a.y = op.after.y; a.w = op.after.w; a.h = op.after.h; }
+        break;
+      }
+      case 'frame-duration': {
+        const f = this.animLayer(op.areaId, op.layerId)?.frames.find((x) => x.id === op.frameId);
+        if (f) f.duration = op.after;
+        break;
+      }
+      case 'area-settings': {
+        const a = this.area(op.areaId);
+        if (a) { a.fps = op.after.fps; a.loop = op.after.loop; a.clip = op.after.clip; }
+        break;
+      }
+      case 'rename-area': {
+        const a = this.area(op.areaId);
+        if (a) a.name = op.after;
+        break;
+      }
+      case 'rename-anim-layer': {
+        const l = this.animLayer(op.areaId, op.layerId);
+        if (l) l.name = op.after;
+        break;
+      }
+    }
+  }
+
+  area(id: string): AnimArea | undefined {
+    return this.doc.areas.find((a) => a.id === id);
+  }
+
+  animLayer(areaId: string, layerId: string): AnimLayer | undefined {
+    return this.area(areaId)?.layers.find((l) => l.id === layerId);
+  }
+
+  private invert(op: Op): Op {
+    switch (op.type) {
+      case 'add-elements': return { type: 'delete-elements', elements: op.elements };
+      case 'delete-elements': return { type: 'add-elements', elements: op.elements };
+      case 'move-elements': return { ...op, dx: -op.dx, dy: -op.dy };
+      case 'update-text': return { ...op, before: op.after, after: op.before };
+      case 'resize-text': return { ...op, before: op.after, after: op.before };
+      case 'add-page': return { type: 'delete-page', page: op.page };
+      case 'delete-page': return { type: 'add-page', page: op.page };
+      case 'move-page': return { ...op, dx: -op.dx, dy: -op.dy };
+      case 'add-area': return { ...op, type: 'delete-area' };
+      case 'delete-area': return { ...op, type: 'add-area' };
+      case 'add-frame': return { ...op, type: 'delete-frame' };
+      case 'delete-frame': return { ...op, type: 'add-frame' };
+      case 'add-anim-layer': return { ...op, type: 'delete-anim-layer' };
+      case 'delete-anim-layer': return { ...op, type: 'add-anim-layer' };
+      case 'move-anim-layer': return { ...op, from: op.to, to: op.from };
+      case 'move-area': return { ...op, dx: -op.dx, dy: -op.dy };
+      case 'resize-area': return { ...op, before: op.after, after: op.before };
+      case 'frame-duration': return { ...op, before: op.after, after: op.before };
+      case 'area-settings': return { ...op, before: op.after, after: op.before };
+      case 'rename-area': return { ...op, before: op.after, after: op.before };
+      case 'rename-anim-layer': return { ...op, before: op.after, after: op.before };
+    }
+  }
+
+  private translate(ids: string[], dx: number, dy: number) {
+    const set = new Set(ids);
+    for (const el of this.doc.elements) {
+      if (!set.has(el.id)) continue;
+      if (el.kind === 'text') {
+        el.x += dx;
+        el.y += dy;
+      } else {
+        for (const p of el.points) { p.x += dx; p.y += dy; }
+      }
+    }
+  }
+
+  undo() {
+    const op = this.undoStack.pop();
+    if (!op) return;
+    this.apply(this.invert(op));
+    this.redoStack.push(op);
+    this.scheduleSave();
+    this.onChange();
+  }
+
+  redo() {
+    const op = this.redoStack.pop();
+    if (!op) return;
+    this.apply(op);
+    this.undoStack.push(op);
+    this.scheduleSave();
+    this.onChange();
+  }
+
+  get canUndo() { return this.undoStack.length > 0; }
+  get canRedo() { return this.redoStack.length > 0; }
+
+  addElement(el: Element) { this.commit({ type: 'add-elements', elements: [el] }); }
+  deleteElements(els: Element[]) { if (els.length) this.commit({ type: 'delete-elements', elements: els }); }
+  updateText(id: string, before: TextContent, after: TextContent) {
+    this.commit({ type: 'update-text', id, before, after });
+  }
+  resizeText(id: string, before: TextMetrics, after: TextMetrics) {
+    this.commit({ type: 'resize-text', id, before, after });
+  }
+  moveElements(ids: string[], dx: number, dy: number) {
+    if (ids.length && (dx || dy)) this.commit({ type: 'move-elements', ids, dx, dy });
+  }
+  movePage(id: string, dx: number, dy: number) {
+    if (dx || dy) this.commit({ type: 'move-page', id, dx, dy });
+  }
+  deletePage(page: Page) { this.commit({ type: 'delete-page', page }); }
+
+  /** New page with the same size, placed right of the source with the standard gap. */
+  addPageAfter(src: Page): Page {
+    const page: Page = {
+      id: uid('page'),
+      x: src.x + src.w + 60,
+      y: src.y,
+      w: src.w,
+      h: src.h,
+      name: `Page ${this.doc.pages.length + 1}`,
+      order: src.order + 1,
+    };
+    this.commit({ type: 'add-page', page });
+    return page;
+  }
+
+  /** New page placed right of the last page (with padding), or at the given center. */
+  addPage(format: PageFormat, center?: { x: number; y: number }): Page {
+    const { w, h } = PAGE_SIZES[format];
+    const pages = this.doc.pages;
+    let x: number, y: number;
+    if (pages.length) {
+      const last = pages.reduce((a, b) => (b.order > a.order ? b : a));
+      x = last.x + last.w + 60; // padding to the next page (SPEC)
+      y = last.y;
+    } else if (center) {
+      x = center.x - w / 2;
+      y = center.y - h / 2;
+    } else {
+      x = -w / 2; y = -h / 2;
+    }
+    const page: Page = {
+      id: uid('page'), x, y, w, h,
+      name: `Page ${pages.length + 1}`,
+      order: pages.length,
+    };
+    this.commit({ type: 'add-page', page });
+    return page;
+  }
+
+  // ---------- animation areas ----------
+  addArea(rect: { x: number; y: number; w: number; h: number }): AnimArea {
+    const area: AnimArea = {
+      id: uid('ar'), ...rect,
+      name: `Area ${this.doc.areas.length + 1}`,
+      fps: 12, loop: true,
+      layers: [{ id: uid('ly'), name: 'Layer 1', frames: [{ id: uid('fr'), duration: 1 }] }],
+    };
+    this.commit({ type: 'add-area', area, elements: [] });
+    return area;
+  }
+
+  private areaElements(area: AnimArea): Element[] {
+    const fids = new Set(area.layers.flatMap((l) => l.frames.map((f) => f.id)));
+    return this.doc.elements.filter((e) => e.frame && fids.has(e.frame));
+  }
+
+  deleteArea(area: AnimArea) {
+    this.commit({ type: 'delete-area', area, elements: this.areaElements(area) });
+  }
+
+  addFrame(areaId: string, layerId: string, index: number): AnimFrame {
+    const frame: AnimFrame = { id: uid('fr'), duration: 1 };
+    this.commit({ type: 'add-frame', areaId, layerId, frame, index, elements: [] });
+    return frame;
+  }
+
+  /** Duplicate a frame in its layer, cloning the frame's elements. */
+  duplicateFrame(areaId: string, layerId: string, frameId: string): AnimFrame | null {
+    const l = this.animLayer(areaId, layerId);
+    if (!l) return null;
+    const idx = l.frames.findIndex((f) => f.id === frameId);
+    if (idx < 0) return null;
+    const frame: AnimFrame = { id: uid('fr'), duration: l.frames[idx].duration };
+    const clones = this.doc.elements
+      .filter((e) => e.frame === frameId)
+      .map((e) => ({ ...structuredClone(e), id: uid('el'), frame: frame.id }));
+    this.commit({ type: 'add-frame', areaId, layerId, frame, index: idx + 1, elements: clones });
+    return frame;
+  }
+
+  deleteFrame(areaId: string, layerId: string, frameId: string) {
+    const l = this.animLayer(areaId, layerId);
+    if (!l || l.frames.length <= 1) return;
+    const index = l.frames.findIndex((f) => f.id === frameId);
+    if (index < 0) return;
+    const elements = this.doc.elements.filter((e) => e.frame === frameId);
+    this.commit({ type: 'delete-frame', areaId, layerId, frame: l.frames[index], index, elements });
+  }
+
+  addAnimLayer(areaId: string): AnimLayer | null {
+    const a = this.area(areaId);
+    if (!a) return null;
+    const alayer: AnimLayer = {
+      id: uid('ly'),
+      name: `Layer ${a.layers.length + 1}`,
+      frames: [{ id: uid('fr'), duration: 1 }],
+    };
+    this.commit({ type: 'add-anim-layer', areaId, alayer, index: a.layers.length, elements: [] });
+    return alayer;
+  }
+
+  deleteAnimLayer(areaId: string, layerId: string) {
+    const a = this.area(areaId);
+    if (!a || a.layers.length <= 1) return;
+    const index = a.layers.findIndex((l) => l.id === layerId);
+    if (index < 0) return;
+    const fids = new Set(a.layers[index].frames.map((f) => f.id));
+    const elements = this.doc.elements.filter((e) => e.frame && fids.has(e.frame));
+    this.commit({ type: 'delete-anim-layer', areaId, alayer: a.layers[index], index, elements });
+  }
+
+  resizeArea(id: string, before: { x: number; y: number; w: number; h: number }, after: { x: number; y: number; w: number; h: number }) {
+    this.commit({ type: 'resize-area', id, before, after });
+  }
+
+  moveArea(id: string, dx: number, dy: number) {
+    if (dx || dy) this.commit({ type: 'move-area', id, dx, dy });
+  }
+
+  moveAnimLayer(areaId: string, from: number, to: number) {
+    const a = this.area(areaId);
+    if (!a || to < 0 || to >= a.layers.length || from === to) return;
+    this.commit({ type: 'move-anim-layer', areaId, from, to });
+  }
+
+  setFrameDuration(areaId: string, layerId: string, frameId: string, after: number) {
+    const f = this.animLayer(areaId, layerId)?.frames.find((x) => x.id === frameId);
+    if (!f || after < 1 || after === f.duration) return;
+    this.commit({ type: 'frame-duration', areaId, layerId, frameId, before: f.duration, after });
+  }
+
+  renameArea(areaId: string, after: string) {
+    const a = this.area(areaId);
+    if (!a || !after.trim() || after === a.name) return;
+    this.commit({ type: 'rename-area', areaId, before: a.name, after: after.trim() });
+  }
+
+  renameAnimLayer(areaId: string, layerId: string, after: string) {
+    const l = this.animLayer(areaId, layerId);
+    if (!l || !after.trim() || after === l.name) return;
+    this.commit({ type: 'rename-anim-layer', areaId, layerId, before: l.name, after: after.trim() });
+  }
+
+  setAreaSettings(areaId: string, after: { fps: number; loop: boolean; clip: boolean }) {
+    const a = this.area(areaId);
+    if (!a) return;
+    this.commit({
+      type: 'area-settings', areaId,
+      before: { fps: a.fps, loop: a.loop, clip: a.clip ?? false },
+      after,
+    });
+  }
+
+  setPalette(id: string) {
+    this.doc.palette = id;
+    this.scheduleSave();
+    this.onChange();
+  }
+
+  setPaper(color: string) {
+    this.doc.paper = color;
+    this.scheduleSave();
+    this.onChange();
+  }
+}

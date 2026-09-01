@@ -1,0 +1,117 @@
+// Preset palettes: 8 hues each; 6 gradations per hue are derived in HSL.
+// Adjustable per document later (SPEC: presets + per-doc tweaks).
+
+export interface PalettePreset {
+  id: string;
+  name: string;
+  hues: string[]; // 8 base colors
+}
+
+// Each palette: 5–6 colors — whitish, blackish, neutralish, then 2–3 accents.
+// Accents are curated per palette, not derived from shared hues.
+// Lighter/darker gradations of each color live in the hover/long-press flyout.
+export const PALETTES: PalettePreset[] = [
+  {
+    id: 'ink',
+    name: 'Classic Ink',
+    hues: ['#FAF7F0', '#191713', '#9C9282', '#2B5A9E', '#C24329'],
+  },
+  {
+    id: 'pastel',
+    name: 'Pastel',
+    hues: ['#FDFAF5', '#57524B', '#C9BFB2', '#EFA9B8', '#9BBBDD', '#A9D8BF'],
+  },
+  {
+    id: 'vibrant',
+    name: 'Vibrant',
+    hues: ['#FFFFFF', '#141414', '#B3ADA1', '#FF3B30', '#0A84FF', '#FFC800'],
+  },
+  {
+    id: 'autumn',
+    name: 'Autumn',
+    hues: ['#F8F1E3', '#2E2016', '#A78A63', '#B5471D', '#5A6B2F'],
+  },
+  {
+    id: 'riso',
+    name: 'Riso',
+    hues: ['#FFFDF6', '#1F2A44', '#B9B3A8', '#FF48B0', '#0078BF'],
+  },
+  {
+    id: 'ocean',
+    name: 'Ocean',
+    hues: ['#F4FAFA', '#0E2A32', '#8FA9AD', '#0E7C86', '#F4A259'],
+  },
+  {
+    id: 'forest',
+    name: 'Forest',
+    hues: ['#F7F7EF', '#1E2A1C', '#9AA487', '#3E6B48', '#C97B3D'],
+  },
+  {
+    id: 'bauhaus',
+    name: 'Bauhaus',
+    hues: ['#F5F1E6', '#191919', '#A8A29A', '#D02E2E', '#2B5BA8', '#E8B62E'],
+  },
+  {
+    id: 'newsprint',
+    name: 'Newsprint',
+    hues: ['#F6F4EE', '#232323', '#8F8B85', '#C22F2F', '#3A66A0'],
+  },
+  {
+    id: 'sunset',
+    name: 'Sunset',
+    hues: ['#FFF8F0', '#33202A', '#B08D8A', '#E2725B', '#8A4F7D', '#F2B95F'],
+  },
+  {
+    id: 'blueprint',
+    name: 'Blueprint',
+    hues: ['#EAF0F6', '#12233D', '#7E93AC', '#1F5FBF', '#E0533D'],
+  },
+];
+
+export function getPalette(id: string): PalettePreset {
+  return PALETTES.find((p) => p.id === id) ?? PALETTES[0];
+}
+
+/** 6 gradations light→dark for a hue. Index 3 ≈ the base color. */
+export function shades(hex: string): string[] {
+  const { h, s, l } = hexToHsl(hex);
+  // Whitish colors: stay whitish — a ramp of lights and neutral greys, never saturated hues
+  if (l > 0.9) {
+    return [0.99, 0.965, 0.93, 0.88, 0.82, 0.74].map((tl) => hslToHex(h, Math.min(s, 0.12), tl));
+  }
+  // Near-black / grey hues: neutral ramp
+  if (s < 0.08) {
+    return [0.85, 0.68, 0.5, 0.34, 0.2, 0.08].map((tl) => hslToHex(h, s, tl));
+  }
+  // Strictly monotonic light→dark ramp through the base color's hue/saturation:
+  // evenly spaced between a light and a dark endpoint, no in-between jumps.
+  const hi = Math.min(0.9, l + 0.35);
+  const lo = Math.max(0.1, l - 0.35);
+  return [0, 1, 2, 3, 4, 5].map((i) => hslToHex(h, s, hi + ((lo - hi) * i) / 5));
+}
+
+function hexToHsl(hex: string) {
+  const n = parseInt(hex.slice(1), 16);
+  const r = ((n >> 16) & 255) / 255, g = ((n >> 8) & 255) / 255, b = (n & 255) / 255;
+  const max = Math.max(r, g, b), min = Math.min(r, g, b);
+  const l = (max + min) / 2;
+  let h = 0, s = 0;
+  if (max !== min) {
+    const d = max - min;
+    s = l > 0.5 ? d / (2 - max - min) : d / (max + min);
+    if (max === r) h = ((g - b) / d + (g < b ? 6 : 0)) / 6;
+    else if (max === g) h = ((b - r) / d + 2) / 6;
+    else h = ((r - g) / d + 4) / 6;
+  }
+  return { h, s, l };
+}
+
+function hslToHex(h: number, s: number, l: number): string {
+  const f = (n: number) => {
+    const k = (n + h * 12) % 12;
+    const a = s * Math.min(l, 1 - l);
+    const c = l - a * Math.max(-1, Math.min(k - 3, 9 - k, 1));
+    return Math.round(c * 255).toString(16).padStart(2, '0');
+  };
+  return `#${f(0)}${f(8)}${f(4)}`;
+}
