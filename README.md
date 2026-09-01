@@ -2,6 +2,8 @@
 
 An infinite canvas for writing and human creativity — journals, zines, comics, books.
 
+**[Try the demo →](https://justgoscha.github.io/infinizine/)**
+
 Pages are the manuscript; the endless canvas around them holds the mess: sketches, research, notes. Presentation mode lifts the pages out of the mess and shows them one by one.
 
 ## Features
