@@ -455,7 +455,7 @@ export class Renderer {
     // double/halve in mm steps only when cells get too dense/sparse on screen
     const spacingWorld = 10; // 5mm
     let s = spacingWorld * camera.zoom;
-    while (s < 14) s *= 2;
+    while (s < 8) s *= 2;
     while (s > 120) s /= 2;
     const originScreen = camera.worldToScreen(0, 0, vw, vh);
     const ox = ((originScreen.x % s) + s) % s;
