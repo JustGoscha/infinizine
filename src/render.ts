@@ -2,7 +2,7 @@
 // culling + cached outlines), live stroke, lasso/selection overlays.
 
 import { Camera } from './camera';
-import { Element, FillShape, Page, Stroke } from './types';
+import { Element, FillShape, Page, Stroke, StrokePoint } from './types';
 import { strokeOutline, outlineToPath, elementBBox, bboxIntersects, BBox } from './geometry';
 import { layoutText, fontFor, segWidth, LINE_HEIGHT } from './text';
 import { moveHandleRect, deleteHandleRect, type InputState } from './input';
@@ -136,12 +136,13 @@ export class Renderer {
     };
     const drawLive = () => {
       if (!live) return;
-      // a live-ink stroke previews with its real timing: the tail already
-      // tapers away while drawing, and keeps aging across loop wraps
+      // a live-ink stroke previews with a stroke-local trailing window:
+      // the tail eats away behind the pen and never resets at the loop point
       if (live.area) {
         const tk = areaTick.get(live.area);
         if (tk) {
-          drawTimed(live, tk);
+          const lastT = live.points[live.points.length - 1]?.t ?? 0;
+          drawTimedWith(live, (t) => (lastT - t) * tk.fps);
           return;
         }
       }
@@ -230,34 +231,41 @@ export class Renderer {
     const visible = this.store.doc.elements.filter((el) => !this.input.hidden.has(el.id));
     const still = visible.filter((el) => !el.frame && !(el.kind === 'stroke' && el.area));
 
-    // timed live-ink stroke: each point lives `animLife` ticks after the moment
-    // it was drawn, so the tail trails the pen live and replays every loop
-    const drawTimed = (el: Stroke, tk: { tick: number; total: number; loop: boolean; fps: number }) => {
-      const start = el.animStart ?? 0;
+    // Timed live-ink strokes. Each point lives `animLife` ticks after the moment
+    // it was drawn. `ageOf` maps a point's draw-time to its current age in ticks:
+    // stroke-local & continuous while drawing (never resets at the loop point),
+    // wrapped onto the loop clock during playback.
+    const drawTimedWith = (el: Stroke, ageOf: (t: number) => number) => {
       const life = Math.max(1, el.animLife ?? 6);
-      const wrap = (v: number) => (tk.loop ? ((v % tk.total) + tk.total) % tk.total : v);
-      if (el.animTaper && el.points.length > 3) {
-        let i0 = -1, i1 = -1;
-        for (let i = 0; i < el.points.length; i++) {
-          const born = start + el.points[i].t * tk.fps;
-          const age = wrap(tk.tick - born);
-          if (age >= 0 && age < life) {
-            if (i0 < 0) i0 = i;
-            i1 = i;
-          }
-        }
-        if (i0 < 0 || i1 - i0 < 2) return;
-        ctx.globalAlpha = el.opacity * dimFactor;
-        ctx.fillStyle = el.color;
-        ctx.fill(outlineToPath(strokeOutline({ ...el, points: el.points.slice(i0, i1 + 1) })));
-        ctx.globalAlpha = 1;
+      if (!el.animTaper) {
+        // untapered: the whole stroke shows while any part of it is alive
+        const anyAlive = el.points.some((pt) => {
+          const a = ageOf(pt.t);
+          return a >= 0 && a < life;
+        });
+        if (anyAlive) drawEl(el);
         return;
       }
-      // untapered: pops in at animStart, stays for its life plus its drawing time
-      const age = wrap(tk.tick - start);
-      const drawnTicks = (el.points[el.points.length - 1]?.t ?? 0) * tk.fps;
-      if (age < 0 || age >= life + drawnTicks) return;
-      drawEl(el);
+      // tapered: keep only living points; the oldest shrink toward nothing
+      const pts: StrokePoint[] = [];
+      for (const pt of el.points) {
+        const age = ageOf(pt.t);
+        if (age >= 0 && age < life) {
+          const k = 1 - age / life; // 1 = fresh, 0 = about to die
+          pts.push({ ...pt, p: pt.p * (0.08 + 0.92 * k) });
+        }
+      }
+      if (pts.length < 3) return;
+      ctx.globalAlpha = el.opacity * dimFactor;
+      ctx.fillStyle = el.color;
+      ctx.fill(outlineToPath(strokeOutline({ ...el, points: pts })));
+      ctx.globalAlpha = 1;
+    };
+
+    const drawTimed = (el: Stroke, tk: { tick: number; total: number; loop: boolean; fps: number }) => {
+      const start = el.animStart ?? 0;
+      const wrap = (v: number) => (tk.loop ? ((v % tk.total) + tk.total) % tk.total : v);
+      drawTimedWith(el, (t) => wrap(tk.tick - (start + t * tk.fps)));
     };
 
     if (live?.layer === 'back') drawLive(); // live back-ink previews behind existing back-ink
