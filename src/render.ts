@@ -14,6 +14,9 @@ export class Renderer {
   private ctx: CanvasRenderingContext2D;
   private cache = new Map<string, CacheEntry>();
   private dirty = true;
+  private fps = 0;
+  private fpsFrames = 0;
+  private fpsT = 0;
 
   constructor(
     private canvas: HTMLCanvasElement,
@@ -23,6 +26,14 @@ export class Renderer {
   ) {
     this.ctx = canvas.getContext('2d')!;
     const loop = () => {
+      // fps debug: rAF cadence — drops when the main thread struggles
+      this.fpsFrames++;
+      const t = performance.now();
+      if (t - this.fpsT >= 500) {
+        this.fps = Math.round((this.fpsFrames * 1000) / (t - this.fpsT));
+        this.fpsFrames = 0;
+        this.fpsT = t;
+      }
       // areas animate continuously (deselected ones always play)
       const playing = this.store.doc.areas.length > 0;
       if (this.dirty || this.input.live || playing) {
@@ -426,7 +437,7 @@ export class Renderer {
       ctx.font = '600 11px "Libre Franklin", sans-serif';
       ctx.fillStyle = 'rgba(42,36,26,0.55)';
       ctx.textAlign = 'right';
-      ctx.fillText(`${Math.round(z * 100)}%`, vw - 14, vh - 12);
+      ctx.fillText(`${this.fps}fps · ${Math.round(z * 100)}%`, vw - 14, vh - 12);
     }
   }
 
