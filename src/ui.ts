@@ -1354,6 +1354,11 @@ export function buildUI(
   }
 
   (root.querySelector('#present') as HTMLButtonElement).addEventListener('click', () => setPresenting(true));
+  state.onPagePreview = (page) => {
+    setPresenting(true);
+    const idx = sortedPages().findIndex((p) => p.id === page.id);
+    if (idx >= 0) showPage(idx);
+  };
   (root.querySelector('#present-exit') as HTMLButtonElement).addEventListener('click', () => setPresenting(false));
   (root.querySelector('#present-fwd') as HTMLButtonElement).addEventListener('click', () => showPage(presentIndex + 1));
   (root.querySelector('#present-back') as HTMLButtonElement).addEventListener('click', () => showPage(presentIndex - 1));

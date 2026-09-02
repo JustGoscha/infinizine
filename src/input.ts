@@ -41,6 +41,12 @@ export function moveAllHandleRect(x: number, y: number, zoom: number) {
   return { x: x - s - 4 / zoom, y: y + 2 / zoom, s };
 }
 
+/** Page preview eye: below the two grabbers. */
+export function eyeHandleRect(x: number, y: number, zoom: number) {
+  const s = 22 / zoom;
+  return { x: x - s - 4 / zoom, y: y + s + 8 / zoom, s };
+}
+
 /** Delete-handle box at a box's top-right corner, away from the move handle. */
 export function deleteHandleRect(x: number, y: number, w: number, zoom: number) {
   const s = 22 / zoom;
@@ -74,6 +80,7 @@ export class InputState {
   presentPage: Page | null = null; // the single page shown while presenting
   onToolChange: () => void = () => {};
   onPageMenu: (page: Page, clientX: number, clientY: number) => void = () => {};
+  onPagePreview: (page: Page) => void = () => {};
   textRect: { x: number; y: number; w: number; h: number } | null = null; // rect being drawn with the text tool
   hoverText: string | null = null; // textbox under the mouse (shows its move handle)
   hoverArea: string | null = null; // anim area under the mouse (shows its handles)
@@ -301,6 +308,10 @@ export function attachInput(
       const z = camera.zoom;
       const mh = moveHandleRect(p.x, p.y, z);
       const mha = moveAllHandleRect(p.x, p.y, z);
+      if (inRect(w, eyeHandleRect(p.x, p.y, z))) {
+        state.onPagePreview(p);
+        return;
+      }
       const all = inRect(w, mha);
       if (inRect(w, mh) || all) {
         dragPage = p;
@@ -954,15 +965,16 @@ export function attachInput(
           const mha = moveAllHandleRect(p.x, p.y, z);
           const nearLabel = w.x >= p.x && w.x <= p.x + 140 / z && w.y >= p.y - 26 / z && w.y <= p.y;
           const inGrab = inRect(w, mh) || inRect(w, mha);
+          const inEye = inRect(w, eyeHandleRect(p.x, p.y, z));
           const nearEdge =
             ((Math.abs(w.x - p.x) < r || Math.abs(w.x - (p.x + p.w)) < r) &&
               w.y > p.y - r && w.y < p.y + p.h + r) ||
             ((Math.abs(w.y - p.y) < r || Math.abs(w.y - (p.y + p.h)) < r) &&
               w.x > p.x - r && w.x < p.x + p.w + r);
-          if (nearLabel || inGrab || nearEdge) {
+          if (nearLabel || inGrab || inEye || nearEdge) {
             hoverPage = p.id;
             if (inGrab) cursor = 'grab';
-            else if (nearLabel) cursor = 'pointer';
+            else if (inEye || nearLabel) cursor = 'pointer';
             break;
           }
         }

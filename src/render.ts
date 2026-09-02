@@ -5,7 +5,7 @@ import { Camera } from './camera';
 import { Element, FillShape, Page, Stroke, StrokePoint } from './types';
 import { strokeOutline, outlineToPath, elementBBox, bboxIntersects, BBox } from './geometry';
 import { layoutText, fontFor, segWidth, LINE_HEIGHT } from './text';
-import { moveHandleRect, moveAllHandleRect, deleteHandleRect, type InputState } from './input';
+import { moveHandleRect, moveAllHandleRect, deleteHandleRect, eyeHandleRect, type InputState } from './input';
 import { Store } from './store';
 
 interface CacheEntry { path: Path2D; bbox: BBox }
@@ -405,6 +405,22 @@ export class Renderer {
           ctx.strokeStyle = '#FDFCF8';
           ctx.lineWidth = 1.6 / z;
           this.drawMoveCross(ma.x, ma.y, ma.s);
+          // preview eye: quickly present just this page
+          const ey = eyeHandleRect(page.x, page.y, z);
+          ctx.fillStyle = '#FDFCF8';
+          ctx.strokeStyle = 'rgba(90,75,50,0.5)';
+          ctx.lineWidth = 1.2 / z;
+          ctx.fillRect(ey.x, ey.y, ey.s, ey.s);
+          ctx.strokeRect(ey.x, ey.y, ey.s, ey.s);
+          ctx.strokeStyle = '#2A241A';
+          ctx.beginPath();
+          const ecx = ey.x + ey.s / 2, ecy = ey.y + ey.s / 2;
+          ctx.ellipse(ecx, ecy, ey.s * 0.32, ey.s * 0.2, 0, 0, Math.PI * 2);
+          ctx.stroke();
+          ctx.beginPath();
+          ctx.arc(ecx, ecy, ey.s * 0.09, 0, Math.PI * 2);
+          ctx.fillStyle = '#2A241A';
+          ctx.fill();
         }
       }
     }
