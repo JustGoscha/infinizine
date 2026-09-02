@@ -335,7 +335,10 @@ export class Renderer {
         for (const el of visible) {
           if (el.frame && fids.has(el.frame) && frameVis.get(el.frame) === true) drawEl(el);
         }
-        const tk = areaTick.get(area.id);
+        // live ink is motion — hidden while editing unless explicitly shown
+        const editingArea =
+          area.id === this.input.activeAreaId && !this.input.playingAreas && !this.input.presenting;
+        const tk = editingArea && !this.input.showLiveInk ? undefined : areaTick.get(area.id);
         if (tk) {
           const mode = layer.liveMode ?? 'continuous';
           for (const el of visible) {

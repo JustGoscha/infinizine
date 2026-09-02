@@ -85,6 +85,7 @@ export class InputState {
   liveInkLife = 6; // ticks a stroke drawn during playback stays visible
   liveInkTaper = true; // its tail eats away over its lifetime
   liveInkMode: 'additive' | 'continuous' = 'continuous'; // recording mode for live ink
+  showLiveInk = false; // show live-ink strokes while editing (they always show in playback)
   playingAreas = false;
   playEpoch = 0; // performance.now()/1000 when playback started
   onAnimOpen: (area: import('./types').AnimArea) => void = () => {};

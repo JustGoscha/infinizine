@@ -814,6 +814,7 @@ export function buildUI(
         <button id="tl-life-plus" title="Longer life">＋</button>
         <button id="tl-taper" class="tl-toggle ${state.liveInkTaper ? 'on' : ''}" title="Tail eats away over its life">taper</button>
         <button id="tl-mode" class="tl-toggle on" title="Recording mode: additive overdubs the loop, continuous replays full length">${state.liveInkMode === 'additive' ? 'add' : 'cont'}</button>
+        <button id="tl-showink" class="tl-toggle ${state.showLiveInk ? 'on' : ''}" title="Show live ink while editing (it always shows in playback)">show</button>
         <span class="tl-sep"></span>
         <span class="tl-layers-label">layers</span>
         <button id="tl-addlayer" title="Add layer">＋</button>
@@ -883,6 +884,11 @@ export function buildUI(
         const bar = document.createElement('div');
         bar.className = 'tl-livebar';
         bar.style.width = `${Math.min(340, Math.max(60, cycle * 30))}px`;
+        const inkColor = (strokes[0]?.color as string) ?? '#7048e8';
+        bar.style.background = inkColor;
+        const n = parseInt(inkColor.slice(1), 16) || 0;
+        const lum = ((n >> 16) & 255) * 0.299 + ((n >> 8) & 255) * 0.587 + (n & 255) * 0.114;
+        bar.style.color = lum < 140 ? '#fff' : '#2a241a';
         bar.textContent = `✒ ${strokes.length} · ${(cycle / area.fps).toFixed(1)}s${additive ? ' · loop' : ''}`;
         bar.title = additive
           ? 'Additive live ink: overdubs stack onto the area loop'
@@ -1049,6 +1055,11 @@ export function buildUI(
     q('#tl-mode').addEventListener('click', () => {
       state.liveInkMode = state.liveInkMode === 'additive' ? 'continuous' : 'additive';
       renderTimeline();
+    });
+    q('#tl-showink').addEventListener('click', () => {
+      state.showLiveInk = !state.showLiveInk;
+      renderTimeline();
+      invalidate();
     });
     q('#tl-addlayer').addEventListener('click', () => {
       const nl = store.addAnimLayer(area.id);
