@@ -410,12 +410,7 @@ export class Renderer {
           ctx.fillRect(ma.x, ma.y, ma.s, ma.s);
           ctx.strokeStyle = '#FDFCF8';
           ctx.lineWidth = 1.6 / z;
-          ctx.beginPath();
-          ctx.moveTo(ma.x + ma.s * 0.5, ma.y + ma.s * 0.18);
-          ctx.lineTo(ma.x + ma.s * 0.5, ma.y + ma.s * 0.82);
-          ctx.moveTo(ma.x + ma.s * 0.18, ma.y + ma.s * 0.5);
-          ctx.lineTo(ma.x + ma.s * 0.82, ma.y + ma.s * 0.5);
-          ctx.stroke();
+          this.drawMoveCross(ma.x, ma.y, ma.s);
         }
       }
       const ar = this.input.areaRect;
@@ -496,6 +491,24 @@ export class Renderer {
     }
   }
 
+  /** Four-direction move cross with arrowheads, centered in a handle box. */
+  private drawMoveCross(bx: number, by: number, size: number) {
+    const { ctx } = this;
+    const c = size / 2;
+    const cx = bx + c, cy = by + c;
+    const L = size * 0.32;
+    const a = size * 0.12;
+    ctx.beginPath();
+    ctx.moveTo(cx, cy - L); ctx.lineTo(cx, cy + L);
+    ctx.moveTo(cx - L, cy); ctx.lineTo(cx + L, cy);
+    // arrowheads
+    ctx.moveTo(cx - a, cy - L + a); ctx.lineTo(cx, cy - L); ctx.lineTo(cx + a, cy - L + a);
+    ctx.moveTo(cx - a, cy + L - a); ctx.lineTo(cx, cy + L); ctx.lineTo(cx + a, cy + L - a);
+    ctx.moveTo(cx - L + a, cy - a); ctx.lineTo(cx - L, cy); ctx.lineTo(cx - L + a, cy + a);
+    ctx.moveTo(cx + L - a, cy - a); ctx.lineTo(cx + L, cy); ctx.lineTo(cx + L - a, cy + a);
+    ctx.stroke();
+  }
+
   /** Move box (top-left) + width/height/corner handles with arrow icons. */
   private drawBoxHandles(x: number, y: number, w: number, h: number, z: number) {
     const { ctx } = this;
@@ -506,12 +519,7 @@ export class Renderer {
     ctx.fillRect(mh.x, mh.y, mh.s, mh.s);
     ctx.strokeRect(mh.x, mh.y, mh.s, mh.s);
     ctx.strokeStyle = '#2A241A';
-    ctx.beginPath();
-    ctx.moveTo(mh.x + mh.s * 0.5, mh.y + mh.s * 0.18);
-    ctx.lineTo(mh.x + mh.s * 0.5, mh.y + mh.s * 0.82);
-    ctx.moveTo(mh.x + mh.s * 0.18, mh.y + mh.s * 0.5);
-    ctx.lineTo(mh.x + mh.s * 0.82, mh.y + mh.s * 0.5);
-    ctx.stroke();
+    this.drawMoveCross(mh.x, mh.y, mh.s);
     const hs = 13 / z;
     const arrow = (cx: number, cy: number, dx: number, dy: number) => {
       const L = hs * 0.3;
