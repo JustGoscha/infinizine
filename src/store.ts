@@ -670,6 +670,16 @@ export class Store {
     if (items.length) this.commit({ type: 'retime-strokes', items });
   }
 
+  /** Group visibility (tab eyes), not undoable. */
+  setAreaGroupHidden(areaId: string, group: 'frames' | 'live', hidden: boolean) {
+    const a = this.area(areaId);
+    if (!a) return;
+    if (group === 'frames') a.hideFrames = hidden;
+    else a.hideLive = hidden;
+    this.scheduleSave();
+    this.onChange();
+  }
+
   /** View/behavior toggle on a live layer, not undoable. */
   setLiveMode(areaId: string, layerId: string, mode: 'additive' | 'continuous') {
     const l = this.animLayer(areaId, layerId);

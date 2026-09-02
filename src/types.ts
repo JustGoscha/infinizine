@@ -39,6 +39,8 @@ export interface AnimArea {
   fps: number;
   loop: boolean;
   clip?: boolean; // cut off frame ink outside the area rect
+  hideFrames?: boolean; // hide all keyframe layers (group eye)
+  hideLive?: boolean; // hide all live-ink layers (group eye)
   layers: AnimLayer[]; // index 0 = bottom
 }
 

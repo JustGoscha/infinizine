@@ -367,6 +367,9 @@ html, body {
   cursor: pointer;
 }
 .tl-tabs button.on { background: var(--ink); color: var(--card); }
+.tl-tab-eye { display: inline-flex; margin-left: 6px; vertical-align: -3px; opacity: 0.8; }
+.tl-tab-eye.off { opacity: 0.4; }
+.tl-tab-eye svg { width: 15px; height: 15px; }
 
 /* per-layer tracks: layer header cell + its own frame strip, table-like */
 .tl-tracks {

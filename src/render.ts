@@ -318,6 +318,7 @@ export class Renderer {
       }
       for (const layer of area.layers) {
         if (layer.hidden) continue;
+        if (layer.kind === 'live' ? area.hideLive : area.hideFrames) continue;
         const fids = new Set(layer.frames.map((f) => f.id));
         for (const [fid, onion] of onionFrames) {
           if (!fids.has(fid)) continue;
