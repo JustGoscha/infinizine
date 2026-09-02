@@ -136,6 +136,15 @@ export class Renderer {
     };
     const drawLive = () => {
       if (!live) return;
+      // a live-ink stroke previews with its real timing: the tail already
+      // tapers away while drawing, and keeps aging across loop wraps
+      if (live.area) {
+        const tk = areaTick.get(live.area);
+        if (tk) {
+          drawTimed(live, tk);
+          return;
+        }
+      }
       ctx.globalAlpha = live.opacity;
       ctx.fillStyle = live.color;
       ctx.fill(outlineToPath(strokeOutline(live)));
@@ -145,7 +154,7 @@ export class Renderer {
     // layers hold at the same tick position.
     const now = performance.now() / 1000;
     const frameVis = new Map<string, boolean>();
-    const areaTick = new Map<string, { tick: number; total: number; loop: boolean }>();
+    const areaTick = new Map<string, { tick: number; total: number; loop: boolean; fps: number }>();
     // standard onion colors: previous frames red, next frame green
     const onionFrames = new Map<string, { alpha: number; color: string }>();
 
@@ -167,7 +176,7 @@ export class Renderer {
       const areaTotal = Math.max(1, ...area.layers.map((l) => l.frames.reduce((a, f) => a + f.duration, 0)));
       let playTick = Math.floor((now - this.input.playEpoch) * area.fps);
       playTick = area.loop ? ((playTick % areaTotal) + areaTotal) % areaTotal : Math.min(playTick, areaTotal - 1);
-      areaTick.set(area.id, { tick: playTick, total: areaTotal, loop: area.loop });
+      areaTick.set(area.id, { tick: playTick, total: areaTotal, loop: area.loop, fps: area.fps });
 
       // tick position of the active frame's start (for holding other layers in edit mode)
       let editTick = 0;
@@ -221,25 +230,36 @@ export class Renderer {
     const visible = this.store.doc.elements.filter((el) => !this.input.hidden.has(el.id));
     const still = visible.filter((el) => !el.frame && !(el.kind === 'stroke' && el.area));
 
-    // timed live-ink stroke: visible during [animStart, animStart+life) on the loop clock
-    const drawTimed = (el: Stroke, tk: { tick: number; total: number; loop: boolean }) => {
+    // timed live-ink stroke: each point lives `animLife` ticks after the moment
+    // it was drawn, so the tail trails the pen live and replays every loop
+    const drawTimed = (el: Stroke, tk: { tick: number; total: number; loop: boolean; fps: number }) => {
       const start = el.animStart ?? 0;
       const life = Math.max(1, el.animLife ?? 6);
-      let age = tk.tick - start;
-      if (tk.loop) age = ((age % tk.total) + tk.total) % tk.total;
-      if (age < 0 || age >= life) return;
+      const wrap = (v: number) => (tk.loop ? ((v % tk.total) + tk.total) % tk.total : v);
       if (el.animTaper && el.points.length > 3) {
-        // tail eats away toward the stroke's start as it ages
-        const frac = age / life;
-        const from = Math.min(el.points.length - 3, Math.floor(frac * el.points.length));
-        ctx.globalAlpha = el.opacity * dimFactor * Math.min(1, (1 - frac) * 3);
+        let i0 = -1, i1 = -1;
+        for (let i = 0; i < el.points.length; i++) {
+          const born = start + el.points[i].t * tk.fps;
+          const age = wrap(tk.tick - born);
+          if (age >= 0 && age < life) {
+            if (i0 < 0) i0 = i;
+            i1 = i;
+          }
+        }
+        if (i0 < 0 || i1 - i0 < 2) return;
+        ctx.globalAlpha = el.opacity * dimFactor;
         ctx.fillStyle = el.color;
-        ctx.fill(outlineToPath(strokeOutline({ ...el, points: el.points.slice(from) })));
+        ctx.fill(outlineToPath(strokeOutline({ ...el, points: el.points.slice(i0, i1 + 1) })));
         ctx.globalAlpha = 1;
         return;
       }
+      // untapered: pops in at animStart, stays for its life plus its drawing time
+      const age = wrap(tk.tick - start);
+      const drawnTicks = (el.points[el.points.length - 1]?.t ?? 0) * tk.fps;
+      if (age < 0 || age >= life + drawnTicks) return;
       drawEl(el);
     };
+
     if (live?.layer === 'back') drawLive(); // live back-ink previews behind existing back-ink
     dimFactor = focusAreaId ? 0.3 : 1;
     for (const el of still) if (el.layer === 'back') drawEl(el);
