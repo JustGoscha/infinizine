@@ -341,12 +341,14 @@ export class Renderer {
           area.id === this.input.activeAreaId && !this.input.playingAreas && !this.input.presenting;
         const activeLive = editingArea && layer.kind === 'live' && layer.id === this.input.activeLayerId;
         const tk = editingArea && !this.input.showLiveInk && !activeLive ? undefined : areaTick.get(area.id);
-        // selection feedback: recently-picked live layer blinks its opacity
+        // selection feedback: recently-picked live layer blinks hard
         const prevDim = dimFactor;
+        let blinkPulse = 0;
         if (this.input.blinkLayerId === layer.id) {
           const bt = now - this.input.blinkStart;
-          if (bt < 1.2) {
-            dimFactor = prevDim * (0.25 + 0.75 * Math.abs(Math.sin(bt * Math.PI * 3)));
+          if (bt < 1.4) {
+            blinkPulse = Math.abs(Math.sin(bt * Math.PI * 2.5));
+            dimFactor = prevDim * (0.05 + 0.95 * blinkPulse);
             this.dirty = true; // keep animating the blink
           } else {
             this.input.blinkLayerId = null;
@@ -361,6 +363,15 @@ export class Renderer {
             ) {
               if (activeLive) drawEl(el);
               else if (tk) drawTimed(el, tk, mode);
+              if (blinkPulse > 0) {
+                // pulsing accent outline so the pick is unmissable
+                ctx.save();
+                ctx.globalAlpha = blinkPulse;
+                ctx.strokeStyle = '#E8590C';
+                ctx.lineWidth = 5 / z;
+                ctx.stroke(this.entry(el).path);
+                ctx.restore();
+              }
             }
           }
         }

@@ -803,6 +803,7 @@ export function buildUI(
   function renderTimeline() {
     const area = tlAreaId ? store.area(tlAreaId) : undefined;
     if (!area) { closeTimeline(); return; }
+    const prevScroll = (tl.querySelector('.tl-tracks') as HTMLElement | null)?.scrollTop ?? 0;
     if (!area.layers.some((l) => l.id === state.activeLayerId)) {
       state.activeLayerId = area.layers[area.layers.length - 1]?.id ?? null;
     }
@@ -1129,6 +1130,7 @@ export function buildUI(
     };
     on('#tl-shorter', () => dur(-1));
     on('#tl-longer', () => dur(1));
+    (tl.querySelector('.tl-tracks') as HTMLElement).scrollTop = prevScroll;
     playheadLoop();
     on('#tl-life-minus', () => {
       state.liveInkLife = Math.max(1, state.liveInkLife - 1);
