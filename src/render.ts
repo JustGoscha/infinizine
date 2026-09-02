@@ -274,12 +274,24 @@ export class Renderer {
       ctx.globalAlpha = 1;
     };
 
-    // Replay, Quill-style: each stroke loops on its OWN cycle — its full draw
-    // time plus decay — independent of the area loop, so gestures longer than
-    // the loop still replay in full (they phase over the loop). Points appear
-    // in draw order (age < 0 = not drawn yet this pass) and expire after life.
-    const drawTimed = (el: Stroke, tk: { tick: number; rawTick: number; total: number; loop: boolean; fps: number }) => {
+    // Replay modes:
+    // - continuous (Quill-style): the stroke loops on its OWN cycle — full draw
+    //   time plus decay — independent of the area loop, phasing over it.
+    // - additive (looper overdub): every point is pinned to its loop position;
+    //   passes stack onto the area loop.
+    const drawTimed = (
+      el: Stroke,
+      tk: { tick: number; rawTick: number; total: number; loop: boolean; fps: number },
+      mode: 'additive' | 'continuous',
+    ) => {
       const start = el.animStart ?? 0;
+      if (mode === 'additive' && tk.loop) {
+        drawTimedWith(el, (t) => {
+          const a = tk.rawTick - (start + t * tk.fps);
+          return ((a % tk.total) + tk.total) % tk.total;
+        });
+        return;
+      }
       const life = Math.max(1, el.animLife ?? 6);
       const drawnTicks = (el.points[el.points.length - 1]?.t ?? 0) * tk.fps;
       const cycle = Math.max(1, Math.ceil(drawnTicks + life));
@@ -325,12 +337,13 @@ export class Renderer {
         }
         const tk = areaTick.get(area.id);
         if (tk) {
+          const mode = layer.liveMode ?? 'continuous';
           for (const el of visible) {
             if (
               el.kind === 'stroke' && el.area === area.id &&
               (el.alayer === layer.id || (!el.alayer && layer === area.layers[0]))
             ) {
-              drawTimed(el, tk);
+              drawTimed(el, tk, mode);
             }
           }
         }

@@ -813,6 +813,7 @@ export function buildUI(
         <span class="tl-life" id="tl-life">${state.liveInkLife}f</span>
         <button id="tl-life-plus" title="Longer life">＋</button>
         <button id="tl-taper" class="tl-toggle ${state.liveInkTaper ? 'on' : ''}" title="Tail eats away over its life">taper</button>
+        <button id="tl-mode" class="tl-toggle on" title="Recording mode: additive overdubs the loop, continuous replays full length">${state.liveInkMode === 'additive' ? 'add' : 'cont'}</button>
         <span class="tl-sep"></span>
         <span class="tl-layers-label">layers</span>
         <button id="tl-addlayer" title="Add layer">＋</button>
@@ -830,6 +831,7 @@ export function buildUI(
       const head = document.createElement('div');
       head.className = `tl-track-head${l.hidden ? ' layer-hidden' : ''}`;
       head.innerHTML = `<span class="tl-lname">${l.name}</span>
+        ${l.kind === 'live' ? `<button data-a="mode" class="tl-mode" title="Toggle additive/continuous">${l.liveMode === 'additive' ? 'add' : 'cont'}</button>` : ''}
         <button data-a="eye" title="${l.hidden ? 'Show layer' : 'Hide layer'}">${
           l.hidden
             ? svg('<path d="M4 5 L20 19"/><path d="M3 12 C6 7 9 5.5 12 5.5 C15 5.5 18 7 21 12 C19.5 14.5 17.8 16.2 16 17.2 M9.5 17.9 C7.2 17.1 5 15.2 3 12"/>')
@@ -844,7 +846,8 @@ export function buildUI(
       });
       head.addEventListener('click', (e) => {
         const a = (e.target as HTMLElement).closest('button')?.dataset?.a;
-        if (a === 'eye') store.setLayerHidden(area.id, l.id, !l.hidden);
+        if (a === 'mode') store.setLiveMode(area.id, l.id, l.liveMode === 'additive' ? 'continuous' : 'additive');
+        else if (a === 'eye') store.setLayerHidden(area.id, l.id, !l.hidden);
         else if (a === 'up') store.moveAnimLayer(area.id, idx, idx + 1);
         else if (a === 'down') store.moveAnimLayer(area.id, idx, idx - 1);
         else if (a === 'del') store.deleteAnimLayer(area.id, l.id);
@@ -858,6 +861,43 @@ export function buildUI(
 
       const strip = document.createElement('div');
       strip.className = 'tl-frames';
+      if (l.kind === 'live') {
+        // live-ink layer: one bar showing its full replay length
+        const strokes = store.doc.elements.filter(
+          (e) => e.kind === 'stroke' && e.alayer === l.id,
+        );
+        const areaTotal = Math.max(
+          1,
+          ...area.layers.filter((x) => x.kind !== 'live').map((x) => x.frames.reduce((acc, f) => acc + f.duration, 0)),
+        );
+        const additive = l.liveMode === 'additive';
+        let cycle = areaTotal;
+        if (!additive) {
+          cycle = 1;
+          for (const st of strokes) {
+            if (st.kind !== 'stroke') continue;
+            const drawn = (st.points[st.points.length - 1]?.t ?? 0) * area.fps;
+            cycle = Math.max(cycle, Math.ceil(drawn + (st.animLife ?? 6)));
+          }
+        }
+        const bar = document.createElement('div');
+        bar.className = 'tl-livebar';
+        bar.style.width = `${Math.min(340, Math.max(60, cycle * 30))}px`;
+        bar.textContent = `✒ ${strokes.length} · ${(cycle / area.fps).toFixed(1)}s${additive ? ' · loop' : ''}`;
+        bar.title = additive
+          ? 'Additive live ink: overdubs stack onto the area loop'
+          : 'Continuous live ink: replays its full length, then restarts';
+        bar.addEventListener('click', () => {
+          state.activeLayerId = l.id;
+          state.activeFrameId = null;
+          renderTimeline();
+          invalidate();
+        });
+        strip.appendChild(bar);
+        row.append(head, strip);
+        tracksEl.appendChild(row);
+        return;
+      }
       l.frames.forEach((f, i) => {
         const b = document.createElement('button');
         b.className = `tl-frame${f.id === state.activeFrameId ? ' active' : ''}${filledFrames.has(f.id) ? ' filled' : ''}`;
@@ -961,7 +1001,9 @@ export function buildUI(
       closeTimeline();
     });
     q('#tl-close').addEventListener('click', closeTimeline);
+    const framesOps = activeLayer.kind !== 'live';
     q('#tl-add').addEventListener('click', () => {
+      if (!framesOps) return;
       const idx = activeLayer.frames.findIndex((f) => f.id === fid);
       const cur = activeLayer.frames[idx];
       const nf = store.addFrame(area.id, lid, idx + 1, cur?.duration ?? 1);
@@ -970,17 +1012,20 @@ export function buildUI(
       invalidate();
     });
     q('#tl-dup').addEventListener('click', () => {
+      if (!framesOps) return;
       const nf = store.duplicateFrame(area.id, lid, fid);
       if (nf) state.activeFrameId = nf.id;
       renderTimeline();
       invalidate();
     });
     q('#tl-del').addEventListener('click', () => {
+      if (!framesOps) return;
       store.deleteFrame(area.id, lid, fid);
       renderTimeline();
       invalidate();
     });
     const dur = (d: number) => {
+      if (!framesOps) return;
       const f = activeLayer.frames.find((x) => x.id === fid);
       if (f) store.setFrameDuration(area.id, lid, fid, f.duration + d);
       renderTimeline();
@@ -999,6 +1044,10 @@ export function buildUI(
     });
     q('#tl-taper').addEventListener('click', () => {
       state.liveInkTaper = !state.liveInkTaper;
+      renderTimeline();
+    });
+    q('#tl-mode').addEventListener('click', () => {
+      state.liveInkMode = state.liveInkMode === 'additive' ? 'continuous' : 'additive';
       renderTimeline();
     });
     q('#tl-addlayer').addEventListener('click', () => {

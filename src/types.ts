@@ -24,7 +24,9 @@ export interface AnimLayer {
   id: string;
   name: string;
   hidden?: boolean; // hidden layers don't render (eye toggle)
-  frames: AnimFrame[]; // each layer has its own frame track
+  kind?: 'frames' | 'live'; // live layers hold timed live-ink strokes, no frames
+  liveMode?: 'additive' | 'continuous'; // additive: overdubs onto the area loop; continuous: replays its full length
+  frames: AnimFrame[]; // each layer has its own frame track (empty for live layers)
 }
 
 export interface AnimArea {

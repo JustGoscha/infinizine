@@ -538,9 +538,12 @@ export class Store {
     if (!a || a.layers.length <= 1) return;
     const index = a.layers.findIndex((l) => l.id === layerId);
     if (index < 0) return;
-    const fids = new Set(a.layers[index].frames.map((f) => f.id));
-    const elements = this.doc.elements.filter((e) => e.frame && fids.has(e.frame));
-    this.commit({ type: 'delete-anim-layer', areaId, alayer: a.layers[index], index, elements });
+    const layer = a.layers[index];
+    const fids = new Set(layer.frames.map((f) => f.id));
+    const elements = this.doc.elements.filter(
+      (e) => (e.frame && fids.has(e.frame)) || e.alayer === layer.id,
+    );
+    this.commit({ type: 'delete-anim-layer', areaId, alayer: layer, index, elements });
   }
 
   resizeArea(id: string, before: { x: number; y: number; w: number; h: number }, after: { x: number; y: number; w: number; h: number }) {
@@ -549,6 +552,32 @@ export class Store {
 
   moveArea(id: string, dx: number, dy: number) {
     if (dx || dy) this.commit({ type: 'move-area', id, dx, dy });
+  }
+
+  /** New live-ink layer holding the given stroke (one undoable op). */
+  addLiveLayer(areaId: string, stroke: Element, mode: 'additive' | 'continuous'): AnimLayer | null {
+    const a = this.area(areaId);
+    if (!a) return null;
+    const n = a.layers.filter((l) => l.kind === 'live').length + 1;
+    const alayer: AnimLayer = {
+      id: uid('ly'),
+      name: `Live ${n}`,
+      kind: 'live',
+      liveMode: mode,
+      frames: [],
+    };
+    stroke.alayer = alayer.id;
+    this.commit({ type: 'add-anim-layer', areaId, alayer, index: a.layers.length, elements: [stroke] });
+    return alayer;
+  }
+
+  /** View/behavior toggle on a live layer, not undoable. */
+  setLiveMode(areaId: string, layerId: string, mode: 'additive' | 'continuous') {
+    const l = this.animLayer(areaId, layerId);
+    if (!l) return;
+    l.liveMode = mode;
+    this.scheduleSave();
+    this.onChange();
   }
 
   moveFrame(areaId: string, layerId: string, from: number, to: number) {
