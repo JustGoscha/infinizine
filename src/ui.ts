@@ -914,15 +914,15 @@ export function buildUI(
         const firstStroke = strokes[0];
         const phase = firstStroke?.kind === 'stroke' ? (firstStroke.animStart ?? 0) : 0;
         bar.style.marginLeft = `${Math.max(0, Math.min(200, (((phase % areaTotal) + areaTotal) % areaTotal) * 30))}px`;
-        const prog = document.createElement('div');
-        prog.className = 'tl-liveprog';
-        bar.appendChild(prog);
         const inkColor = (strokes[0]?.color as string) ?? '#7048e8';
         bar.style.background = inkColor;
         const n = parseInt(inkColor.slice(1), 16) || 0;
         const lum = ((n >> 16) & 255) * 0.299 + ((n >> 8) & 255) * 0.587 + (n & 255) * 0.114;
         bar.style.color = lum < 140 ? '#fff' : '#2a241a';
         bar.textContent = `✒ ${strokes.length} · ${(cycle / area.fps).toFixed(1)}s${additive ? ' · loop' : ''}`;
+        const prog = document.createElement('div');
+        prog.className = 'tl-liveprog';
+        bar.appendChild(prog); // after textContent — that assignment clears children
         bar.title = additive
           ? 'Additive live ink: overdubs stack onto the area loop'
           : 'Continuous live ink: replays its full length, then restarts';
