@@ -368,15 +368,11 @@ html, body {
 }
 .tl-tabs button.on { background: var(--ink); color: var(--card); }
 .tl-tab-count {
-  display: inline-block;
-  margin-left: 5px;
-  min-width: 16px;
-  padding: 0 3px;
+  margin-left: 4px;
   font-size: 10px;
-  line-height: 15px;
-  text-align: center;
-  border: 1px solid currentColor;
-  opacity: 0.75;
+  font-weight: 700;
+  vertical-align: 2px;
+  opacity: 0.55;
 }
 .tl-tab-eye { display: inline-flex; margin-left: 6px; vertical-align: -3px; opacity: 0.8; }
 .tl-tab-eye.off { opacity: 0.4; }
