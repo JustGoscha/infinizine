@@ -518,7 +518,7 @@ html, body {
   bottom: 0;
   width: 3px;
   background: #fff;
-  mix-blend-mode: difference;
+  box-shadow: 0 0 0 1.5px #2a241a;
   display: none;
   pointer-events: none;
 }
