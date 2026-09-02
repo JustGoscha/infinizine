@@ -919,7 +919,7 @@ export function buildUI(
       .forEach((l) => {
       const idx = area.layers.indexOf(l);
       const row = document.createElement('div');
-      row.className = `tl-track${l.id === lid ? ' active' : ''}`;
+      row.className = `tl-track${l.id === lid ? ' active' : ''}${l.kind === 'live' ? ' live' : ''}`;
 
       const head = document.createElement('div');
       head.className = `tl-track-head${l.hidden ? ' layer-hidden' : ''}`;
