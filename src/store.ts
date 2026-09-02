@@ -26,6 +26,7 @@ type Op =
   | { type: 'resize-area'; id: string; before: { x: number; y: number; w: number; h: number }; after: { x: number; y: number; w: number; h: number } }
   | { type: 'move-frame'; areaId: string; layerId: string; from: number; to: number }
   | { type: 'recolor-elements'; items: { id: string; before: string; after: string }[] }
+  | { type: 'retime-strokes'; items: { id: string; before: number; after: number }[] }
   | { type: 'frame-duration'; areaId: string; layerId: string; frameId: string; before: number; after: number }
   | { type: 'area-settings'; areaId: string; before: { fps: number; loop: boolean; clip: boolean }; after: { fps: number; loop: boolean; clip: boolean } }
   | { type: 'rename-area'; areaId: string; before: string; after: string }
@@ -310,6 +311,13 @@ export class Store {
         }
         break;
       }
+      case 'retime-strokes': {
+        for (const it of op.items) {
+          const el = d.elements.find((e) => e.id === it.id);
+          if (el && el.kind === 'stroke') el.animStart = it.after;
+        }
+        break;
+      }
       case 'frame-duration': {
         const f = this.animLayer(op.areaId, op.layerId)?.frames.find((x) => x.id === op.frameId);
         if (f) f.duration = op.after;
@@ -363,6 +371,8 @@ export class Store {
       case 'resize-area': return { ...op, before: op.after, after: op.before };
       case 'move-frame': return { ...op, from: op.to, to: op.from };
       case 'recolor-elements':
+        return { ...op, items: op.items.map((it) => ({ ...it, before: it.after, after: it.before })) };
+      case 'retime-strokes':
         return { ...op, items: op.items.map((it) => ({ ...it, before: it.after, after: it.before })) };
       case 'frame-duration': return { ...op, before: op.after, after: op.before };
       case 'area-settings': return { ...op, before: op.after, after: op.before };
@@ -569,6 +579,18 @@ export class Store {
     stroke.alayer = alayer.id;
     this.commit({ type: 'add-anim-layer', areaId, alayer, index: a.layers.length, elements: [stroke] });
     return alayer;
+  }
+
+  /** Shift a live layer's strokes on the loop clock by whole ticks. */
+  shiftLiveLayer(layerId: string, deltaTicks: number) {
+    if (!deltaTicks) return;
+    const items = this.doc.elements
+      .filter((e) => e.kind === 'stroke' && e.alayer === layerId)
+      .map((e) => {
+        const before = (e.kind === 'stroke' ? e.animStart : 0) ?? 0;
+        return { id: e.id, before, after: before + deltaTicks };
+      });
+    if (items.length) this.commit({ type: 'retime-strokes', items });
   }
 
   /** View/behavior toggle on a live layer, not undoable. */

@@ -911,6 +911,9 @@ export function buildUI(
         bar.className = 'tl-livebar';
         bar.dataset.lid = l.id;
         bar.style.width = `${Math.min(340, Math.max(60, cycle * 30))}px`;
+        const firstStroke = strokes[0];
+        const phase = firstStroke?.kind === 'stroke' ? (firstStroke.animStart ?? 0) : 0;
+        bar.style.marginLeft = `${Math.max(0, Math.min(200, (((phase % areaTotal) + areaTotal) % areaTotal) * 30))}px`;
         const prog = document.createElement('div');
         prog.className = 'tl-liveprog';
         bar.appendChild(prog);
@@ -923,13 +926,33 @@ export function buildUI(
         bar.title = additive
           ? 'Additive live ink: overdubs stack onto the area loop'
           : 'Continuous live ink: replays its full length, then restarts';
-        bar.addEventListener('click', () => {
-          state.activeLayerId = l.id;
-          state.activeFrameId = null;
-          // select the layer's strokes so it's obvious which ink this is
-          state.selection = new Set(strokes.map((st) => st.id));
-          renderTimeline();
-          invalidate();
+        // tap selects; horizontal drag shifts the layer's timing on the loop clock
+        bar.addEventListener('pointerdown', (e) => {
+          bar.setPointerCapture(e.pointerId);
+          const startX = e.clientX;
+          let dragging = false;
+          const onMove = (ev: PointerEvent) => {
+            const dx = ev.clientX - startX;
+            if (!dragging && Math.abs(dx) > 6) dragging = true;
+            if (dragging) bar.style.transform = `translateX(${Math.round(dx / 30) * 30}px)`;
+          };
+          const onUp = (ev: PointerEvent) => {
+            bar.removeEventListener('pointermove', onMove);
+            bar.removeEventListener('pointerup', onUp);
+            bar.style.transform = '';
+            state.activeLayerId = l.id;
+            state.activeFrameId = null;
+            if (dragging) {
+              store.shiftLiveLayer(l.id, Math.round((ev.clientX - startX) / 30));
+            } else {
+              // select the layer's strokes so it's obvious which ink this is
+              state.selection = new Set(strokes.map((st) => st.id));
+            }
+            renderTimeline();
+            invalidate();
+          };
+          bar.addEventListener('pointermove', onMove);
+          bar.addEventListener('pointerup', onUp);
         });
         strip.appendChild(bar);
         row.append(head, strip);
