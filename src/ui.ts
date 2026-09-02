@@ -739,6 +739,40 @@ export function buildUI(
     });
   }
 
+  // playhead: lights up the playing frame per track and shows the loop clock
+  let playheadRaf = 0;
+  function playheadLoop() {
+    cancelAnimationFrame(playheadRaf);
+    const area = tlAreaId ? store.area(tlAreaId) : undefined;
+    const timeEl = tl.querySelector('#tl-time') as HTMLElement | null;
+    if (!area || !timeEl) return;
+    const total = Math.max(1, ...area.layers.map((l) => l.frames.reduce((a, f) => a + f.duration, 0)));
+    const loopSec = total / area.fps;
+    if (!state.playingAreas) {
+      timeEl.textContent = `${loopSec.toFixed(1)}s`;
+      tl.querySelectorAll('.tl-frame.playing').forEach((c) => c.classList.remove('playing'));
+      return;
+    }
+    const elapsed = performance.now() / 1000 - state.playEpoch;
+    let tick = Math.floor(elapsed * area.fps);
+    tick = area.loop ? ((tick % total) + total) % total : Math.min(tick, total - 1);
+    const sec = area.loop ? elapsed % loopSec : Math.min(elapsed, loopSec);
+    timeEl.textContent = `${sec.toFixed(1)}s / ${loopSec.toFixed(1)}s`;
+    for (const l of area.layers) {
+      let acc = 0;
+      let visId: string | null = l.frames[l.frames.length - 1]?.id ?? null;
+      for (const f of l.frames) {
+        acc += f.duration;
+        if (tick < acc) { visId = f.id; break; }
+      }
+      for (const f of l.frames) {
+        const cell = tl.querySelector(`.tl-frame[data-fid="${f.id}"]`);
+        cell?.classList.toggle('playing', f.id === visId);
+      }
+    }
+    playheadRaf = requestAnimationFrame(playheadLoop);
+  }
+
   function renderTimeline() {
     const area = tlAreaId ? store.area(tlAreaId) : undefined;
     if (!area) { closeTimeline(); return; }
@@ -756,6 +790,7 @@ export function buildUI(
         <span class="tl-grip" title="Drag to move">⠿</span>
         <span class="tl-name" title="Double-click to rename">${area.name}</span>
         <button id="tl-play" title="Play/pause">${state.playingAreas ? '⏸' : '▶'}</button>
+        <span class="tl-time" id="tl-time"></span>
         <input id="tl-fps" type="number" min="1" max="60" value="${area.fps}" title="fps"><span class="tl-fpslabel">fps</span>
         <button id="tl-loop" class="tl-toggle ${area.loop ? 'on' : ''}">loop</button>
         <button id="tl-clip" class="tl-toggle ${area.clip ? 'on' : ''}" title="Cut off ink outside the area">clip</button>
@@ -826,6 +861,7 @@ export function buildUI(
       l.frames.forEach((f, i) => {
         const b = document.createElement('button');
         b.className = `tl-frame${f.id === state.activeFrameId ? ' active' : ''}${filledFrames.has(f.id) ? ' filled' : ''}`;
+        b.dataset.fid = f.id;
         b.style.width = `${30 + (f.duration - 1) * 30}px`;
         b.textContent = String(i + 1);
         b.title = `${l.name} · frame ${i + 1} · ${f.duration}f (drag to reorder)`;
@@ -834,25 +870,49 @@ export function buildUI(
           b.setPointerCapture(e.pointerId);
           const startX = e.clientX;
           let dragging = false;
+          let marker: HTMLElement | null = null;
+          const insertIndex = (px: number) => {
+            const others = [...strip.querySelectorAll('.tl-frame')].filter((c) => c !== b);
+            return {
+              others,
+              to: others.filter((c) => {
+                const r = (c as HTMLElement).getBoundingClientRect();
+                return r.left + r.width / 2 < px;
+              }).length,
+            };
+          };
           const onMove = (ev: PointerEvent) => {
             if (!dragging && Math.abs(ev.clientX - startX) > 8) {
               dragging = true;
               b.classList.add('dragging');
+              marker = document.createElement('div');
+              marker.className = 'tl-insert';
+              strip.appendChild(marker);
             }
+            if (!dragging) return;
+            // ghost follows the pointer
+            b.style.transform = `translate(${ev.clientX - startX}px, -3px)`;
+            // insertion marker shows the drop slot
+            const { others, to } = insertIndex(ev.clientX);
+            const sr = strip.getBoundingClientRect();
+            const x =
+              to < others.length
+                ? (others[to] as HTMLElement).getBoundingClientRect().left
+                : others.length
+                  ? (others[others.length - 1] as HTMLElement).getBoundingClientRect().right
+                  : sr.left;
+            if (marker) marker.style.left = `${x - sr.left + strip.scrollLeft - 2}px`;
           };
           const onUp = (ev: PointerEvent) => {
             b.removeEventListener('pointermove', onMove);
             b.removeEventListener('pointerup', onUp);
             b.classList.remove('dragging');
+            b.style.transform = '';
+            marker?.remove();
             state.activeLayerId = l.id;
             state.activeFrameId = f.id;
             if (dragging) {
-              const others = [...strip.querySelectorAll('.tl-frame')].filter((c) => c !== b);
-              const to = others.filter((c) => {
-                const r = (c as HTMLElement).getBoundingClientRect();
-                return r.left + r.width / 2 < ev.clientX;
-              }).length;
-              store.moveFrame(area.id, l.id, i, to);
+              store.moveFrame(area.id, l.id, i, insertIndex(ev.clientX).to);
             }
             renderTimeline();
             invalidate();
@@ -928,6 +988,7 @@ export function buildUI(
     };
     q('#tl-shorter').addEventListener('click', () => dur(-1));
     q('#tl-longer').addEventListener('click', () => dur(1));
+    playheadLoop();
     q('#tl-life-minus').addEventListener('click', () => {
       state.liveInkLife = Math.max(1, state.liveInkLife - 1);
       renderTimeline();

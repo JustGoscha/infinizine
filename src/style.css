@@ -445,6 +445,7 @@ html, body {
   display: flex;
   overflow-x: auto;
   flex: 1;
+  position: relative;
 }
 .tl-frame {
   flex: none;
@@ -477,7 +478,25 @@ html, body {
 .tl-frame.filled { color: var(--ink); }
 .tl-frame.active.filled::after { background: #fff; }
 .tl-frame.active.filled { color: #fff; }
-.tl-frame.dragging { opacity: 0.4; }
+.tl-frame.dragging {
+  opacity: 0.85;
+  position: relative;
+  z-index: 5;
+  box-shadow: var(--shadow);
+  outline: 2px solid var(--accent);
+}
+.tl-insert {
+  position: absolute;
+  top: 0;
+  bottom: 0;
+  width: 4px;
+  background: var(--accent);
+  pointer-events: none;
+  z-index: 6;
+}
+.tl-frame.playing { background: rgba(47, 158, 68, 0.3); }
+.tl-frame.active.playing { background: #7048e8; box-shadow: inset 0 -4px 0 #2f9e44; }
+.tl-time { font-size: 11px; font-weight: 700; color: var(--ink-soft); min-width: 64px; font-variant-numeric: tabular-nums; }
 .tl-track-head.layer-hidden .tl-lname { opacity: 0.35; text-decoration: line-through; }
 .tl-track-head button svg { width: 15px; height: 15px; vertical-align: -3px; }
 
