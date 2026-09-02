@@ -497,6 +497,8 @@ html, body {
 .tl-frame.playing { background: rgba(47, 158, 68, 0.3); }
 .tl-frame.active.playing { background: #7048e8; box-shadow: inset 0 -4px 0 #2f9e44; }
 .tl-livebar {
+  position: relative;
+  overflow: hidden;
   align-self: center;
   margin: 4px;
   height: 26px;
@@ -509,6 +511,16 @@ html, body {
   border: 1.5px solid #2a241a;
   cursor: pointer;
   white-space: nowrap;
+}
+.tl-liveprog {
+  position: absolute;
+  top: 0;
+  bottom: 0;
+  width: 3px;
+  background: #fff;
+  mix-blend-mode: difference;
+  display: none;
+  pointer-events: none;
 }
 .tl-mode {
   font-size: 10px !important;

@@ -751,6 +751,7 @@ export function buildUI(
     if (!state.playingAreas) {
       timeEl.textContent = `${loopSec.toFixed(1)}s`;
       tl.querySelectorAll('.tl-frame.playing').forEach((c) => c.classList.remove('playing'));
+      tl.querySelectorAll<HTMLElement>('.tl-liveprog').forEach((pr) => (pr.style.display = 'none'));
       return;
     }
     const elapsed = performance.now() / 1000 - state.playEpoch;
@@ -769,6 +770,31 @@ export function buildUI(
         const cell = tl.querySelector(`.tl-frame[data-fid="${f.id}"]`);
         cell?.classList.toggle('playing', f.id === visId);
       }
+    }
+    // live-layer progress sweeps
+    const rawTick = elapsed * area.fps;
+    for (const l of area.layers) {
+      if (l.kind !== 'live') continue;
+      const bar = tl.querySelector<HTMLElement>(`.tl-livebar[data-lid="${l.id}"]`);
+      const prog = bar?.querySelector<HTMLElement>('.tl-liveprog');
+      if (!bar || !prog) continue;
+      const strokes = store.doc.elements.filter((e) => e.kind === 'stroke' && e.alayer === l.id);
+      let p: number;
+      if (l.liveMode === 'additive') {
+        p = (tick % total) / total;
+      } else {
+        const st = strokes[0];
+        if (st && st.kind === 'stroke') {
+          const drawn = (st.points[st.points.length - 1]?.t ?? 0) * area.fps;
+          const cycle = Math.max(1, Math.ceil(drawn + (st.animLife ?? 6)));
+          const r = (((rawTick - (st.animStart ?? 0)) % cycle) + cycle) % cycle;
+          p = r / cycle;
+        } else {
+          p = 0;
+        }
+      }
+      prog.style.display = 'block';
+      prog.style.left = `${Math.min(99, p * 100)}%`;
     }
     playheadRaf = requestAnimationFrame(playheadLoop);
   }
@@ -883,7 +909,11 @@ export function buildUI(
         }
         const bar = document.createElement('div');
         bar.className = 'tl-livebar';
+        bar.dataset.lid = l.id;
         bar.style.width = `${Math.min(340, Math.max(60, cycle * 30))}px`;
+        const prog = document.createElement('div');
+        prog.className = 'tl-liveprog';
+        bar.appendChild(prog);
         const inkColor = (strokes[0]?.color as string) ?? '#7048e8';
         bar.style.background = inkColor;
         const n = parseInt(inkColor.slice(1), 16) || 0;
