@@ -155,7 +155,7 @@ export class Renderer {
     // layers hold at the same tick position.
     const now = performance.now() / 1000;
     const frameVis = new Map<string, boolean>();
-    const areaTick = new Map<string, { tick: number; total: number; loop: boolean; fps: number }>();
+    const areaTick = new Map<string, { tick: number; rawTick: number; total: number; loop: boolean; fps: number }>();
     // standard onion colors: previous frames red, next frame green
     const onionFrames = new Map<string, { alpha: number; color: string }>();
 
@@ -175,9 +175,10 @@ export class Renderer {
         area.id === this.input.activeAreaId && !this.input.playingAreas && !this.input.presenting;
       // layers don't loop independently: the area loops as one, over its longest track
       const areaTotal = Math.max(1, ...area.layers.map((l) => l.frames.reduce((a, f) => a + f.duration, 0)));
-      let playTick = Math.floor((now - this.input.playEpoch) * area.fps);
+      const rawTick = Math.floor((now - this.input.playEpoch) * area.fps);
+      let playTick = rawTick;
       playTick = area.loop ? ((playTick % areaTotal) + areaTotal) % areaTotal : Math.min(playTick, areaTotal - 1);
-      areaTick.set(area.id, { tick: playTick, total: areaTotal, loop: area.loop, fps: area.fps });
+      areaTick.set(area.id, { tick: playTick, rawTick, total: areaTotal, loop: area.loop, fps: area.fps });
 
       // tick position of the active frame's start (for holding other layers in edit mode)
       let editTick = 0;
@@ -224,7 +225,7 @@ export class Renderer {
       }
       if (editing) {
         const t = areaTick.get(area.id)!;
-        areaTick.set(area.id, { ...t, tick: editTick });
+        areaTick.set(area.id, { ...t, tick: editTick, rawTick: editTick });
       }
     }
 
@@ -262,14 +263,18 @@ export class Renderer {
       ctx.globalAlpha = 1;
     };
 
-    // Replay: one replay clock per stroke, restarting at its start position every
-    // loop. Points appear in draw order (age < 0 = not drawn yet this pass) and
-    // expire after their life — exactly like the live behavior.
-    const drawTimed = (el: Stroke, tk: { tick: number; total: number; loop: boolean; fps: number }) => {
+    // Replay, Quill-style: each stroke loops on its OWN cycle — its full draw
+    // time plus decay — independent of the area loop, so gestures longer than
+    // the loop still replay in full (they phase over the loop). Points appear
+    // in draw order (age < 0 = not drawn yet this pass) and expire after life.
+    const drawTimed = (el: Stroke, tk: { tick: number; rawTick: number; total: number; loop: boolean; fps: number }) => {
       const start = el.animStart ?? 0;
+      const life = Math.max(1, el.animLife ?? 6);
+      const drawnTicks = (el.points[el.points.length - 1]?.t ?? 0) * tk.fps;
+      const cycle = Math.max(1, Math.ceil(drawnTicks + life));
       const r = tk.loop
-        ? (((tk.tick - start) % tk.total) + tk.total) % tk.total
-        : tk.tick - start;
+        ? (((tk.rawTick - start) % cycle) + cycle) % cycle
+        : tk.rawTick - start;
       drawTimedWith(el, (t) => r - t * tk.fps);
     };
 
