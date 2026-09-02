@@ -1,6 +1,6 @@
 /* InfiniCanvas — "stationery shop": warm paper desk, ink accents, tactile pill toolbar. */
 
-@import url('https://fonts.googleapis.com/css2?family=Libre+Franklin:ital,wght@0,400;0,500;0,600;0,700;1,400;1,700&family=Lora:ital,wght@0,400;0,700;1,400;1,700&family=IBM+Plex+Mono:ital,wght@0,400;0,700;1,400&family=Hanken+Grotesk:ital,wght@0,400;0,700;1,400;1,700&family=Kalam:wght@400;700&family=Bangers&display=swap');
+@import url('https://fonts.googleapis.com/css2?family=Libre+Franklin:ital,wght@0,400;0,500;0,600;0,700;1,400;1,700&family=Fraunces:ital,opsz,wght@0,9..144,400;0,9..144,700;1,9..144,400;1,9..144,700&family=IBM+Plex+Mono:ital,wght@0,400;0,700;1,400&family=Hanken+Grotesk:ital,wght@0,400;0,700;1,400;1,700&family=Kalam:wght@400;700&family=Bangers&display=swap');
 
 :root {
   --paper: #f7f4ec;

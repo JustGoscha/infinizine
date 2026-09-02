@@ -7,7 +7,7 @@ export const LINE_HEIGHT = 1.3;
 
 export const FONTS: Record<string, { name: string; css: string }> = {
   franklin: { name: 'Sans', css: '"Hanken Grotesk", sans-serif' },
-  serif: { name: 'Serif', css: '"Lora", serif' },
+  serif: { name: 'Serif', css: '"Fraunces", serif' },
   mono: { name: 'Mono', css: '"IBM Plex Mono", monospace' },
   comic: { name: 'Comic', css: '"Kalam", cursive' },
   shout: { name: 'Shout', css: '"Bangers", sans-serif' },
