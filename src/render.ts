@@ -335,18 +335,21 @@ export class Renderer {
         for (const el of visible) {
           if (el.frame && fids.has(el.frame) && frameVis.get(el.frame) === true) drawEl(el);
         }
-        // live ink is motion — hidden while editing unless explicitly shown
+        // live ink is motion — hidden while editing unless explicitly shown;
+        // the ACTIVE live layer shows its strokes in full so you can identify them
         const editingArea =
           area.id === this.input.activeAreaId && !this.input.playingAreas && !this.input.presenting;
-        const tk = editingArea && !this.input.showLiveInk ? undefined : areaTick.get(area.id);
-        if (tk) {
+        const activeLive = editingArea && layer.kind === 'live' && layer.id === this.input.activeLayerId;
+        const tk = editingArea && !this.input.showLiveInk && !activeLive ? undefined : areaTick.get(area.id);
+        if (activeLive || tk) {
           const mode = layer.liveMode ?? 'continuous';
           for (const el of visible) {
             if (
               el.kind === 'stroke' && el.area === area.id &&
               (el.alayer === layer.id || (!el.alayer && layer === area.layers[0]))
             ) {
-              drawTimed(el, tk, mode);
+              if (activeLive) drawEl(el);
+              else if (tk) drawTimed(el, tk, mode);
             }
           }
         }

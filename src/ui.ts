@@ -896,6 +896,8 @@ export function buildUI(
         bar.addEventListener('click', () => {
           state.activeLayerId = l.id;
           state.activeFrameId = null;
+          // select the layer's strokes so it's obvious which ink this is
+          state.selection = new Set(strokes.map((st) => st.id));
           renderTimeline();
           invalidate();
         });
