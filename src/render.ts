@@ -262,15 +262,15 @@ export class Renderer {
       ctx.globalAlpha = 1;
     };
 
+    // Replay: one replay clock per stroke, restarting at its start position every
+    // loop. Points appear in draw order (age < 0 = not drawn yet this pass) and
+    // expire after their life — exactly like the live behavior.
     const drawTimed = (el: Stroke, tk: { tick: number; total: number; loop: boolean; fps: number }) => {
       const start = el.animStart ?? 0;
-      const wrap = (v: number) => (tk.loop ? ((v % tk.total) + tk.total) % tk.total : v);
-      // on the wrapped loop clock a life >= the loop length would keep every
-      // point alive forever — clamp the window so the tail still dies each loop
-      const life = tk.loop
-        ? Math.min(Math.max(1, el.animLife ?? 6), Math.max(1, tk.total - 1))
-        : undefined;
-      drawTimedWith(el, (t) => wrap(tk.tick - (start + t * tk.fps)), life);
+      const r = tk.loop
+        ? (((tk.tick - start) % tk.total) + tk.total) % tk.total
+        : tk.tick - start;
+      drawTimedWith(el, (t) => r - t * tk.fps);
     };
 
     if (live?.layer === 'back') drawLive(); // live back-ink previews behind existing back-ink
