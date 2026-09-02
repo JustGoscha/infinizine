@@ -434,7 +434,7 @@ html, body {
   padding: 4px 6px;
 }
 .tl-head button:active { background: var(--ink); color: var(--card); }
-.tl-toggle { color: var(--ink-soft) !important; font-weight: 600; }
+.tl-toggle { color: var(--ink-soft) !important; font-weight: 600; padding: 4px 10px !important; }
 .tl-toggle.on { background: #7048e8 !important; color: #fff !important; }
 /* fps reads as plain text; only a subtle underline hints it's editable */
 #tl-fps {
