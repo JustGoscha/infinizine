@@ -891,7 +891,15 @@ export function buildUI(
 
       const head = document.createElement('div');
       head.className = `tl-track-head${l.hidden ? ' layer-hidden' : ''}`;
-      head.innerHTML = `<span class="tl-lname">${l.name}</span>
+      const liveColor =
+        l.kind === 'live'
+          ? (store.doc.elements.find((e) => e.kind === 'stroke' && e.alayer === l.id)?.color ?? '#7048e8')
+          : '';
+      head.innerHTML = `${
+        l.kind === 'live'
+          ? `<span class="tl-ldot" style="background:${liveColor}"></span>`
+          : `<span class="tl-lname">${l.name}</span>`
+      }
         ${l.kind === 'live' ? `<button data-a="mode" class="tl-mode" title="Toggle additive/continuous">${l.liveMode === 'additive' ? 'add' : 'cont'}</button>` : ''}
         <button data-a="eye" title="${l.hidden ? 'Show layer' : 'Hide layer'}">${
           l.hidden
@@ -901,7 +909,7 @@ export function buildUI(
         <button data-a="up" title="Layer up">↑</button>
         <button data-a="down" title="Layer down">↓</button>
         <button data-a="del" title="Delete layer">✕</button>`;
-      head.querySelector('.tl-lname')!.addEventListener('dblclick', (e) => {
+      head.querySelector('.tl-lname')?.addEventListener('dblclick', (e) => {
         e.stopPropagation();
         inlineRename(e.target as HTMLElement, l.name, (v) => store.renameAnimLayer(area.id, l.id, v));
       });
@@ -968,8 +976,10 @@ export function buildUI(
             if (dragging) {
               store.shiftLiveLayer(l.id, Math.round((ev.clientX - startX) / liveScale));
             } else {
-              // select the layer's strokes so it's obvious which ink this is
+              // select the layer's strokes and blink them so it's obvious which ink this is
               state.selection = new Set(strokes.map((st) => st.id));
+              state.blinkLayerId = l.id;
+              state.blinkStart = performance.now() / 1000;
             }
             renderTimeline();
             invalidate();

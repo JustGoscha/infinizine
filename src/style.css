@@ -536,6 +536,14 @@ html, body {
   display: none;
   pointer-events: none;
 }
+.tl-ldot {
+  width: 16px;
+  height: 16px;
+  border-radius: 50%;
+  border: 1.5px solid #2a241a;
+  margin-right: auto;
+  flex: none;
+}
 .tl-mode {
   font-size: 10px !important;
   font-weight: 700;

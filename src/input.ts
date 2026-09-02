@@ -86,6 +86,8 @@ export class InputState {
   liveInkTaper = true; // its tail eats away over its lifetime
   liveInkMode: 'additive' | 'continuous' = 'continuous'; // recording mode for live ink
   showLiveInk = false; // show live-ink strokes while editing (they always show in playback)
+  blinkLayerId: string | null = null; // layer briefly opacity-blinking (selection feedback)
+  blinkStart = 0;
   playingAreas = false;
   playEpoch = 0; // performance.now()/1000 when playback started
   onAnimOpen: (area: import('./types').AnimArea) => void = () => {};

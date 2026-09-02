@@ -341,6 +341,17 @@ export class Renderer {
           area.id === this.input.activeAreaId && !this.input.playingAreas && !this.input.presenting;
         const activeLive = editingArea && layer.kind === 'live' && layer.id === this.input.activeLayerId;
         const tk = editingArea && !this.input.showLiveInk && !activeLive ? undefined : areaTick.get(area.id);
+        // selection feedback: recently-picked live layer blinks its opacity
+        const prevDim = dimFactor;
+        if (this.input.blinkLayerId === layer.id) {
+          const bt = now - this.input.blinkStart;
+          if (bt < 1.2) {
+            dimFactor = prevDim * (0.25 + 0.75 * Math.abs(Math.sin(bt * Math.PI * 3)));
+            this.dirty = true; // keep animating the blink
+          } else {
+            this.input.blinkLayerId = null;
+          }
+        }
         if (activeLive || tk) {
           const mode = layer.liveMode ?? 'continuous';
           for (const el of visible) {
@@ -353,6 +364,7 @@ export class Renderer {
             }
           }
         }
+        dimFactor = prevDim;
       }
       if (area.clip) ctx.restore();
       dimFactor = 1;
