@@ -828,6 +828,8 @@ export function buildUI(
     }
     const fid = state.activeFrameId!;
     const lid = state.activeLayerId!;
+    const nFrameLayers = area.layers.filter((l) => l.kind !== 'live').length;
+    const nLiveLayers = area.layers.filter((l) => l.kind === 'live').length;
     tl.innerHTML = `
       <div class="tl-head">
         <span class="tl-grip" title="Drag to move">⠿</span>
@@ -842,10 +844,10 @@ export function buildUI(
         <button id="tl-close" title="Close">✕</button>
       </div>
       <div class="tl-tabs">
-        <button id="tl-tab-frames" class="${tlView === 'frames' ? 'on' : ''}">keyframes
+        <button id="tl-tab-frames" class="${tlView === 'frames' ? 'on' : ''}">keyframes<span class="tl-tab-count">${nFrameLayers}</span>
           <span id="tl-eye-frames" class="tl-tab-eye${area.hideFrames ? ' off' : ''}" title="Show/hide all keyframe layers">${area.hideFrames ? svg('<path d="M4 5 L20 19"/><path d="M3 12 C6 7 9 5.5 12 5.5 C15 5.5 18 7 21 12 C19.5 14.5 17.8 16.2 16 17.2 M9.5 17.9 C7.2 17.1 5 15.2 3 12"/>') : svg('<path d="M3 12 C6 6.8 9 5 12 5 C15 5 18 6.8 21 12 C18 17.2 15 19 12 19 C9 19 6 17.2 3 12 Z"/><circle cx="12" cy="12" r="3"/>')}</span>
         </button>
-        <button id="tl-tab-live" class="${tlView === 'live' ? 'on' : ''}">live lines
+        <button id="tl-tab-live" class="${tlView === 'live' ? 'on' : ''}">live lines<span class="tl-tab-count">${nLiveLayers}</span>
           <span id="tl-eye-live" class="tl-tab-eye${area.hideLive ? ' off' : ''}" title="Show/hide all live lines">${area.hideLive ? svg('<path d="M4 5 L20 19"/><path d="M3 12 C6 7 9 5.5 12 5.5 C15 5.5 18 7 21 12 C19.5 14.5 17.8 16.2 16 17.2 M9.5 17.9 C7.2 17.1 5 15.2 3 12"/>') : svg('<path d="M3 12 C6 6.8 9 5 12 5 C15 5 18 6.8 21 12 C18 17.2 15 19 12 19 C9 19 6 17.2 3 12 Z"/><circle cx="12" cy="12" r="3"/>')}</span>
         </button>
       </div>
