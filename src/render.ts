@@ -235,8 +235,8 @@ export class Renderer {
     // it was drawn. `ageOf` maps a point's draw-time to its current age in ticks:
     // stroke-local & continuous while drawing (never resets at the loop point),
     // wrapped onto the loop clock during playback.
-    const drawTimedWith = (el: Stroke, ageOf: (t: number) => number) => {
-      const life = Math.max(1, el.animLife ?? 6);
+    const drawTimedWith = (el: Stroke, ageOf: (t: number) => number, lifeOverride?: number) => {
+      const life = Math.max(1, lifeOverride ?? el.animLife ?? 6);
       if (!el.animTaper) {
         // untapered: the whole stroke shows while any part of it is alive
         const anyAlive = el.points.some((pt) => {
@@ -265,7 +265,12 @@ export class Renderer {
     const drawTimed = (el: Stroke, tk: { tick: number; total: number; loop: boolean; fps: number }) => {
       const start = el.animStart ?? 0;
       const wrap = (v: number) => (tk.loop ? ((v % tk.total) + tk.total) % tk.total : v);
-      drawTimedWith(el, (t) => wrap(tk.tick - (start + t * tk.fps)));
+      // on the wrapped loop clock a life >= the loop length would keep every
+      // point alive forever — clamp the window so the tail still dies each loop
+      const life = tk.loop
+        ? Math.min(Math.max(1, el.animLife ?? 6), Math.max(1, tk.total - 1))
+        : undefined;
+      drawTimedWith(el, (t) => wrap(tk.tick - (start + t * tk.fps)), life);
     };
 
     if (live?.layer === 'back') drawLive(); // live back-ink previews behind existing back-ink
