@@ -581,6 +581,83 @@ export class Store {
     return alayer;
   }
 
+  /** Bake a live-ink layer into a keyframe layer: one frame per tick of its
+   * cycle, each holding the stroke geometry visible at that tick. */
+  convertLiveLayer(areaId: string, layerId: string) {
+    const a = this.area(areaId);
+    if (!a) return;
+    const index = a.layers.findIndex((l) => l.id === layerId);
+    const l = a.layers[index];
+    if (!l || l.kind !== 'live') return;
+    const strokes = this.doc.elements.filter(
+      (e): e is Extract<Element, { kind: 'stroke' }> => e.kind === 'stroke' && e.alayer === layerId,
+    );
+    if (!strokes.length) return;
+    const areaTotal = Math.max(
+      1,
+      ...a.layers.filter((x) => x.kind !== 'live').map((x) => x.frames.reduce((acc, f) => acc + f.duration, 0)),
+    );
+    const additive = l.liveMode === 'additive';
+    let cycle = areaTotal;
+    if (!additive) {
+      cycle = 1;
+      for (const st of strokes) {
+        const drawn = (st.points[st.points.length - 1]?.t ?? 0) * a.fps;
+        cycle = Math.max(cycle, Math.ceil(drawn + (st.animLife ?? 6)));
+      }
+    }
+    cycle = Math.min(cycle, 600); // safety cap
+    const frames: AnimFrame[] = Array.from({ length: cycle }, () => ({ id: uid('fr'), duration: 1 }));
+    const baked: Element[] = [];
+    for (let T = 0; T < cycle; T++) {
+      for (const st of strokes) {
+        const start = st.animStart ?? 0;
+        const life = Math.max(1, st.animLife ?? 6);
+        const ageOf = (t: number) =>
+          additive
+            ? ((((T - start - t * a.fps) % areaTotal) + areaTotal) % areaTotal)
+            : T - t * a.fps;
+        let pts;
+        if (st.animTaper) {
+          pts = [];
+          for (const pt of st.points) {
+            const age = ageOf(pt.t);
+            if (age >= 0 && age < life) {
+              const k = 1 - age / life;
+              pts.push({ ...pt, p: pt.p * (0.08 + 0.92 * k) });
+            }
+          }
+        } else {
+          const anyAlive = st.points.some((pt) => {
+            const age = ageOf(pt.t);
+            return age >= 0 && age < life;
+          });
+          pts = anyAlive ? st.points.map((pt) => ({ ...pt })) : [];
+        }
+        if (pts.length < 3) continue;
+        baked.push({
+          ...st,
+          id: uid('el'),
+          points: pts,
+          frame: frames[T].id,
+          area: undefined,
+          alayer: undefined,
+          animStart: undefined,
+          animLife: undefined,
+          animTaper: undefined,
+        });
+      }
+    }
+    const bakedLayer: AnimLayer = {
+      id: uid('ly'),
+      name: `Baked ${a.layers.filter((x) => x.kind !== 'live').length + 1}`,
+      frames,
+    };
+    // two undoable steps: remove the live layer, add the baked keyframe layer
+    this.commit({ type: 'delete-anim-layer', areaId, alayer: l, index, elements: strokes });
+    this.commit({ type: 'add-anim-layer', areaId, alayer: bakedLayer, index, elements: baked });
+  }
+
   /** Shift a live layer's strokes on the loop clock by whole ticks. */
   shiftLiveLayer(layerId: string, deltaTicks: number) {
     if (!deltaTicks) return;

@@ -916,7 +916,7 @@ export function buildUI(
           ? `<span class="tl-ldot" style="background:${liveColor}"></span>`
           : `<span class="tl-lname">${l.name}</span>`
       }
-        ${l.kind === 'live' ? `<button data-a="mode" class="tl-mode" title="Toggle additive/continuous">${l.liveMode === 'additive' ? 'add' : 'cont'}</button>` : ''}
+        ${l.kind === 'live' ? `<button data-a="mode" class="tl-mode" title="Toggle additive/continuous">${l.liveMode === 'additive' ? 'add' : 'cont'}</button><button data-a="bake" class="tl-mode" title="Convert to keyframes">bake</button>` : ''}
         <button data-a="eye" title="${l.hidden ? 'Show layer' : 'Hide layer'}">${
           l.hidden
             ? svg('<path d="M4 5 L20 19"/><path d="M3 12 C6 7 9 5.5 12 5.5 C15 5.5 18 7 21 12 C19.5 14.5 17.8 16.2 16 17.2 M9.5 17.9 C7.2 17.1 5 15.2 3 12"/>')
@@ -931,7 +931,10 @@ export function buildUI(
       });
       head.addEventListener('click', (e) => {
         const a = (e.target as HTMLElement).closest('button')?.dataset?.a;
-        if (a === 'mode') store.setLiveMode(area.id, l.id, l.liveMode === 'additive' ? 'continuous' : 'additive');
+        if (a === 'bake') {
+          store.convertLiveLayer(area.id, l.id);
+          tlView = 'frames';
+        } else if (a === 'mode') store.setLiveMode(area.id, l.id, l.liveMode === 'additive' ? 'continuous' : 'additive');
         else if (a === 'eye') store.setLayerHidden(area.id, l.id, !l.hidden);
         else if (a === 'up') store.moveAnimLayer(area.id, idx, idx + 1);
         else if (a === 'down') store.moveAnimLayer(area.id, idx, idx - 1);

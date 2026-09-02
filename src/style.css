@@ -10,7 +10,7 @@
   --accent: #e8590c;
   --line: rgba(90, 75, 50, 0.18);
   /* comic-brutalist chrome: hard ink borders, hard offset shadows, glassy panels */
-  --panel: rgba(253, 252, 248, 0.8);
+  --panel: rgba(253, 252, 248, 0.9);
   --panel-border: 2px solid #2a241a;
   --shadow: 3px 3px 0 rgba(42, 36, 26, 0.25);
 }
