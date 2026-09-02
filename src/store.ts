@@ -23,6 +23,7 @@ type Op =
   | { type: 'delete-anim-layer'; areaId: string; alayer: AnimLayer; index: number; elements: Element[] }
   | { type: 'move-anim-layer'; areaId: string; from: number; to: number }
   | { type: 'move-area'; id: string; dx: number; dy: number }
+  | { type: 'move-area-content'; id: string; ids: string[]; dx: number; dy: number }
   | { type: 'resize-area'; id: string; before: { x: number; y: number; w: number; h: number }; after: { x: number; y: number; w: number; h: number } }
   | { type: 'move-frame'; areaId: string; layerId: string; from: number; to: number }
   | { type: 'recolor-elements'; items: { id: string; before: string; after: string }[] }
@@ -291,6 +292,12 @@ export class Store {
         if (a) { a.x += op.dx; a.y += op.dy; }
         break;
       }
+      case 'move-area-content': {
+        const a = this.area(op.id);
+        if (a) { a.x += op.dx; a.y += op.dy; }
+        this.translate(op.ids, op.dx, op.dy);
+        break;
+      }
       case 'resize-area': {
         const a = this.area(op.id);
         if (a) { a.x = op.after.x; a.y = op.after.y; a.w = op.after.w; a.h = op.after.h; }
@@ -368,6 +375,7 @@ export class Store {
       case 'delete-anim-layer': return { ...op, type: 'add-anim-layer' };
       case 'move-anim-layer': return { ...op, from: op.to, to: op.from };
       case 'move-area': return { ...op, dx: -op.dx, dy: -op.dy };
+      case 'move-area-content': return { ...op, dx: -op.dx, dy: -op.dy };
       case 'resize-area': return { ...op, before: op.after, after: op.before };
       case 'move-frame': return { ...op, from: op.to, to: op.from };
       case 'recolor-elements':
@@ -562,6 +570,20 @@ export class Store {
 
   moveArea(id: string, dx: number, dy: number) {
     if (dx || dy) this.commit({ type: 'move-area', id, dx, dy });
+  }
+
+  /** All elements belonging to an area: frame-tagged + timed live ink. */
+  areaContentIds(areaId: string): string[] {
+    const a = this.area(areaId);
+    if (!a) return [];
+    const fids = new Set(a.layers.flatMap((l) => l.frames.map((f) => f.id)));
+    return this.doc.elements
+      .filter((e) => (e.frame && fids.has(e.frame)) || (e.kind === 'stroke' && e.area === areaId))
+      .map((e) => e.id);
+  }
+
+  moveAreaWithContent(id: string, ids: string[], dx: number, dy: number) {
+    if (dx || dy) this.commit({ type: 'move-area-content', id, ids, dx, dy });
   }
 
   /** New live-ink layer holding the given stroke (one undoable op). */

@@ -35,6 +35,12 @@ export function moveHandleRect(x: number, y: number, zoom: number) {
   return { x: x - s - 4 / zoom, y: y - s - 4 / zoom, s };
 }
 
+/** Second grabber on anim areas: moves the frame WITH its content. Below the move handle. */
+export function moveAllHandleRect(x: number, y: number, zoom: number) {
+  const s = 22 / zoom;
+  return { x: x - s - 4 / zoom, y: y + 2 / zoom, s };
+}
+
 /** Delete-handle box at a box's top-right corner, away from the move handle. */
 export function deleteHandleRect(x: number, y: number, w: number, zoom: number) {
   const s = 22 / zoom;
@@ -112,8 +118,10 @@ export function attachInput(
   let textDragStart = { x: 0, y: 0 };
   // area move/resize via the same handle set as textboxes
   let resizeArea: AnimArea | null = null;
-  let resizeAreaMode: 'move' | 'w-left' | 'w-right' | 'h-bottom' | 'corner' = 'move';
+  let resizeAreaMode: 'move' | 'move-all' | 'w-left' | 'w-right' | 'h-bottom' | 'corner' = 'move';
   let resizeAreaStart = { x: 0, y: 0, w: 0, h: 0, wx: 0, wy: 0 };
+  let moveAllIds: string[] = [];
+  let moveAllApplied = { x: 0, y: 0 };
   // textbox resize/scale (Excalidraw-style handles on a hovered/selected textbox)
   let resizeText: TextBox | null = null;
   let resizeMode: 'width' | 'width-left' | 'height' | 'scale' = 'width';
@@ -261,8 +269,10 @@ export function attachInput(
         return;
       }
       const mh = moveHandleRect(a.x, a.y, z);
+      const mha = moveAllHandleRect(a.x, a.y, z);
       let mode: typeof resizeAreaMode | null = null;
       if (inRect(w, mh)) mode = 'move';
+      else if (inRect(w, mha)) mode = 'move-all';
       else if (Math.hypot(w.x - (a.x + a.w), w.y - (a.y + a.h)) < r) mode = 'corner';
       else if (Math.abs(w.y - (a.y + a.h)) < r && Math.abs(w.x - (a.x + a.w / 2)) < r) mode = 'h-bottom';
       else if (Math.abs(w.x - (a.x + a.w)) < r && Math.abs(w.y - (a.y + a.h / 2)) < r) mode = 'w-right';
@@ -271,6 +281,10 @@ export function attachInput(
         resizeArea = a;
         resizeAreaMode = mode;
         resizeAreaStart = { x: a.x, y: a.y, w: a.w, h: a.h, wx: w.x, wy: w.y };
+        if (mode === 'move-all') {
+          moveAllIds = store.areaContentIds(a.id);
+          moveAllApplied = { x: 0, y: 0 };
+        }
         return;
       }
     }
@@ -496,6 +510,20 @@ export function attachInput(
           a.x = resizeAreaStart.x + dx;
           a.y = resizeAreaStart.y + dy;
           break;
+        case 'move-all': {
+          a.x = resizeAreaStart.x + dx;
+          a.y = resizeAreaStart.y + dy;
+          const stepX = dx - moveAllApplied.x;
+          const stepY = dy - moveAllApplied.y;
+          moveAllApplied = { x: dx, y: dy };
+          const idSet = new Set(moveAllIds);
+          for (const el of store.doc.elements) {
+            if (!idSet.has(el.id)) continue;
+            translateElement(el, stepX, stepY);
+            dropCache(el.id);
+          }
+          break;
+        }
         case 'w-right':
           a.w = Math.max(MIN, resizeAreaStart.w + dx);
           break;
@@ -662,10 +690,21 @@ export function attachInput(
       const a = resizeArea;
       resizeArea = null;
       const st = resizeAreaStart;
-      if (resizeAreaMode === 'move') {
+      if (resizeAreaMode === 'move' || resizeAreaMode === 'move-all') {
         const dx = a.x - st.x, dy = a.y - st.y;
         a.x = st.x; a.y = st.y;
-        store.moveArea(a.id, dx, dy);
+        if (resizeAreaMode === 'move-all') {
+          const idSet = new Set(moveAllIds);
+          for (const el of store.doc.elements) {
+            if (!idSet.has(el.id)) continue;
+            translateElement(el, -dx, -dy);
+            dropCache(el.id);
+          }
+          store.moveAreaWithContent(a.id, moveAllIds, dx, dy);
+          moveAllIds = [];
+        } else {
+          store.moveArea(a.id, dx, dy);
+        }
       } else {
         const after = { x: a.x, y: a.y, w: a.w, h: a.h };
         a.x = st.x; a.y = st.y; a.w = st.w; a.h = st.h;
@@ -813,16 +852,17 @@ export function attachInput(
           const mh = moveHandleRect(a.x, a.y, z);
           const nearLabel = w.x >= a.x && w.x <= a.x + 160 / z && w.y >= a.y - 26 / z && w.y <= a.y;
           const inMove = w.x >= mh.x && w.x <= mh.x + mh.s && w.y >= mh.y && w.y <= mh.y + mh.s;
+          const inMoveAll = inRect(w, moveAllHandleRect(a.x, a.y, z));
           const inDel = inRect(w, deleteHandleRect(a.x, a.y, a.w, z));
           const nearEdge =
             (Math.abs(w.x - a.x) < r || Math.abs(w.x - (a.x + a.w)) < r) &&
               w.y > a.y - r && w.y < a.y + a.h + r ||
             (Math.abs(w.y - a.y) < r || Math.abs(w.y - (a.y + a.h)) < r) &&
               w.x > a.x - r && w.x < a.x + a.w + r;
-          if (nearLabel || inMove || inDel || nearEdge || state.activeAreaId === a.id) {
-            if (nearLabel || inMove || inDel || nearEdge) hoverArea = a.id;
+          if (nearLabel || inMove || inMoveAll || inDel || nearEdge || state.activeAreaId === a.id) {
+            if (nearLabel || inMove || inMoveAll || inDel || nearEdge) hoverArea = a.id;
             if (hoverArea || state.activeAreaId === a.id) {
-              if (inMove) cursor = 'grab';
+              if (inMove || inMoveAll) cursor = 'grab';
               else if (inDel) cursor = 'pointer';
               else if (Math.hypot(w.x - (a.x + a.w), w.y - (a.y + a.h)) < r) cursor = 'nwse-resize';
               else if (Math.abs(w.y - (a.y + a.h)) < r && Math.abs(w.x - (a.x + a.w / 2)) < r) cursor = 'ns-resize';

@@ -5,7 +5,7 @@ import { Camera } from './camera';
 import { Element, FillShape, Page, Stroke, StrokePoint } from './types';
 import { strokeOutline, outlineToPath, elementBBox, bboxIntersects, BBox } from './geometry';
 import { layoutText, fontFor, segWidth, LINE_HEIGHT } from './text';
-import { moveHandleRect, deleteHandleRect, type InputState } from './input';
+import { moveHandleRect, moveAllHandleRect, deleteHandleRect, type InputState } from './input';
 import { Store } from './store';
 
 interface CacheEntry { path: Path2D; bbox: BBox }
@@ -404,6 +404,18 @@ export class Renderer {
         ctx.fillText(`${area.name} · ${area.fps}fps`, area.x + 2 / z, area.y - 6 / z);
         if (active || area.id === this.input.hoverArea) {
           this.drawBoxHandles(area.x, area.y, area.w, area.h, z);
+          // second grabber: move frame WITH content (filled box + cross)
+          const ma = moveAllHandleRect(area.x, area.y, z);
+          ctx.fillStyle = '#2A241A';
+          ctx.fillRect(ma.x, ma.y, ma.s, ma.s);
+          ctx.strokeStyle = '#FDFCF8';
+          ctx.lineWidth = 1.6 / z;
+          ctx.beginPath();
+          ctx.moveTo(ma.x + ma.s * 0.5, ma.y + ma.s * 0.18);
+          ctx.lineTo(ma.x + ma.s * 0.5, ma.y + ma.s * 0.82);
+          ctx.moveTo(ma.x + ma.s * 0.18, ma.y + ma.s * 0.5);
+          ctx.lineTo(ma.x + ma.s * 0.82, ma.y + ma.s * 0.5);
+          ctx.stroke();
         }
       }
       const ar = this.input.areaRect;
