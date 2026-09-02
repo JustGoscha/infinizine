@@ -34,6 +34,16 @@ export function moveHandleRect(x: number, y: number, zoom: number) {
   return { x: x - s - 4 / zoom, y: y - s - 4 / zoom, s };
 }
 
+/** Delete-handle box at a box's top-right corner, away from the move handle. */
+export function deleteHandleRect(x: number, y: number, w: number, zoom: number) {
+  const s = 22 / zoom;
+  return { x: x + w + 4 / zoom, y: y - s - 4 / zoom, s };
+}
+
+function inRect(w: { x: number; y: number }, r: { x: number; y: number; s: number }): boolean {
+  return w.x >= r.x && w.x <= r.x + r.s && w.y >= r.y && w.y <= r.y + r.s;
+}
+
 /** Move-handle box at a textbox's top-left corner (world coords). */
 export function textHandleRect(el: TextBox, zoom: number) {
   return moveHandleRect(el.x, el.y, zoom);
@@ -60,6 +70,8 @@ export class InputState {
   textRect: { x: number; y: number; w: number; h: number } | null = null; // rect being drawn with the text tool
   hoverText: string | null = null; // textbox under the mouse (shows its move handle)
   hoverArea: string | null = null; // anim area under the mouse (shows its handles)
+  lastDrawTool: Tool = 'pen'; // remembered so e.g. area creation can bounce back to it
+  onAnimClose: () => void = () => {};
   toolCursor = 'crosshair'; // css cursor for the current tool (set by the UI)
   updateCursor: () => void = () => {};
   marquee: { x: number; y: number; w: number; h: number } | null = null; // cursor-tool rect select
@@ -200,8 +212,14 @@ export function attachInput(
       if (el.kind !== 'text') continue;
       if (state.hoverText !== el.id && !state.selection.has(el.id)) continue;
       const z = camera.zoom;
+      if (inRect(w, deleteHandleRect(el.x, el.y, el.w, z))) {
+        state.selection.delete(el.id);
+        if (state.hoverText === el.id) state.hoverText = null;
+        store.deleteElements([el]);
+        return;
+      }
       const hr = textHandleRect(el, z);
-      if (w.x >= hr.x && w.x <= hr.x + hr.s && w.y >= hr.y && w.y <= hr.y + hr.s) {
+      if (inRect(w, hr)) {
         state.selection = new Set([el.id]);
         dragSelection = true;
         dragStartWorld = w;
@@ -228,9 +246,16 @@ export function attachInput(
       if (state.hoverArea !== a.id && state.activeAreaId !== a.id) continue;
       const z = camera.zoom;
       const r = 12 / z;
+      if (inRect(w, deleteHandleRect(a.x, a.y, a.w, z))) {
+        const wasActive = state.activeAreaId === a.id;
+        if (state.hoverArea === a.id) state.hoverArea = null;
+        store.deleteArea(a);
+        if (wasActive) state.onAnimClose();
+        return;
+      }
       const mh = moveHandleRect(a.x, a.y, z);
       let mode: typeof resizeAreaMode | null = null;
-      if (w.x >= mh.x && w.x <= mh.x + mh.s && w.y >= mh.y && w.y <= mh.y + mh.s) mode = 'move';
+      if (inRect(w, mh)) mode = 'move';
       else if (Math.hypot(w.x - (a.x + a.w), w.y - (a.y + a.h)) < r) mode = 'corner';
       else if (Math.abs(w.y - (a.y + a.h)) < r && Math.abs(w.x - (a.x + a.w / 2)) < r) mode = 'h-bottom';
       else if (Math.abs(w.x - (a.x + a.w)) < r && Math.abs(w.y - (a.y + a.h / 2)) < r) mode = 'w-right';
@@ -293,6 +318,13 @@ export function attachInput(
         return;
       case 'cursor':
       case 'lasso-select': {
+        // Clicking outside the active anim area deselects it (closes the timeline)
+        if (state.activeAreaId) {
+          const a = store.doc.areas.find((x) => x.id === state.activeAreaId);
+          if (a && (w.x < a.x || w.x > a.x + a.w || w.y < a.y || w.y > a.y + a.h)) {
+            state.onAnimClose();
+          }
+        }
         // Tap directly on a textbox selects it
         const tapped = [...store.doc.elements].reverse().find(
           (el) => el.kind === 'text' && frameEditable(el, state) && hitElement(el, w.x, w.y, 4 / camera.zoom),
@@ -625,6 +657,8 @@ export function attachInput(
       if (r.w < 20 || r.h < 20) r = { x: textDragStart.x, y: textDragStart.y, w: 300, h: 300 };
       const area = store.addArea(r);
       state.onAnimOpen(area);
+      state.tool = state.lastDrawTool;
+      state.onToolChange();
       invalidate();
       return;
     }
@@ -707,10 +741,12 @@ export function attachInput(
         if (el.kind !== 'text' || !frameEditable(el, state)) continue;
         const hr = textHandleRect(el, z);
         const inHandle = w.x >= hr.x && w.x <= hr.x + hr.s && w.y >= hr.y && w.y <= hr.y + hr.s;
+        const inDel = inRect(w, deleteHandleRect(el.x, el.y, el.w, z));
         const inBox = w.x >= el.x && w.x <= el.x + el.w && w.y >= el.y && w.y <= el.y + el.h;
-        if (inHandle || inBox) {
+        if (inHandle || inBox || inDel) {
           hover = el.id;
           if (inHandle) cursor = 'grab';
+          if (inDel) cursor = 'pointer';
           const r = 12 / z;
           if (Math.hypot(w.x - (el.x + el.w), w.y - (el.y + el.h)) < r) cursor = 'nwse-resize';
           else if (Math.abs(w.y - (el.y + el.h)) < r && Math.abs(w.x - (el.x + el.w / 2)) < r) cursor = 'ns-resize';
@@ -727,15 +763,17 @@ export function attachInput(
           const mh = moveHandleRect(a.x, a.y, z);
           const nearLabel = w.x >= a.x && w.x <= a.x + 160 / z && w.y >= a.y - 26 / z && w.y <= a.y;
           const inMove = w.x >= mh.x && w.x <= mh.x + mh.s && w.y >= mh.y && w.y <= mh.y + mh.s;
+          const inDel = inRect(w, deleteHandleRect(a.x, a.y, a.w, z));
           const nearEdge =
             (Math.abs(w.x - a.x) < r || Math.abs(w.x - (a.x + a.w)) < r) &&
               w.y > a.y - r && w.y < a.y + a.h + r ||
             (Math.abs(w.y - a.y) < r || Math.abs(w.y - (a.y + a.h)) < r) &&
               w.x > a.x - r && w.x < a.x + a.w + r;
-          if (nearLabel || inMove || nearEdge || state.activeAreaId === a.id) {
-            if (nearLabel || inMove || nearEdge) hoverArea = a.id;
+          if (nearLabel || inMove || inDel || nearEdge || state.activeAreaId === a.id) {
+            if (nearLabel || inMove || inDel || nearEdge) hoverArea = a.id;
             if (hoverArea || state.activeAreaId === a.id) {
               if (inMove) cursor = 'grab';
+              else if (inDel) cursor = 'pointer';
               else if (Math.hypot(w.x - (a.x + a.w), w.y - (a.y + a.h)) < r) cursor = 'nwse-resize';
               else if (Math.abs(w.y - (a.y + a.h)) < r && Math.abs(w.x - (a.x + a.w / 2)) < r) cursor = 'ns-resize';
               else if (Math.abs(w.y - (a.y + a.h / 2)) < r &&
@@ -853,7 +891,14 @@ export function attachInput(
 
   window.addEventListener('keydown', (e) => {
     const tag = (e.target as HTMLElement).tagName;
-    if (tag === 'INPUT' || tag === 'TEXTAREA') return; // typing, not shortcuts
+    if (tag === 'INPUT' || tag === 'TEXTAREA' || (e.target as HTMLElement).isContentEditable) return;
+    if ((e.key === 'Delete' || e.key === 'Backspace') && state.selection.size) {
+      e.preventDefault();
+      const els = store.doc.elements.filter((el) => state.selection.has(el.id));
+      state.selection.clear();
+      store.deleteElements(els);
+      return;
+    }
     const mod = e.metaKey || e.ctrlKey;
     if (mod && e.key === 'z') {
       e.preventDefault();

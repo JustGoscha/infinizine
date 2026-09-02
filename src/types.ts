@@ -23,7 +23,8 @@ export interface AnimFrame {
 export interface AnimLayer {
   id: string;
   name: string;
-  frames: AnimFrame[]; // each layer has its own independent timeline
+  hidden?: boolean; // hidden layers don't render (eye toggle)
+  frames: AnimFrame[]; // each layer has its own frame track
 }
 
 export interface AnimArea {

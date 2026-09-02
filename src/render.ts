@@ -5,7 +5,7 @@ import { Camera } from './camera';
 import { Element, FillShape, Page, Stroke } from './types';
 import { strokeOutline, outlineToPath, elementBBox, bboxIntersects, BBox } from './geometry';
 import { layoutText, fontFor, segWidth, LINE_HEIGHT } from './text';
-import { textHandleRect, moveHandleRect, type InputState } from './input';
+import { moveHandleRect, deleteHandleRect, type InputState } from './input';
 import { Store } from './store';
 
 interface CacheEntry { path: Path2D; bbox: BBox }
@@ -112,57 +112,10 @@ export class Renderer {
           }
           ty += line.size * LINE_HEIGHT;
         }
-        // Move handle (top-left icon box) on hover or selection
         if ((this.input.hoverText === el.id || selected.has(el.id)) && !this.input.presenting) {
-          const hr = textHandleRect(el, z);
-          ctx.fillStyle = '#FDFCF8';
-          ctx.strokeStyle = 'rgba(90,75,50,0.5)';
-          ctx.lineWidth = 1.2 / z;
-          ctx.fillRect(hr.x, hr.y, hr.s, hr.s);
-          ctx.strokeRect(hr.x, hr.y, hr.s, hr.s);
-          // move cross
-          ctx.strokeStyle = '#2A241A';
-          ctx.beginPath();
-          ctx.moveTo(hr.x + hr.s * 0.5, hr.y + hr.s * 0.18);
-          ctx.lineTo(hr.x + hr.s * 0.5, hr.y + hr.s * 0.82);
-          ctx.moveTo(hr.x + hr.s * 0.18, hr.y + hr.s * 0.5);
-          ctx.lineTo(hr.x + hr.s * 0.82, hr.y + hr.s * 0.5);
-          ctx.stroke();
-          // resize handles: edges = width, bottom = height, corner = scale — with arrow icons
-          const hs = 13 / z;
-          const arrow = (cx: number, cy: number, dx: number, dy: number) => {
-            const L = hs * 0.3;
-            const ax = dx * L, ay = dy * L;
-            const px = -dy, py = dx;
-            const a = hs * 0.13;
-            ctx.beginPath();
-            ctx.moveTo(cx - ax, cy - ay);
-            ctx.lineTo(cx + ax, cy + ay);
-            ctx.moveTo(cx + ax - dx * a + px * a, cy + ay - dy * a + py * a);
-            ctx.lineTo(cx + ax, cy + ay);
-            ctx.lineTo(cx + ax - dx * a - px * a, cy + ay - dy * a - py * a);
-            ctx.moveTo(cx - ax + dx * a + px * a, cy - ay + dy * a + py * a);
-            ctx.lineTo(cx - ax, cy - ay);
-            ctx.lineTo(cx - ax + dx * a - px * a, cy - ay + dy * a - py * a);
-            ctx.stroke();
-          };
-          const D = Math.SQRT1_2;
-          const handles: [number, number, number, number][] = [
-            [el.x, el.y + el.h / 2, 1, 0],
-            [el.x + el.w, el.y + el.h / 2, 1, 0],
-            [el.x + el.w / 2, el.y + el.h, 0, 1],
-            [el.x + el.w, el.y + el.h, D, D],
-          ];
-          for (const [hx, hy, dx, dy] of handles) {
-            ctx.fillStyle = '#FDFCF8';
-            ctx.strokeStyle = 'rgba(90,75,50,0.5)';
-            ctx.fillRect(hx - hs / 2, hy - hs / 2, hs, hs);
-            ctx.strokeRect(hx - hs / 2, hy - hs / 2, hs, hs);
-            ctx.strokeStyle = '#2A241A';
-            arrow(hx, hy, dx, dy);
-          }
+          this.drawBoxHandles(el.x, el.y, el.w, el.h, z);
         }
-        if (selected.has(el.id)) {
+        if (selected.has(el.id) && !presenting) {
           ctx.strokeStyle = '#E8590C';
           ctx.lineWidth = 1.5 / z;
           ctx.strokeRect(el.x - 2, el.y - 2, el.w + 4, el.h + 4);
@@ -174,7 +127,7 @@ export class Renderer {
       ctx.globalAlpha = el.opacity * dimFactor;
       ctx.fillStyle = el.color;
       ctx.fill(e.path);
-      if (selected.has(el.id)) {
+      if (selected.has(el.id) && !presenting) {
         ctx.globalAlpha = 0.9;
         ctx.strokeStyle = '#E8590C';
         ctx.lineWidth = 1.5 / z;
@@ -209,7 +162,10 @@ export class Renderer {
     for (const area of this.store.doc.areas) {
       const editing =
         area.id === this.input.activeAreaId && !this.input.playingAreas && !this.input.presenting;
-      const playTick = Math.floor((now - this.input.playEpoch) * area.fps);
+      // layers don't loop independently: the area loops as one, over its longest track
+      const areaTotal = Math.max(1, ...area.layers.map((l) => l.frames.reduce((a, f) => a + f.duration, 0)));
+      let playTick = Math.floor((now - this.input.playEpoch) * area.fps);
+      playTick = area.loop ? ((playTick % areaTotal) + areaTotal) % areaTotal : Math.min(playTick, areaTotal - 1);
 
       // tick position of the active frame's start (for holding other layers in edit mode)
       let editTick = 0;
@@ -234,20 +190,23 @@ export class Renderer {
         if (editing && l.id === activeLayerId) {
           visId = this.input.activeFrameId;
           if (this.input.onionSkin && visId) {
-            // 3 back in red, 3 forward in green, fading with distance
+            // 3 back in red, 3 forward in green, fading with distance;
+            // when looping, "forward" wraps around to the first frames
             const idx = l.frames.findIndex((f) => f.id === visId);
+            const len = l.frames.length;
             const alphas = [0.35, 0.18, 0.08];
             for (let k = 1; k <= 3; k++) {
               if (idx - k >= 0) onionFrames.set(l.frames[idx - k].id, { alpha: alphas[k - 1], color: '#D6336C' });
-              if (idx + k < l.frames.length) {
-                onionFrames.set(l.frames[idx + k].id, { alpha: alphas[k - 1] * 0.85, color: '#2F9E44' });
+              const nextIdx = area.loop ? (idx + k) % len : idx + k;
+              if (nextIdx !== idx && nextIdx < len && !onionFrames.has(l.frames[nextIdx].id)) {
+                onionFrames.set(l.frames[nextIdx].id, { alpha: alphas[k - 1] * 0.85, color: '#2F9E44' });
               }
             }
           }
         } else if (editing) {
-          visId = frameAtTick(l.frames, editTick, true);
+          visId = frameAtTick(l.frames, editTick, false);
         } else {
-          visId = frameAtTick(l.frames, playTick, area.loop);
+          visId = frameAtTick(l.frames, playTick, false);
         }
         for (const f of l.frames) frameVis.set(f.id, f.id === visId);
       }
@@ -271,6 +230,7 @@ export class Renderer {
         ctx.clip(cp);
       }
       for (const layer of area.layers) {
+        if (layer.hidden) continue;
         const fids = new Set(layer.frames.map((f) => f.id));
         for (const [fid, onion] of onionFrames) {
           if (!fids.has(fid)) continue;
@@ -443,6 +403,18 @@ export class Renderer {
       ctx.strokeStyle = '#2A241A';
       arrow(hx, hy, dx, dy);
     }
+    // delete handle: top-right, away from the move handle
+    const dh = deleteHandleRect(x, y, w, z);
+    ctx.fillStyle = '#FDFCF8';
+    ctx.strokeStyle = '#D6336C';
+    ctx.fillRect(dh.x, dh.y, dh.s, dh.s);
+    ctx.strokeRect(dh.x, dh.y, dh.s, dh.s);
+    ctx.beginPath();
+    ctx.moveTo(dh.x + dh.s * 0.3, dh.y + dh.s * 0.3);
+    ctx.lineTo(dh.x + dh.s * 0.7, dh.y + dh.s * 0.7);
+    ctx.moveTo(dh.x + dh.s * 0.7, dh.y + dh.s * 0.3);
+    ctx.lineTo(dh.x + dh.s * 0.3, dh.y + dh.s * 0.7);
+    ctx.stroke();
   }
 
   private drawPattern(vw: number, vh: number, paper: string) {

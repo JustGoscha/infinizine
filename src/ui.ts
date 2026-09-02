@@ -281,6 +281,17 @@ export function buildUI(
     palRow.querySelectorAll('.pal-wrap.open').forEach((w) => w.classList.remove('open'));
   }
 
+  /** Picking a color while textboxes are selected recolors them. */
+  function applyColor(c: string) {
+    state.color = c;
+    const textIds = store.doc.elements
+      .filter((el) => el.kind === 'text' && state.selection.has(el.id))
+      .map((el) => el.id);
+    if (textIds.length) store.recolorElements(textIds, c);
+    refresh();
+    invalidate();
+  }
+
   // Inline palette: 5–6 dots; shades appear on hover (desktop) or long-press (touch)
   function buildPalRow() {
     palRow.innerHTML = '';
@@ -296,9 +307,8 @@ export function buildUI(
         s.style.background = c;
         s.addEventListener('click', (e) => {
           e.stopPropagation();
-          state.color = c;
           closeFlyouts();
-          refresh();
+          applyColor(c);
         });
         fly.appendChild(s);
       }
@@ -310,9 +320,8 @@ export function buildUI(
       let longPressed = false;
       dot.addEventListener('click', () => {
         if (longPressed) { longPressed = false; return; }
-        state.color = hue;
         closeFlyouts();
-        refresh();
+        applyColor(hue);
       });
       dot.addEventListener('pointerdown', (e) => {
         if (e.pointerType === 'mouse') return;
@@ -388,8 +397,7 @@ export function buildUI(
       }),
     );
     (palettePop.querySelector('#custom-color') as HTMLInputElement).addEventListener('input', (e) => {
-      state.color = (e.target as HTMLInputElement).value;
-      refresh();
+      applyColor((e.target as HTMLInputElement).value);
     });
   }
 
@@ -680,6 +688,7 @@ export function buildUI(
     invalidate();
   }
 
+  state.onAnimClose = closeTimeline;
   state.onAnimOpen = (area) => {
     tlAreaId = area.id;
     state.activeAreaId = area.id;
@@ -778,8 +787,13 @@ export function buildUI(
       row.className = `tl-track${l.id === lid ? ' active' : ''}`;
 
       const head = document.createElement('div');
-      head.className = 'tl-track-head';
+      head.className = `tl-track-head${l.hidden ? ' layer-hidden' : ''}`;
       head.innerHTML = `<span class="tl-lname">${l.name}</span>
+        <button data-a="eye" title="${l.hidden ? 'Show layer' : 'Hide layer'}">${
+          l.hidden
+            ? svg('<path d="M4 5 L20 19"/><path d="M3 12 C6 7 9 5.5 12 5.5 C15 5.5 18 7 21 12 C19.5 14.5 17.8 16.2 16 17.2 M9.5 17.9 C7.2 17.1 5 15.2 3 12"/>')
+            : svg('<path d="M3 12 C6 6.8 9 5 12 5 C15 5 18 6.8 21 12 C18 17.2 15 19 12 19 C9 19 6 17.2 3 12 Z"/><circle cx="12" cy="12" r="3"/>')
+        }</button>
         <button data-a="up" title="Layer up">↑</button>
         <button data-a="down" title="Layer down">↓</button>
         <button data-a="del" title="Delete layer">✕</button>`;
@@ -788,8 +802,9 @@ export function buildUI(
         inlineRename(e.target as HTMLElement, l.name, (v) => store.renameAnimLayer(area.id, l.id, v));
       });
       head.addEventListener('click', (e) => {
-        const a = (e.target as HTMLElement).dataset?.a;
-        if (a === 'up') store.moveAnimLayer(area.id, idx, idx + 1);
+        const a = (e.target as HTMLElement).closest('button')?.dataset?.a;
+        if (a === 'eye') store.setLayerHidden(area.id, l.id, !l.hidden);
+        else if (a === 'up') store.moveAnimLayer(area.id, idx, idx + 1);
         else if (a === 'down') store.moveAnimLayer(area.id, idx, idx - 1);
         else if (a === 'del') store.deleteAnimLayer(area.id, l.id);
         else {
@@ -807,12 +822,37 @@ export function buildUI(
         b.className = `tl-frame${f.id === state.activeFrameId ? ' active' : ''}${filledFrames.has(f.id) ? ' filled' : ''}`;
         b.style.width = `${30 + (f.duration - 1) * 30}px`;
         b.textContent = String(i + 1);
-        b.title = `${l.name} · frame ${i + 1} · ${f.duration}f`;
-        b.addEventListener('click', () => {
-          state.activeLayerId = l.id;
-          state.activeFrameId = f.id;
-          renderTimeline();
-          invalidate();
+        b.title = `${l.name} · frame ${i + 1} · ${f.duration}f (drag to reorder)`;
+        // tap selects; horizontal drag reorders within the layer
+        b.addEventListener('pointerdown', (e) => {
+          b.setPointerCapture(e.pointerId);
+          const startX = e.clientX;
+          let dragging = false;
+          const onMove = (ev: PointerEvent) => {
+            if (!dragging && Math.abs(ev.clientX - startX) > 8) {
+              dragging = true;
+              b.classList.add('dragging');
+            }
+          };
+          const onUp = (ev: PointerEvent) => {
+            b.removeEventListener('pointermove', onMove);
+            b.removeEventListener('pointerup', onUp);
+            b.classList.remove('dragging');
+            state.activeLayerId = l.id;
+            state.activeFrameId = f.id;
+            if (dragging) {
+              const others = [...strip.querySelectorAll('.tl-frame')].filter((c) => c !== b);
+              const to = others.filter((c) => {
+                const r = (c as HTMLElement).getBoundingClientRect();
+                return r.left + r.width / 2 < ev.clientX;
+              }).length;
+              store.moveFrame(area.id, l.id, i, to);
+            }
+            renderTimeline();
+            invalidate();
+          };
+          b.addEventListener('pointermove', onMove);
+          b.addEventListener('pointerup', onUp);
         });
         strip.appendChild(b);
       });
@@ -857,7 +897,8 @@ export function buildUI(
     q('#tl-close').addEventListener('click', closeTimeline);
     q('#tl-add').addEventListener('click', () => {
       const idx = activeLayer.frames.findIndex((f) => f.id === fid);
-      const nf = store.addFrame(area.id, lid, idx + 1);
+      const cur = activeLayer.frames[idx];
+      const nf = store.addFrame(area.id, lid, idx + 1, cur?.duration ?? 1);
       state.activeFrameId = nf.id;
       renderTimeline();
       invalidate();
@@ -1069,7 +1110,9 @@ export function buildUI(
     refresh();
   });
 
+  const DRAW_TOOLS: Tool[] = ['pen', 'fineliner', 'marker', 'lasso-fill'];
   function refresh() {
+    if (DRAW_TOOLS.includes(state.tool)) state.lastDrawTool = state.tool;
     state.updateCursor();
     for (const g of TOOL_GROUPS) {
       const activeInGroup = g.tools.includes(state.tool);

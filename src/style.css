@@ -9,7 +9,10 @@
   --ink-soft: rgba(42, 36, 26, 0.55);
   --accent: #e8590c;
   --line: rgba(90, 75, 50, 0.18);
-  --shadow: 0 10px 30px rgba(80, 62, 30, 0.22), 0 2px 6px rgba(80, 62, 30, 0.14);
+  /* comic-brutalist chrome: hard ink borders, hard offset shadows, glassy panels */
+  --panel: rgba(253, 252, 248, 0.8);
+  --panel-border: 2px solid #2a241a;
+  --shadow: 3px 3px 0 rgba(42, 36, 26, 0.25);
 }
 
 * { margin: 0; padding: 0; box-sizing: border-box; }
@@ -84,19 +87,19 @@ html, body {
 .top-actions { display: flex; gap: 8px; pointer-events: auto; }
 
 .chip {
-  border: 1.5px solid var(--line);
-  background: var(--card);
-  border-radius: 999px;
+  border: var(--panel-border);
+  background: var(--panel);
+  border-radius: 3px;
   min-width: 40px;
   height: 40px;
   padding: 0 10px;
   font-size: 17px;
   color: var(--ink);
   cursor: pointer;
-  box-shadow: 0 2px 5px rgba(80, 62, 30, 0.12);
+  box-shadow: var(--shadow);
   transition: transform 0.08s ease;
 }
-.chip:active { transform: scale(0.92); }
+.chip:active { transform: translate(2px, 2px); box-shadow: none; }
 
 /* ---------- floating toolbar ---------- */
 .toolbar {
@@ -108,9 +111,9 @@ html, body {
   align-items: center;
   gap: 6px;
   padding: 8px 12px;
-  background: var(--card);
-  border: 1.5px solid var(--line);
-  border-radius: 22px;
+  background: var(--panel);
+  border: var(--panel-border);
+  border-radius: 4px;
   box-shadow: var(--shadow);
   z-index: 10;
   max-width: calc(100vw - 20px);
@@ -125,7 +128,7 @@ html, body {
   height: 44px;
   border: none;
   background: transparent;
-  border-radius: 14px;
+  border-radius: 3px;
   font-size: 21px;
   cursor: pointer;
   transition: transform 0.1s ease, background 0.15s ease;
@@ -137,7 +140,7 @@ html, body {
   background: var(--ink);
   color: var(--card);
   transform: translateY(-6px);
-  box-shadow: 0 6px 12px rgba(42, 36, 26, 0.3);
+  box-shadow: 2px 4px 0 rgba(42, 36, 26, 0.3);
 }
 .tool { color: var(--ink); }
 .tool-icon { display: grid; place-items: center; }
@@ -163,9 +166,9 @@ html, body {
   display: none;
   flex-direction: column;
   gap: 2px;
-  background: var(--card);
-  border: 1.5px solid var(--line);
-  border-radius: 16px;
+  background: var(--panel);
+  border: var(--panel-border);
+  border-radius: 3px;
   padding: 6px;
   box-shadow: var(--shadow);
   z-index: 30;
@@ -192,7 +195,7 @@ html, body {
   height: 44px;
   border: none;
   background: transparent;
-  border-radius: 12px;
+  border-radius: 2px;
   cursor: pointer;
   display: grid;
   place-items: center;
@@ -222,9 +225,9 @@ html, body {
   display: none;
   flex-direction: column;
   gap: 7px;
-  background: var(--card);
-  border: 1.5px solid var(--line);
-  border-radius: 999px;
+  background: var(--panel);
+  border: var(--panel-border);
+  border-radius: 3px;
   padding: 8px 6px;
   box-shadow: var(--shadow);
   z-index: 30;
@@ -266,7 +269,7 @@ html, body {
 .add-page {
   width: 44px;
   height: 44px;
-  border-radius: 14px;
+  border-radius: 3px;
   border: none;
   background: transparent;
   color: var(--ink);
@@ -283,9 +286,9 @@ html, body {
   z-index: 16;
   display: flex;
   gap: 2px;
-  background: var(--card);
-  border: 1.5px solid var(--line);
-  border-radius: 12px;
+  background: var(--panel);
+  border: var(--panel-border);
+  border-radius: 3px;
   padding: 4px;
   box-shadow: var(--shadow);
 }
@@ -295,7 +298,7 @@ html, body {
   font-size: 15px;
   color: var(--ink);
   padding: 5px 10px;
-  border-radius: 8px;
+  border-radius: 2px;
   cursor: pointer;
   white-space: nowrap;
 }
@@ -342,9 +345,9 @@ html, body {
   bottom: 96px;
   width: 520px;
   max-width: calc(100vw - 24px);
-  background: var(--card);
-  border: 1.5px solid var(--line);
-  border-radius: 16px;
+  background: var(--panel);
+  border: var(--panel-border);
+  border-radius: 4px;
   box-shadow: var(--shadow);
   padding: 14px;
   z-index: 22;
@@ -400,7 +403,7 @@ html, body {
   color: var(--ink);
   font-size: 14px;
   cursor: pointer;
-  border-radius: 8px;
+  border-radius: 2px;
   padding: 4px 6px;
 }
 .tl-head button:active { background: var(--ink); color: var(--card); }
@@ -474,6 +477,9 @@ html, body {
 .tl-frame.filled { color: var(--ink); }
 .tl-frame.active.filled::after { background: #fff; }
 .tl-frame.active.filled { color: #fff; }
+.tl-frame.dragging { opacity: 0.4; }
+.tl-track-head.layer-hidden .tl-lname { opacity: 0.35; text-decoration: line-through; }
+.tl-track-head button svg { width: 15px; height: 15px; vertical-align: -3px; }
 
 .tl-ops { display: flex; align-items: center; gap: 2px; margin-bottom: 6px; }
 .tl-ops button {
@@ -482,7 +488,7 @@ html, body {
   color: var(--ink);
   width: 30px;
   height: 26px;
-  border-radius: 8px;
+  border-radius: 2px;
   cursor: pointer;
   font-size: 13px;
 }
@@ -497,7 +503,7 @@ html, body {
   gap: 4px;
   padding: 4px 8px;
   border: 1.5px solid var(--line);
-  border-radius: 8px;
+  border-radius: 2px;
   cursor: pointer;
 }
 .tl-layer.active { border-color: #7048e8; box-shadow: 0 0 0 1px #7048e8; }
@@ -509,13 +515,17 @@ html, body {
   cursor: pointer;
   font-size: 12px;
   padding: 2px 4px;
-  border-radius: 6px;
+  border-radius: 2px;
 }
 .tl-layer button:active { background: var(--ink); color: var(--card); }
 
 /* ---------- presentation mode ---------- */
 body.presenting .toolbar,
-body.presenting .topbar { display: none; }
+body.presenting .topbar,
+body.presenting .timeline,
+body.presenting .page-menu,
+body.presenting .font-bar,
+body.presenting .popover { display: none; }
 
 /* Overlay lets gestures (pan/pinch/wheel) through to the canvas; only the bar is interactive */
 .present-ui { position: fixed; inset: 0; z-index: 40; pointer-events: none; }
@@ -531,9 +541,9 @@ body.presenting .topbar { display: none; }
   display: flex;
   align-items: center;
   gap: 10px;
-  background: var(--card);
-  border: 1.5px solid var(--line);
-  border-radius: 999px;
+  background: var(--panel);
+  border: var(--panel-border);
+  border-radius: 3px;
   padding: 6px 10px;
   box-shadow: var(--shadow);
 }
@@ -558,9 +568,9 @@ body.presenting .topbar { display: none; }
   bottom: 92px;
   left: 50%;
   transform: translateX(-50%);
-  background: var(--card);
-  border: 1.5px solid var(--line);
-  border-radius: 18px;
+  background: var(--panel);
+  border: var(--panel-border);
+  border-radius: 4px;
   box-shadow: var(--shadow);
   padding: 14px;
   z-index: 20;
@@ -598,7 +608,7 @@ body.presenting .topbar { display: none; }
   align-items: center;
   gap: 8px;
   padding: 7px 8px;
-  border-radius: 10px;
+  border-radius: 2px;
   cursor: pointer;
   font-size: 13px;
 }
@@ -613,7 +623,7 @@ body.presenting .topbar { display: none; }
   border: 1.5px solid var(--line);
   background: transparent;
   color: var(--ink);
-  border-radius: 10px;
+  border-radius: 2px;
   padding: 7px 10px;
   font: inherit;
   font-size: 13px;
@@ -637,7 +647,7 @@ body.presenting .topbar { display: none; }
   gap: 7px;
   border: 1.5px solid var(--line);
   background: transparent;
-  border-radius: 14px;
+  border-radius: 2px;
   padding: 10px 12px;
   font-family: inherit;
   font-size: 13px;
@@ -692,7 +702,7 @@ body.presenting .topbar { display: none; }
 .paper-dot {
   width: 26px;
   height: 26px;
-  border-radius: 8px;
+  border-radius: 2px;
   border: 1.5px solid var(--line);
   cursor: pointer;
 }
@@ -702,7 +712,7 @@ body.presenting .topbar { display: none; }
   width: 30px;
   height: 30px;
   border: 1.5px solid var(--line);
-  border-radius: 8px;
+  border-radius: 2px;
   background: transparent;
   color: var(--ink-soft);
   cursor: pointer;
@@ -716,9 +726,9 @@ body.presenting .topbar { display: none; }
   position: fixed;
   display: flex;
   gap: 4px;
-  background: var(--card);
-  border: 1.5px solid var(--line);
-  border-radius: 14px;
+  background: var(--panel);
+  border: var(--panel-border);
+  border-radius: 3px;
   padding: 5px;
   box-shadow: var(--shadow);
   z-index: 25;
@@ -729,7 +739,7 @@ body.presenting .topbar { display: none; }
   height: 40px;
   border: none;
   background: transparent;
-  border-radius: 10px;
+  border-radius: 3px;
   color: var(--ink);
   cursor: pointer;
   display: grid;
@@ -763,7 +773,7 @@ body.presenting .topbar { display: none; }
   align-items: flex-start;
   border: 1.5px solid var(--line);
   background: transparent;
-  border-radius: 10px;
+  border-radius: 2px;
   padding: 8px 10px;
   font-family: inherit;
   cursor: pointer;
@@ -785,7 +795,7 @@ body.presenting .topbar { display: none; }
 .fmt-custom-label { font-weight: 600; }
 .fmt-custom input {
   border: 1px solid var(--line);
-  border-radius: 6px;
+  border-radius: 2px;
   background: transparent;
   font: inherit;
   font-size: 12px;
@@ -797,7 +807,7 @@ body.presenting .topbar { display: none; }
   border: 1.5px solid var(--ink);
   background: var(--ink);
   color: var(--card);
-  border-radius: 8px;
+  border-radius: 2px;
   padding: 4px 12px;
   font: inherit;
   font-size: 12px;
@@ -808,7 +818,7 @@ body.presenting .topbar { display: none; }
 .page-format {
   border: 1.5px solid var(--line);
   background: transparent;
-  border-radius: 12px;
+  border-radius: 2px;
   padding: 12px 16px;
   font-family: inherit;
   font-size: 14px;

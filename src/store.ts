@@ -24,6 +24,8 @@ type Op =
   | { type: 'move-anim-layer'; areaId: string; from: number; to: number }
   | { type: 'move-area'; id: string; dx: number; dy: number }
   | { type: 'resize-area'; id: string; before: { x: number; y: number; w: number; h: number }; after: { x: number; y: number; w: number; h: number } }
+  | { type: 'move-frame'; areaId: string; layerId: string; from: number; to: number }
+  | { type: 'recolor-elements'; items: { id: string; before: string; after: string }[] }
   | { type: 'frame-duration'; areaId: string; layerId: string; frameId: string; before: number; after: number }
   | { type: 'area-settings'; areaId: string; before: { fps: number; loop: boolean; clip: boolean }; after: { fps: number; loop: boolean; clip: boolean } }
   | { type: 'rename-area'; areaId: string; before: string; after: string }
@@ -293,6 +295,21 @@ export class Store {
         if (a) { a.x = op.after.x; a.y = op.after.y; a.w = op.after.w; a.h = op.after.h; }
         break;
       }
+      case 'move-frame': {
+        const l = this.animLayer(op.areaId, op.layerId);
+        if (l && op.to >= 0 && op.to < l.frames.length) {
+          const [f] = l.frames.splice(op.from, 1);
+          l.frames.splice(op.to, 0, f);
+        }
+        break;
+      }
+      case 'recolor-elements': {
+        for (const it of op.items) {
+          const el = d.elements.find((e) => e.id === it.id);
+          if (el) el.color = it.after;
+        }
+        break;
+      }
       case 'frame-duration': {
         const f = this.animLayer(op.areaId, op.layerId)?.frames.find((x) => x.id === op.frameId);
         if (f) f.duration = op.after;
@@ -344,6 +361,9 @@ export class Store {
       case 'move-anim-layer': return { ...op, from: op.to, to: op.from };
       case 'move-area': return { ...op, dx: -op.dx, dy: -op.dy };
       case 'resize-area': return { ...op, before: op.after, after: op.before };
+      case 'move-frame': return { ...op, from: op.to, to: op.from };
+      case 'recolor-elements':
+        return { ...op, items: op.items.map((it) => ({ ...it, before: it.after, after: it.before })) };
       case 'frame-duration': return { ...op, before: op.after, after: op.before };
       case 'area-settings': return { ...op, before: op.after, after: op.before };
       case 'rename-area': return { ...op, before: op.after, after: op.before };
@@ -472,8 +492,8 @@ export class Store {
     this.commit({ type: 'delete-area', area, elements: this.areaElements(area) });
   }
 
-  addFrame(areaId: string, layerId: string, index: number): AnimFrame {
-    const frame: AnimFrame = { id: uid('fr'), duration: 1 };
+  addFrame(areaId: string, layerId: string, index: number, duration = 1): AnimFrame {
+    const frame: AnimFrame = { id: uid('fr'), duration };
     this.commit({ type: 'add-frame', areaId, layerId, frame, index, elements: [] });
     return frame;
   }
@@ -529,6 +549,29 @@ export class Store {
 
   moveArea(id: string, dx: number, dy: number) {
     if (dx || dy) this.commit({ type: 'move-area', id, dx, dy });
+  }
+
+  moveFrame(areaId: string, layerId: string, from: number, to: number) {
+    const l = this.animLayer(areaId, layerId);
+    if (!l || from === to || to < 0 || to >= l.frames.length) return;
+    this.commit({ type: 'move-frame', areaId, layerId, from, to });
+  }
+
+  /** View-state toggle, not undoable. */
+  setLayerHidden(areaId: string, layerId: string, hidden: boolean) {
+    const l = this.animLayer(areaId, layerId);
+    if (!l) return;
+    l.hidden = hidden;
+    this.scheduleSave();
+    this.onChange();
+  }
+
+  recolorElements(ids: string[], after: string) {
+    const items = ids
+      .map((id) => this.doc.elements.find((e) => e.id === id))
+      .filter((e): e is Element => !!e && e.color !== after)
+      .map((e) => ({ id: e.id, before: e.color, after }));
+    if (items.length) this.commit({ type: 'recolor-elements', items });
   }
 
   moveAnimLayer(areaId: string, from: number, to: number) {
