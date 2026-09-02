@@ -572,16 +572,19 @@ html, body {
   border: 1px solid var(--line);
   background: transparent;
   color: var(--ink);
-  width: 30px;
+  min-width: 30px;
+  width: auto;
+  padding: 0 6px;
   height: 26px;
   border-radius: 2px;
   cursor: pointer;
   font-size: 13px;
+  white-space: nowrap;
 }
 .tl-ops button:active { background: var(--ink); color: var(--card); }
 .tl-sep { width: 1px; height: 18px; background: var(--line); margin: 0 6px; }
 .tl-layers-label { color: var(--ink-soft); font-size: 11px; font-weight: 600; margin-right: 2px; }
-.tl-life { font-size: 12px; font-weight: 700; min-width: 24px; text-align: center; }
+.tl-life { font-size: 12px; font-weight: 700; min-width: 56px; text-align: center; white-space: nowrap; }
 
 .tl-layers { display: flex; flex-direction: column; gap: 3px; }
 .tl-layer {

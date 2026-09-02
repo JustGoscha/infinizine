@@ -865,10 +865,10 @@ export function buildUI(
         <button id="tl-addlayer" title="Add layer">＋</button>
       </div>`
         : `<div class="tl-ops">
-        <span class="tl-layers-label" title="Strokes drawn while playing">live ink</span>
-        <button id="tl-life-minus" title="Shorter life">−</button>
-        <span class="tl-life" id="tl-life">${state.liveInkLife}f</span>
-        <button id="tl-life-plus" title="Longer life">＋</button>
+        <span class="tl-layers-label" title="How long a stroke drawn while playing stays visible">live ink duration</span>
+        <button id="tl-life-minus" title="Shorter">−</button>
+        <span class="tl-life" id="tl-life">${state.liveInkLife} frames</span>
+        <button id="tl-life-plus" title="Longer">＋</button>
         <button id="tl-taper" class="tl-toggle ${state.liveInkTaper ? 'on' : ''}" title="Tail eats away over its life">taper</button>
         <button id="tl-mode" class="tl-toggle on" title="Recording mode: additive overdubs the loop, continuous replays full length">${state.liveInkMode === 'additive' ? 'add' : 'cont'}</button>
         <button id="tl-showink" class="tl-toggle ${state.showLiveInk ? 'on' : ''}" title="Show live ink while editing (it always shows in playback)">show</button>
