@@ -368,12 +368,21 @@ html, body {
 }
 .tl-tabs button.on { background: var(--ink); color: var(--card); }
 .tl-tab-count {
-  margin-left: 4px;
+  display: inline-grid;
+  place-items: center;
+  margin-left: 5px;
+  min-width: 16px;
+  height: 16px;
+  padding: 0 3px;
+  border-radius: 50%;
   font-size: 10px;
   font-weight: 700;
-  vertical-align: 2px;
-  opacity: 0.55;
+  background: var(--ink);
+  color: var(--card);
+  vertical-align: 1px;
 }
+/* invert on the active (dark) tab */
+.tl-tabs button.on .tl-tab-count { background: var(--card); color: var(--ink); }
 .tl-tab-eye { display: inline-flex; margin-left: 6px; vertical-align: -3px; opacity: 0.8; }
 .tl-tab-eye.off { opacity: 0.4; }
 .tl-tab-eye svg { width: 15px; height: 15px; }
