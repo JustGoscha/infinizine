@@ -942,16 +942,20 @@ export function buildUI(
         bar.className = 'tl-livebar';
         bar.dataset.lid = l.id;
         bar.dataset.scale = String(liveScale);
-        bar.style.width = `${Math.max(40, cycle * liveScale)}px`;
-        const firstStroke = strokes[0];
-        const phase = firstStroke?.kind === 'stroke' ? (firstStroke.animStart ?? 0) : 0;
-        bar.style.marginLeft = `${Math.max(0, (((phase % areaTotalAll) + areaTotalAll) % areaTotalAll) * liveScale)}px`;
+        bar.style.width = `${Math.max(24, cycle * liveScale)}px`;
+        // phase offset only matters relative to the area loop (additive layers);
+        // continuous lines all start at 0 so widths read as durations
+        if (additive) {
+          const firstStroke = strokes[0];
+          const phase = firstStroke?.kind === 'stroke' ? (firstStroke.animStart ?? 0) : 0;
+          bar.style.marginLeft = `${Math.max(0, (((phase % areaTotalAll) + areaTotalAll) % areaTotalAll) * liveScale)}px`;
+        }
         const inkColor = (strokes[0]?.color as string) ?? '#7048e8';
         bar.style.background = inkColor;
         const n = parseInt(inkColor.slice(1), 16) || 0;
         const lum = ((n >> 16) & 255) * 0.299 + ((n >> 8) & 255) * 0.587 + (n & 255) * 0.114;
         bar.style.color = lum < 140 ? '#fff' : '#2a241a';
-        bar.textContent = `✒ ${strokes.length} · ${(cycle / area.fps).toFixed(1)}s${additive ? ' · loop' : ''}`;
+        bar.textContent = `${strokes.length > 1 ? `✒${strokes.length} · ` : ''}${(cycle / area.fps).toFixed(1)}s${additive ? ' · loop' : ''}`;
         const prog = document.createElement('div');
         prog.className = 'tl-liveprog';
         bar.appendChild(prog); // after textContent — that assignment clears children
