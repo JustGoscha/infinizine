@@ -748,7 +748,22 @@ export function buildUI(
     const timeEl = tl.querySelector('#tl-time') as HTMLElement | null;
     if (!area || !timeEl) return;
     const total = Math.max(1, ...area.layers.map((l) => l.frames.reduce((a, f) => a + f.duration, 0)));
-    const loopSec = total / area.fps;
+    // the clock depends on the tab: keyframe loop vs longest live line
+    let clockTicks = total;
+    if (tlView === 'live') {
+      let maxCycle = 1;
+      for (const l of area.layers) {
+        if (l.kind !== 'live') continue;
+        if (l.liveMode === 'additive') { maxCycle = Math.max(maxCycle, total); continue; }
+        for (const st of store.doc.elements) {
+          if (st.kind !== 'stroke' || st.alayer !== l.id) continue;
+          const drawn = (st.points[st.points.length - 1]?.t ?? 0) * area.fps;
+          maxCycle = Math.max(maxCycle, Math.ceil(drawn + (st.animLife ?? 6)));
+        }
+      }
+      clockTicks = maxCycle;
+    }
+    const loopSec = clockTicks / area.fps;
     if (!state.playingAreas) {
       timeEl.textContent = `${loopSec.toFixed(1)}s`;
       tl.querySelectorAll('.tl-frame.playing').forEach((c) => c.classList.remove('playing'));
