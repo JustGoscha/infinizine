@@ -826,8 +826,8 @@ export function buildUI(
         <button id="tl-close" title="Close">✕</button>
       </div>
       <div class="tl-tabs">
-        <button id="tl-tab-frames" class="${tlView === 'frames' ? 'on' : ''}">frames</button>
-        <button id="tl-tab-live" class="${tlView === 'live' ? 'on' : ''}">live ink</button>
+        <button id="tl-tab-frames" class="${tlView === 'frames' ? 'on' : ''}">keyframes</button>
+        <button id="tl-tab-live" class="${tlView === 'live' ? 'on' : ''}">live lines</button>
       </div>
       <div class="tl-tracks" id="tl-tracks"></div>
       ${tlView === 'frames'
