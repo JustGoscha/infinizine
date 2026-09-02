@@ -354,6 +354,20 @@ html, body {
   font-size: 14px;
 }
 
+/* view tabs: frames vs live ink */
+.tl-tabs { display: flex; gap: 0; margin-bottom: 8px; border: 1.5px solid var(--ink); width: fit-content; }
+.tl-tabs button {
+  border: none;
+  background: transparent;
+  font: inherit;
+  font-size: 12px;
+  font-weight: 700;
+  padding: 4px 12px;
+  color: var(--ink-soft);
+  cursor: pointer;
+}
+.tl-tabs button.on { background: var(--ink); color: var(--card); }
+
 /* per-layer tracks: layer header cell + its own frame strip, table-like */
 .tl-tracks {
   display: flex;
