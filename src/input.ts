@@ -126,6 +126,7 @@ export function attachInput(
   // page move-with-content drag
   let dragPageAll = false;
   let pageAllIds: string[] = [];
+  let pageAllAreaIds: string[] = [];
   let pageAllApplied = { x: 0, y: 0 };
   // textbox resize/scale (Excalidraw-style handles on a hovered/selected textbox)
   let resizeText: TextBox | null = null;
@@ -308,7 +309,12 @@ export function attachInput(
         dragStartWorld = w;
         dragPageAll = all;
         if (all) {
-          pageAllIds = store.pageContentIds(p.id);
+          pageAllAreaIds = store.pageAreaIds(p.id);
+          // areas take their entire animation content along
+          pageAllIds = [
+            ...store.pageContentIds(p.id),
+            ...pageAllAreaIds.flatMap((aid) => store.areaContentIds(aid)),
+          ];
           pageAllApplied = { x: 0, y: 0 };
         }
         return;
@@ -501,6 +507,10 @@ export function attachInput(
           translateElement(el, stepX, stepY);
           dropCache(el.id);
         }
+        for (const aid of pageAllAreaIds) {
+          const ar = store.area(aid);
+          if (ar) { ar.x += stepX; ar.y += stepY; }
+        }
       }
       dragStartWorld = w;
       invalidate();
@@ -681,8 +691,13 @@ export function attachInput(
           translateElement(el, -dx, -dy);
           dropCache(el.id);
         }
-        store.movePageWithContent(p.id, pageAllIds, dx, dy);
+        for (const aid of pageAllAreaIds) {
+          const ar = store.area(aid);
+          if (ar) { ar.x -= dx; ar.y -= dy; }
+        }
+        store.movePageWithContent(p.id, pageAllIds, pageAllAreaIds, dx, dy);
         pageAllIds = [];
+        pageAllAreaIds = [];
       } else {
         store.movePage(p.id, dx, dy);
       }

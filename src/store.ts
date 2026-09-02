@@ -14,7 +14,7 @@ type Op =
   | { type: 'add-page'; page: Page }
   | { type: 'delete-page'; page: Page }
   | { type: 'move-page'; id: string; dx: number; dy: number }
-  | { type: 'move-page-content'; id: string; ids: string[]; dx: number; dy: number }
+  | { type: 'move-page-content'; id: string; ids: string[]; areaIds: string[]; dx: number; dy: number }
   | { type: 'pages-format'; before: { id: string; w: number; h: number }[]; after: { id: string; w: number; h: number }[] }
   | { type: 'add-area'; area: AnimArea; elements: Element[] }
   | { type: 'delete-area'; area: AnimArea; elements: Element[] }
@@ -242,6 +242,10 @@ export class Store {
       case 'move-page-content': {
         const pg = d.pages.find((p) => p.id === op.id);
         if (pg) { pg.x += op.dx; pg.y += op.dy; }
+        for (const aid of op.areaIds) {
+          const a = this.area(aid);
+          if (a) { a.x += op.dx; a.y += op.dy; }
+        }
         this.translate(op.ids, op.dx, op.dy);
         break;
       }
@@ -472,8 +476,21 @@ export class Store {
       .map((e) => e.id);
   }
 
-  movePageWithContent(id: string, ids: string[], dx: number, dy: number) {
-    if (dx || dy) this.commit({ type: 'move-page-content', id, ids, dx, dy });
+  /** Anim areas whose rectangle lies majority-inside the page. */
+  pageAreaIds(pageId: string): string[] {
+    const p = this.doc.pages.find((x) => x.id === pageId);
+    if (!p) return [];
+    return this.doc.areas
+      .filter((a) => {
+        const ix = Math.max(0, Math.min(a.x + a.w, p.x + p.w) - Math.max(a.x, p.x));
+        const iy = Math.max(0, Math.min(a.y + a.h, p.y + p.h) - Math.max(a.y, p.y));
+        return ix * iy > (a.w * a.h) / 2;
+      })
+      .map((a) => a.id);
+  }
+
+  movePageWithContent(id: string, ids: string[], areaIds: string[], dx: number, dy: number) {
+    if (dx || dy) this.commit({ type: 'move-page-content', id, ids, areaIds, dx, dy });
   }
 
   /** All pages share one size: switch every page to the given format. */
