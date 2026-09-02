@@ -77,6 +77,7 @@ export class InputState {
   textRect: { x: number; y: number; w: number; h: number } | null = null; // rect being drawn with the text tool
   hoverText: string | null = null; // textbox under the mouse (shows its move handle)
   hoverArea: string | null = null; // anim area under the mouse (shows its handles)
+  hoverPage: string | null = null; // page under the mouse (shows its grabbers)
   lastDrawTool: Tool = 'pen'; // remembered so e.g. area creation can bounce back to it
   onAnimClose: () => void = () => {};
   toolCursor = 'crosshair'; // css cursor for the current tool (set by the UI)
@@ -122,6 +123,10 @@ export function attachInput(
   let resizeAreaStart = { x: 0, y: 0, w: 0, h: 0, wx: 0, wy: 0 };
   let moveAllIds: string[] = [];
   let moveAllApplied = { x: 0, y: 0 };
+  // page move-with-content drag
+  let dragPageAll = false;
+  let pageAllIds: string[] = [];
+  let pageAllApplied = { x: 0, y: 0 };
   // textbox resize/scale (Excalidraw-style handles on a hovered/selected textbox)
   let resizeText: TextBox | null = null;
   let resizeMode: 'width' | 'width-left' | 'height' | 'scale' = 'width';
@@ -284,6 +289,27 @@ export function attachInput(
         if (mode === 'move-all') {
           moveAllIds = store.areaContentIds(a.id);
           moveAllApplied = { x: 0, y: 0 };
+        }
+        return;
+      }
+    }
+
+    // Page grabbers (hover): outlined = frame only, filled = frame with content
+    for (const p of store.doc.pages) {
+      if (state.hoverPage !== p.id) continue;
+      const z = camera.zoom;
+      const mh = moveHandleRect(p.x, p.y, z);
+      const mha = moveAllHandleRect(p.x, p.y, z);
+      const all = inRect(w, mha);
+      if (inRect(w, mh) || all) {
+        dragPage = p;
+        dragPageStart = { x: p.x, y: p.y };
+        dragDesired = { x: p.x, y: p.y };
+        dragStartWorld = w;
+        dragPageAll = all;
+        if (all) {
+          pageAllIds = store.pageContentIds(p.id);
+          pageAllApplied = { x: 0, y: 0 };
         }
         return;
       }
@@ -463,6 +489,19 @@ export function attachInput(
       const snapped = snapPage(dragPage, dragDesired);
       dragPage.x = snapped.x;
       dragPage.y = snapped.y;
+      if (dragPageAll) {
+        const dx = dragPage.x - dragPageStart.x;
+        const dy = dragPage.y - dragPageStart.y;
+        const stepX = dx - pageAllApplied.x;
+        const stepY = dy - pageAllApplied.y;
+        pageAllApplied = { x: dx, y: dy };
+        const idSet = new Set(pageAllIds);
+        for (const el of store.doc.elements) {
+          if (!idSet.has(el.id)) continue;
+          translateElement(el, stepX, stepY);
+          dropCache(el.id);
+        }
+      }
       dragStartWorld = w;
       invalidate();
       return;
@@ -622,9 +661,11 @@ export function attachInput(
     if (dragPage) {
       const p = dragPage;
       const dx = p.x - dragPageStart.x, dy = p.y - dragPageStart.y;
+      const wasAll = dragPageAll;
       dragPage = null;
+      dragPageAll = false;
       const tapThreshold = 3 / camera.zoom;
-      if (Math.abs(dx) < tapThreshold && Math.abs(dy) < tapThreshold && e) {
+      if (!wasAll && Math.abs(dx) < tapThreshold && Math.abs(dy) < tapThreshold && e) {
         // A tap, not a drag: open the page menu
         p.x = dragPageStart.x; p.y = dragPageStart.y;
         state.onPageMenu(p, e.clientX, e.clientY);
@@ -633,7 +674,18 @@ export function attachInput(
       }
       // revert live mutation, then commit as a single undoable op
       p.x = dragPageStart.x; p.y = dragPageStart.y;
-      store.movePage(p.id, dx, dy);
+      if (wasAll) {
+        const idSet = new Set(pageAllIds);
+        for (const el of store.doc.elements) {
+          if (!idSet.has(el.id)) continue;
+          translateElement(el, -dx, -dy);
+          dropCache(el.id);
+        }
+        store.movePageWithContent(p.id, pageAllIds, dx, dy);
+        pageAllIds = [];
+      } else {
+        store.movePage(p.id, dx, dy);
+      }
       return;
     }
     if (dragSelection) {
@@ -876,6 +928,32 @@ export function attachInput(
       }
       if (hoverArea !== state.hoverArea) {
         state.hoverArea = hoverArea;
+        invalidate();
+      }
+      // page hover: near the label, the grabbers, or the border
+      let hoverPage: string | null = null;
+      if (!cursor && !hoverArea) {
+        for (const p of [...store.doc.pages].reverse()) {
+          const r = 10 / z;
+          const mh = moveHandleRect(p.x, p.y, z);
+          const mha = moveAllHandleRect(p.x, p.y, z);
+          const nearLabel = w.x >= p.x && w.x <= p.x + 140 / z && w.y >= p.y - 26 / z && w.y <= p.y;
+          const inGrab = inRect(w, mh) || inRect(w, mha);
+          const nearEdge =
+            ((Math.abs(w.x - p.x) < r || Math.abs(w.x - (p.x + p.w)) < r) &&
+              w.y > p.y - r && w.y < p.y + p.h + r) ||
+            ((Math.abs(w.y - p.y) < r || Math.abs(w.y - (p.y + p.h)) < r) &&
+              w.x > p.x - r && w.x < p.x + p.w + r);
+          if (nearLabel || inGrab || nearEdge) {
+            hoverPage = p.id;
+            if (inGrab) cursor = 'grab';
+            else if (nearLabel) cursor = 'pointer';
+            break;
+          }
+        }
+      }
+      if (hoverPage !== state.hoverPage) {
+        state.hoverPage = hoverPage;
         invalidate();
       }
       // anything selected under the cursor is grabbable

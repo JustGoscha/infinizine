@@ -386,7 +386,27 @@ export class Renderer {
 
     // Page borders sit on top of everything
     if (!presenting) {
-      for (const page of this.store.doc.pages) this.drawPage(page, z);
+      for (const page of this.store.doc.pages) {
+        this.drawPage(page, z);
+        if (this.input.hoverPage === page.id) {
+          // outlined grabber: frame only
+          const mh = moveHandleRect(page.x, page.y, z);
+          ctx.fillStyle = '#FDFCF8';
+          ctx.strokeStyle = 'rgba(90,75,50,0.5)';
+          ctx.lineWidth = 1.2 / z;
+          ctx.fillRect(mh.x, mh.y, mh.s, mh.s);
+          ctx.strokeRect(mh.x, mh.y, mh.s, mh.s);
+          ctx.strokeStyle = '#2A241A';
+          this.drawMoveCross(mh.x, mh.y, mh.s);
+          // filled grabber: frame with content
+          const ma = moveAllHandleRect(page.x, page.y, z);
+          ctx.fillStyle = '#2A241A';
+          ctx.fillRect(ma.x, ma.y, ma.s, ma.s);
+          ctx.strokeStyle = '#FDFCF8';
+          ctx.lineWidth = 1.6 / z;
+          this.drawMoveCross(ma.x, ma.y, ma.s);
+        }
+      }
     }
 
     // Animation areas (frames + label), edit mode only

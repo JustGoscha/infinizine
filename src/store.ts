@@ -14,6 +14,7 @@ type Op =
   | { type: 'add-page'; page: Page }
   | { type: 'delete-page'; page: Page }
   | { type: 'move-page'; id: string; dx: number; dy: number }
+  | { type: 'move-page-content'; id: string; ids: string[]; dx: number; dy: number }
   | { type: 'pages-format'; before: { id: string; w: number; h: number }[]; after: { id: string; w: number; h: number }[] }
   | { type: 'add-area'; area: AnimArea; elements: Element[] }
   | { type: 'delete-area'; area: AnimArea; elements: Element[] }
@@ -238,6 +239,12 @@ export class Store {
         if (pg) { pg.x += op.dx; pg.y += op.dy; }
         break;
       }
+      case 'move-page-content': {
+        const pg = d.pages.find((p) => p.id === op.id);
+        if (pg) { pg.x += op.dx; pg.y += op.dy; }
+        this.translate(op.ids, op.dx, op.dy);
+        break;
+      }
       case 'pages-format': {
         for (const size of op.after) {
           const pg = d.pages.find((p) => p.id === size.id);
@@ -366,6 +373,7 @@ export class Store {
       case 'add-page': return { type: 'delete-page', page: op.page };
       case 'delete-page': return { type: 'add-page', page: op.page };
       case 'move-page': return { ...op, dx: -op.dx, dy: -op.dy };
+      case 'move-page-content': return { ...op, dx: -op.dx, dy: -op.dy };
       case 'pages-format': return { ...op, before: op.after, after: op.before };
       case 'add-area': return { ...op, type: 'delete-area' };
       case 'delete-area': return { ...op, type: 'add-area' };
@@ -438,6 +446,35 @@ export class Store {
     if (dx || dy) this.commit({ type: 'move-page', id, dx, dy });
   }
   deletePage(page: Page) { this.commit({ type: 'delete-page', page }); }
+
+  /** Untagged elements whose center lies inside the page rect. */
+  pageContentIds(pageId: string): string[] {
+    const p = this.doc.pages.find((x) => x.id === pageId);
+    if (!p) return [];
+    return this.doc.elements
+      .filter((e) => {
+        if (e.frame || (e.kind === 'stroke' && e.area)) return false;
+        let cx: number, cy: number;
+        if (e.kind === 'text') {
+          cx = e.x + e.w / 2;
+          cy = e.y + e.h / 2;
+        } else {
+          let minX = Infinity, minY = Infinity, maxX = -Infinity, maxY = -Infinity;
+          for (const pt of e.points) {
+            minX = Math.min(minX, pt.x); minY = Math.min(minY, pt.y);
+            maxX = Math.max(maxX, pt.x); maxY = Math.max(maxY, pt.y);
+          }
+          cx = (minX + maxX) / 2;
+          cy = (minY + maxY) / 2;
+        }
+        return cx >= p.x && cx <= p.x + p.w && cy >= p.y && cy <= p.y + p.h;
+      })
+      .map((e) => e.id);
+  }
+
+  movePageWithContent(id: string, ids: string[], dx: number, dy: number) {
+    if (dx || dy) this.commit({ type: 'move-page-content', id, ids, dx, dy });
+  }
 
   /** All pages share one size: switch every page to the given format. */
   setPagesFormat({ w, h }: { w: number; h: number }) {
