@@ -50,6 +50,11 @@ export interface Stroke {
   layer?: Layer; // paint behind / in front toggle; undefined = front
   frame?: string; // animation frame id (element only shows on that frame)
   alayer?: string; // animation layer id within its area
+  // timed "live ink": drawn while an area was playing, keyed to the loop clock
+  area?: string; // owning anim area (timed strokes have no frame)
+  animStart?: number; // tick (within the area's loop) when the stroke appears
+  animLife?: number; // how many ticks it stays visible
+  animTaper?: boolean; // tail eats away toward the stroke's start over its life
   points: StrokePoint[];
   startTime: number; // epoch seconds, for future replay/timelines
 }

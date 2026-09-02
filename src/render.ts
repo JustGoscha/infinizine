@@ -145,6 +145,7 @@ export class Renderer {
     // layers hold at the same tick position.
     const now = performance.now() / 1000;
     const frameVis = new Map<string, boolean>();
+    const areaTick = new Map<string, { tick: number; total: number; loop: boolean }>();
     // standard onion colors: previous frames red, next frame green
     const onionFrames = new Map<string, { alpha: number; color: string }>();
 
@@ -166,6 +167,7 @@ export class Renderer {
       const areaTotal = Math.max(1, ...area.layers.map((l) => l.frames.reduce((a, f) => a + f.duration, 0)));
       let playTick = Math.floor((now - this.input.playEpoch) * area.fps);
       playTick = area.loop ? ((playTick % areaTotal) + areaTotal) % areaTotal : Math.min(playTick, areaTotal - 1);
+      areaTick.set(area.id, { tick: playTick, total: areaTotal, loop: area.loop });
 
       // tick position of the active frame's start (for holding other layers in edit mode)
       let editTick = 0;
@@ -210,10 +212,34 @@ export class Renderer {
         }
         for (const f of l.frames) frameVis.set(f.id, f.id === visId);
       }
+      if (editing) {
+        const t = areaTick.get(area.id)!;
+        areaTick.set(area.id, { ...t, tick: editTick });
+      }
     }
 
     const visible = this.store.doc.elements.filter((el) => !this.input.hidden.has(el.id));
-    const still = visible.filter((el) => !el.frame);
+    const still = visible.filter((el) => !el.frame && !(el.kind === 'stroke' && el.area));
+
+    // timed live-ink stroke: visible during [animStart, animStart+life) on the loop clock
+    const drawTimed = (el: Stroke, tk: { tick: number; total: number; loop: boolean }) => {
+      const start = el.animStart ?? 0;
+      const life = Math.max(1, el.animLife ?? 6);
+      let age = tk.tick - start;
+      if (tk.loop) age = ((age % tk.total) + tk.total) % tk.total;
+      if (age < 0 || age >= life) return;
+      if (el.animTaper && el.points.length > 3) {
+        // tail eats away toward the stroke's start as it ages
+        const frac = age / life;
+        const from = Math.min(el.points.length - 3, Math.floor(frac * el.points.length));
+        ctx.globalAlpha = el.opacity * dimFactor * Math.min(1, (1 - frac) * 3);
+        ctx.fillStyle = el.color;
+        ctx.fill(outlineToPath(strokeOutline({ ...el, points: el.points.slice(from) })));
+        ctx.globalAlpha = 1;
+        return;
+      }
+      drawEl(el);
+    };
     if (live?.layer === 'back') drawLive(); // live back-ink previews behind existing back-ink
     dimFactor = focusAreaId ? 0.3 : 1;
     for (const el of still) if (el.layer === 'back') drawEl(el);
@@ -247,6 +273,17 @@ export class Renderer {
         }
         for (const el of visible) {
           if (el.frame && fids.has(el.frame) && frameVis.get(el.frame) === true) drawEl(el);
+        }
+        const tk = areaTick.get(area.id);
+        if (tk) {
+          for (const el of visible) {
+            if (
+              el.kind === 'stroke' && el.area === area.id &&
+              (el.alayer === layer.id || (!el.alayer && layer === area.layers[0]))
+            ) {
+              drawTimed(el, tk);
+            }
+          }
         }
       }
       if (area.clip) ctx.restore();

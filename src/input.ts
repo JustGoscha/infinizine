@@ -10,11 +10,12 @@ import { layoutText, layoutHeight } from './text';
 
 export type Tool = 'pen' | 'fineliner' | 'marker' | 'eraser' | 'cursor' | 'lasso-select' | 'lasso-fill' | 'text' | 'anim' | 'hand';
 
-/** While an anim area is selected, only the active frame's elements are editable;
- * otherwise only untagged (non-animation) elements are. */
+/** While an anim area is selected, only the active frame's elements (and the
+ * area's timed live-ink strokes) are editable; otherwise only untagged ones. */
 export function frameEditable(el: Element, state: InputState): boolean {
-  if (state.activeAreaId) return el.frame === state.activeFrameId;
-  return !el.frame;
+  const area = el.kind === 'stroke' ? el.area : undefined;
+  if (state.activeAreaId) return el.frame === state.activeFrameId || area === state.activeAreaId;
+  return !el.frame && !area;
 }
 
 function translateElement(el: Element, dx: number, dy: number) {
@@ -81,6 +82,8 @@ export class InputState {
   activeFrameId: string | null = null;
   activeLayerId: string | null = null;
   onionSkin = true; // on by default; 3 frames back (red) and 3 forward (green)
+  liveInkLife = 6; // ticks a stroke drawn during playback stays visible
+  liveInkTaper = true; // its tail eats away over its lifetime
   playingAreas = false;
   playEpoch = 0; // performance.now()/1000 when playback started
   onAnimOpen: (area: import('./types').AnimArea) => void = () => {};
@@ -299,14 +302,37 @@ export function attachInput(
         strokeStart = performance.now() / 1000;
         ema = null;
         smooth(w);
+        // drawing into a PLAYING area records a timed stroke on the loop clock
+        const playingArea =
+          state.activeAreaId && state.playingAreas
+            ? store.doc.areas.find((a) => a.id === state.activeAreaId)
+            : undefined;
+        let anim: Partial<Stroke> = {
+          frame: state.activeFrameId ?? undefined,
+          alayer: state.activeLayerId ?? undefined,
+        };
+        if (playingArea) {
+          const total = Math.max(
+            1,
+            ...playingArea.layers.map((l) => l.frames.reduce((a, f) => a + f.duration, 0)),
+          );
+          let tick = Math.floor((performance.now() / 1000 - state.playEpoch) * playingArea.fps);
+          tick = playingArea.loop ? ((tick % total) + total) % total : Math.min(tick, total - 1);
+          anim = {
+            area: playingArea.id,
+            alayer: state.activeLayerId ?? undefined,
+            animStart: tick,
+            animLife: state.liveInkLife,
+            animTaper: state.liveInkTaper,
+          };
+        }
         state.live = {
           id: uid('st'), kind: 'stroke', tool: state.tool,
           color: state.color,
           baseWidth: state.baseWidth / (state.tool === 'fineliner' ? 1.4 : 1),
           opacity: state.tool === 'marker' ? 0.45 : 1,
           layer: state.paintBehind ? 'back' : 'front',
-          frame: state.activeFrameId ?? undefined,
-          alayer: state.activeLayerId ?? undefined,
+          ...anim,
           points: [{ x: w.x, y: w.y, p: pressureOf(e), t: 0 }],
           startTime: Date.now() / 1000,
         };

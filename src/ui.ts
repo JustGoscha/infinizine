@@ -773,6 +773,12 @@ export function buildUI(
         <button id="tl-longer" title="Longer">⇥</button>
 
         <span class="tl-sep"></span>
+        <span class="tl-layers-label" title="Strokes drawn while playing">live ink</span>
+        <button id="tl-life-minus" title="Shorter life">−</button>
+        <span class="tl-life" id="tl-life">${state.liveInkLife}f</span>
+        <button id="tl-life-plus" title="Longer life">＋</button>
+        <button id="tl-taper" class="tl-toggle ${state.liveInkTaper ? 'on' : ''}" title="Tail eats away over its life">taper</button>
+        <span class="tl-sep"></span>
         <span class="tl-layers-label">layers</span>
         <button id="tl-addlayer" title="Add layer">＋</button>
       </div>
@@ -922,6 +928,18 @@ export function buildUI(
     };
     q('#tl-shorter').addEventListener('click', () => dur(-1));
     q('#tl-longer').addEventListener('click', () => dur(1));
+    q('#tl-life-minus').addEventListener('click', () => {
+      state.liveInkLife = Math.max(1, state.liveInkLife - 1);
+      renderTimeline();
+    });
+    q('#tl-life-plus').addEventListener('click', () => {
+      state.liveInkLife = Math.min(99, state.liveInkLife + 1);
+      renderTimeline();
+    });
+    q('#tl-taper').addEventListener('click', () => {
+      state.liveInkTaper = !state.liveInkTaper;
+      renderTimeline();
+    });
     q('#tl-addlayer').addEventListener('click', () => {
       const nl = store.addAnimLayer(area.id);
       if (nl) {
