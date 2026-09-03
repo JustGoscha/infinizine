@@ -704,8 +704,9 @@ export function buildUI(
   let tlAreaId: string | null = null;
   let tlView: 'frames' | 'live' = 'frames';
   let tlZoom = 1; // horizontal duration-resolution zoom
-  let tlDock: 'float' | 'bottom' | 'top' = 'float';
+  let tlDock: 'float' | 'bottom' | 'top' | 'left' | 'right' = 'float';
   let tlHeight: number | null = null; // user-resized tracks height
+  let tlWidth: number | null = null; // user-resized width for side docks
 
   function closeTimeline() {
     tlAreaId = null;
@@ -729,13 +730,17 @@ export function buildUI(
     invalidate();
   };
 
-  function setDock(mode: 'float' | 'bottom' | 'top') {
+  function setDock(mode: 'float' | 'bottom' | 'top' | 'left' | 'right') {
     tlDock = mode;
     tl.classList.toggle('dock-bottom', mode === 'bottom');
     tl.classList.toggle('dock-top', mode === 'top');
+    tl.classList.toggle('dock-left', mode === 'left');
+    tl.classList.toggle('dock-right', mode === 'right');
+    tl.style.width = '';
     // keep the tool panel / topbar reachable above a docked timeline
     document.body.classList.toggle('tl-docked-bottom', mode === 'bottom');
     document.body.classList.toggle('tl-docked-top', mode === 'top');
+    document.body.classList.toggle('tl-docked-side', mode === 'left' || mode === 'right');
     // docked position is class-driven; clear any drag inline coords
     tl.style.left = '';
     tl.style.top = '';
@@ -748,11 +753,11 @@ export function buildUI(
   const dockPreview = document.createElement('div');
   dockPreview.className = 'dock-preview';
   document.body.appendChild(dockPreview);
-  function showDockPreview(edge: 'top' | 'bottom' | null) {
+  function showDockPreview(edge: 'top' | 'bottom' | 'left' | 'right' | null) {
     dockPreview.classList.toggle('show', edge !== null);
     if (edge) {
-      dockPreview.classList.toggle('at-top', edge === 'top');
-      dockPreview.classList.toggle('at-bottom', edge === 'bottom');
+      for (const c of ['at-top', 'at-bottom', 'at-left', 'at-right']) dockPreview.classList.remove(c);
+      dockPreview.classList.add(`at-${edge}`);
     }
   }
 
@@ -789,7 +794,15 @@ export function buildUI(
     tl.style.right = 'auto';
     const r = tl.getBoundingClientRect();
     showDockPreview(
-      r.top < 56 ? 'top' : window.innerHeight - r.bottom < 56 ? 'bottom' : null,
+      r.top < 56
+        ? 'top'
+        : window.innerHeight - r.bottom < 56
+          ? 'bottom'
+          : r.left < 40
+            ? 'left'
+            : window.innerWidth - r.right < 40
+              ? 'right'
+              : null,
     );
   });
   tl.addEventListener('pointerup', () => {
@@ -799,6 +812,8 @@ export function buildUI(
       const r = tl.getBoundingClientRect();
       if (r.top < 56) setDock('top');
       else if (window.innerHeight - r.bottom < 56) setDock('bottom');
+      else if (r.left < 40) setDock('left');
+      else if (window.innerWidth - r.right < 40) setDock('right');
     }
     tlDrag = null;
   });
@@ -960,14 +975,16 @@ export function buildUI(
         <button id="tl-loop" class="tl-toggle ${area.loop ? 'on' : ''}">loop</button>
         <button id="tl-clip" class="tl-toggle ${area.clip ? 'on' : ''}" title="Cut off ink outside the area">clip</button>
         <button id="tl-onion" class="tl-toggle ${state.onionSkin ? 'on' : ''}">onion</button>
-        <button id="tl-dock" title="${
-          tlDock === 'float' ? 'Dock to bottom' : tlDock === 'bottom' ? 'Dock to top' : 'Undock'
-        }">${
+        <button id="tl-dock" title="Dock (bottom / top / right / left / float)">${
           tlDock === 'bottom'
             ? svg('<rect x="4" y="4" width="16" height="16"/><path d="M4 14 H20 V20 H4 Z" fill="currentColor"/>')
             : tlDock === 'top'
               ? svg('<rect x="4" y="4" width="16" height="16"/><path d="M4 4 H20 V10 H4 Z" fill="currentColor"/>')
-              : svg('<rect x="4" y="4" width="16" height="16"/><path d="M4 14 H20"/>')
+              : tlDock === 'left'
+                ? svg('<rect x="4" y="4" width="16" height="16"/><path d="M4 4 H10 V20 H4 Z" fill="currentColor"/>')
+                : tlDock === 'right'
+                  ? svg('<rect x="4" y="4" width="16" height="16"/><path d="M14 4 H20 V20 H14 Z" fill="currentColor"/>')
+                  : svg('<rect x="4" y="4" width="16" height="16"/><path d="M4 14 H20"/>')
         }</button>
         <button id="tl-delarea" title="Delete area">🗑</button>
         <button id="tl-close" title="Close">✕</button>
@@ -1296,7 +1313,8 @@ export function buildUI(
       renderTimeline();
     };
     q('#tl-dock').addEventListener('click', () => {
-      setDock(tlDock === 'float' ? 'bottom' : tlDock === 'bottom' ? 'top' : 'float');
+      const order: (typeof tlDock)[] = ['float', 'bottom', 'top', 'right', 'left'];
+      setDock(order[(order.indexOf(tlDock) + 1) % order.length]);
     });
     q('#tl-zoom-in').addEventListener('click', () => setTlZoom(tlZoom * 1.4));
     q('#tl-zoom-out').addEventListener('click', () => setTlZoom(tlZoom / 1.4));
@@ -1377,18 +1395,30 @@ export function buildUI(
     if (tlHeight) tracksDiv.style.maxHeight = `${tlHeight}px`;
     // docked: a grab edge resizes the tracks up/down
     if (tlDock !== 'float') {
+      const side = tlDock === 'left' || tlDock === 'right';
+      if (side && tlWidth) tl.style.width = `${tlWidth}px`;
       const rz = document.createElement('div');
-      rz.className = `tl-resize ${tlDock === 'bottom' ? 'edge-top' : 'edge-bottom'}`;
+      rz.className = `tl-resize ${
+        tlDock === 'bottom' ? 'edge-top' : tlDock === 'top' ? 'edge-bottom' : tlDock === 'left' ? 'edge-right' : 'edge-left'
+      }`;
       rz.title = 'Drag to resize';
       rz.addEventListener('pointerdown', (e) => {
         e.preventDefault();
         rz.setPointerCapture(e.pointerId);
         const startY = e.clientY;
+        const startX = e.clientX;
         const startH = tracksDiv.clientHeight;
+        const startW = tl.clientWidth;
         const onMove = (ev: PointerEvent) => {
-          const d = tlDock === 'bottom' ? startY - ev.clientY : ev.clientY - startY;
-          tlHeight = Math.max(60, Math.min(window.innerHeight * 0.8, startH + d));
-          tracksDiv.style.maxHeight = `${tlHeight}px`;
+          if (side) {
+            const d = tlDock === 'left' ? ev.clientX - startX : startX - ev.clientX;
+            tlWidth = Math.max(240, Math.min(window.innerWidth * 0.85, startW + d));
+            tl.style.width = `${tlWidth}px`;
+          } else {
+            const d = tlDock === 'bottom' ? startY - ev.clientY : ev.clientY - startY;
+            tlHeight = Math.max(60, Math.min(window.innerHeight * 0.8, startH + d));
+            tracksDiv.style.maxHeight = `${tlHeight}px`;
+          }
         };
         const onUp = () => {
           rz.removeEventListener('pointermove', onMove);

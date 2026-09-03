@@ -521,6 +521,28 @@ html, body {
 }
 .tl-resize.edge-top { top: -5px; }
 .tl-resize.edge-bottom { bottom: -5px; }
+.tl-resize.edge-left,
+.tl-resize.edge-right {
+  top: 0;
+  bottom: 0;
+  left: auto;
+  right: auto;
+  width: 10px;
+  height: auto;
+  cursor: ew-resize;
+}
+.tl-resize.edge-left { left: -5px; }
+.tl-resize.edge-right { right: -5px; }
+.tl-resize.edge-left::after,
+.tl-resize.edge-right::after {
+  width: 4px;
+  height: 44px;
+  margin: auto;
+  position: absolute;
+  top: 0;
+  bottom: 0;
+  left: 3px;
+}
 .tl-resize::after {
   content: '';
   display: block;
@@ -545,13 +567,17 @@ html, body {
   transform: scaleY(0.25);
   transition: opacity 0.15s ease, transform 0.18s ease;
 }
-.dock-preview.at-top { top: 0; bottom: auto; transform-origin: top; }
-.dock-preview.at-bottom { bottom: 0; top: auto; transform-origin: bottom; }
-.dock-preview.show { opacity: 1; transform: scaleY(1); }
+.dock-preview.at-top { top: 0; bottom: auto; left: 0; right: 0; width: auto; height: 150px; transform: scaleY(0.25); transform-origin: top; }
+.dock-preview.at-bottom { bottom: 0; top: auto; left: 0; right: 0; width: auto; height: 150px; transform: scaleY(0.25); transform-origin: bottom; }
+.dock-preview.at-left { left: 0; right: auto; top: 0; bottom: 0; height: auto; width: 200px; transform: scaleX(0.25); transform-origin: left; }
+.dock-preview.at-right { right: 0; left: auto; top: 0; bottom: 0; height: auto; width: 200px; transform: scaleX(0.25); transform-origin: right; }
+.dock-preview.show { opacity: 1; transform: scale(1); }
 
 /* a docked timeline never buries the tool panel / topbar */
 body.tl-docked-bottom .toolbar { z-index: 40; }
 body.tl-docked-top .topbar { z-index: 40; }
+body.tl-docked-side .toolbar,
+body.tl-docked-side .topbar { z-index: 40; }
 
 /* docked timeline: clipped to the screen edge, full width */
 .timeline.dock-bottom,
@@ -579,6 +605,25 @@ body.tl-docked-top .topbar { z-index: 40; }
   border-top: none;
   padding-top: 62px; /* keep the header clear of the topbar chips */
 }
+
+/* side docks: full height, great for many live layers */
+.timeline.dock-left,
+.timeline.dock-right {
+  top: 0 !important;
+  bottom: 0 !important;
+  width: 440px;
+  max-width: 85vw;
+  border-radius: 0;
+  box-shadow: none;
+  display: flex;
+  flex-direction: column;
+  padding-top: 62px;
+  padding-bottom: 14px;
+}
+.timeline.dock-left { left: 0 !important; right: auto !important; border-left: none; border-top: none; border-bottom: none; }
+.timeline.dock-right { right: 0 !important; left: auto !important; border-right: none; border-top: none; border-bottom: none; }
+.timeline.dock-left .tl-tracks,
+.timeline.dock-right .tl-tracks { flex: 1; max-height: none; }
 .tl-toggle { color: var(--ink-soft) !important; font-weight: 600; padding: 4px 10px !important; }
 .tl-toggle.on { background: #7048e8 !important; color: #fff !important; }
 /* fps reads as plain text; only a subtle underline hints it's editable */
