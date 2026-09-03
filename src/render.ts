@@ -473,6 +473,11 @@ export class Renderer {
         }
       }
       if (pts.length < 3) return;
+      if (el.tool === 'pencil') {
+        // same stamp engine as static pencil, on the living slice
+        this.stampStroke(ctx, { ...el, points: pts }, el.opacity * dimFactor);
+        return;
+      }
       ctx.globalAlpha = el.opacity * dimFactor;
       ctx.fillStyle = this.inkStyle(el, z);
       ctx.fill(outlineToPath(strokeOutline({ ...el, points: pts })));
