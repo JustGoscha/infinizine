@@ -8,7 +8,7 @@ import { layoutText, fontFor, segWidth, LINE_HEIGHT } from './text';
 import { moveHandleRect, moveAllHandleRect, deleteHandleRect, eyeHandleRect, type InputState } from './input';
 import { Store } from './store';
 
-interface CacheEntry { path: Path2D; bbox: BBox }
+interface CacheEntry { path: Path2D; bbox: BBox; core?: Path2D }
 
 export class Renderer {
   private ctx: CanvasRenderingContext2D;
@@ -57,11 +57,14 @@ export class Renderer {
       tile.width = tile.height = 64;
       const c = tile.getContext('2d')!;
       c.fillStyle = color;
-      // dense speckle with holes = paper tooth showing through
-      for (let i = 0; i < 2600; i++) {
-        c.globalAlpha = 0.3 + Math.random() * 0.7;
-        const sz = Math.random() < 0.85 ? 1 : 2;
-        c.fillRect(Math.random() * 64, Math.random() * 64, sz, sz);
+      // paper tooth: clustered specks + short directional streaks, uneven alpha
+      for (let i = 0; i < 2200; i++) {
+        c.globalAlpha = 0.2 + Math.random() * 0.75;
+        c.fillRect(Math.random() * 64, Math.random() * 64, 1, 1);
+      }
+      for (let i = 0; i < 420; i++) {
+        c.globalAlpha = 0.15 + Math.random() * 0.5;
+        c.fillRect(Math.random() * 64, Math.random() * 64, 2 + Math.random() * 3, 1);
       }
       const made = this.ctx.createPattern(tile, 'repeat');
       if (!made) return color;
@@ -75,6 +78,25 @@ export class Renderer {
   private inkStyle(el: Stroke, z: number): CanvasPattern | string {
     return el.tool === 'pencil' ? this.grainPattern(el.color, z) : el.color;
   }
+
+  /** Pencil = layered: faint solid body, grain over it, near-solid narrow core. */
+  private paintPencil(e: CacheEntry, el: Stroke, z: number, alpha: number) {
+    const { ctx } = this;
+    ctx.globalAlpha = alpha * 0.3;
+    ctx.fillStyle = el.color;
+    ctx.fill(e.path);
+    ctx.globalAlpha = alpha;
+    ctx.fillStyle = this.grainPattern(el.color, z);
+    ctx.fill(e.path);
+    if (e.core) {
+      ctx.globalAlpha = alpha * 0.75;
+      ctx.fillStyle = el.color;
+      ctx.fill(e.core);
+      ctx.globalAlpha = alpha * 0.9;
+      ctx.fillStyle = this.grainPattern(el.color, z);
+      ctx.fill(e.core);
+    }
+  }
   dropFromCache(id: string) { this.cache.delete(id); }
   clearCache() { this.cache.clear(); }
 
@@ -86,6 +108,10 @@ export class Renderer {
           ? outlineToPath(strokeOutline(el))
           : polygonPath(el.points);
       e = { path, bbox: elementBBox(el) };
+      if (el.kind === 'stroke' && el.tool === 'pencil') {
+        // narrower core: graphite is dense in the middle, broken at the edges
+        e.core = outlineToPath(strokeOutline({ ...el, baseWidth: el.baseWidth * 0.55 }));
+      }
       this.cache.set(el.id, e);
     }
     return e;
@@ -164,9 +190,13 @@ export class Renderer {
       }
       const e = this.entry(el);
       if (!bboxIntersects(e.bbox, view)) return;
-      ctx.globalAlpha = el.opacity * dimFactor;
-      ctx.fillStyle = el.kind === 'stroke' ? this.inkStyle(el, z) : el.color;
-      ctx.fill(e.path);
+      if (el.kind === 'stroke' && el.tool === 'pencil') {
+        this.paintPencil(e, el, z, el.opacity * dimFactor);
+      } else {
+        ctx.globalAlpha = el.opacity * dimFactor;
+        ctx.fillStyle = el.color;
+        ctx.fill(e.path);
+      }
       if (selected.has(el.id) && !presenting) {
         ctx.globalAlpha = 0.9;
         ctx.strokeStyle = '#E8590C';
@@ -185,6 +215,16 @@ export class Renderer {
           drawTimedWith(live, (t) => (lastT - t) * tk.fps);
           return;
         }
+      }
+      if (live.tool === 'pencil') {
+        const e: CacheEntry = {
+          path: outlineToPath(strokeOutline(live)),
+          bbox: elementBBox(live),
+          core: outlineToPath(strokeOutline({ ...live, baseWidth: live.baseWidth * 0.55 })),
+        };
+        this.paintPencil(e, live, z, live.opacity);
+        ctx.globalAlpha = 1;
+        return;
       }
       ctx.globalAlpha = live.opacity;
       ctx.fillStyle = this.inkStyle(live, z);
