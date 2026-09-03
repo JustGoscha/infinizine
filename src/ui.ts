@@ -744,15 +744,32 @@ export function buildUI(
     renderTimeline();
   }
 
-  // dragging the window
+  // dragging the window (docked: dragging the grip away undocks it)
   let tlDrag: { x: number; y: number } | null = null;
+  let undockStart: { x: number; y: number } | null = null;
   tl.addEventListener('pointerdown', (e) => {
     const head = (e.target as HTMLElement).closest('.tl-grip');
-    if (!head || tlDock !== 'float') return;
-    tlDrag = { x: e.clientX - tl.offsetLeft, y: e.clientY - tl.offsetTop };
+    if (!head) return;
     tl.setPointerCapture(e.pointerId);
+    if (tlDock === 'float') {
+      tlDrag = { x: e.clientX - tl.offsetLeft, y: e.clientY - tl.offsetTop };
+    } else {
+      undockStart = { x: e.clientX, y: e.clientY };
+    }
   });
   tl.addEventListener('pointermove', (e) => {
+    if (undockStart) {
+      if (Math.hypot(e.clientX - undockStart.x, e.clientY - undockStart.y) > 24) {
+        setDock('float');
+        undockStart = null;
+        tlDrag = { x: 140, y: 16 };
+        tl.style.left = `${e.clientX - 140}px`;
+        tl.style.top = `${e.clientY - 16}px`;
+        tl.style.bottom = 'auto';
+        tl.style.right = 'auto';
+      }
+      return;
+    }
     if (!tlDrag) return;
     tl.style.left = `${e.clientX - tlDrag.x}px`;
     tl.style.top = `${e.clientY - tlDrag.y}px`;
@@ -760,6 +777,7 @@ export function buildUI(
     tl.style.right = 'auto';
   });
   tl.addEventListener('pointerup', () => {
+    undockStart = null;
     if (tlDrag) {
       const r = tl.getBoundingClientRect();
       if (r.top < 56) setDock('top');
