@@ -985,13 +985,11 @@ export function buildUI(
         bar.dataset.lid = l.id;
         bar.dataset.scale = String(liveScale);
         bar.style.width = `${Math.max(24, cycle * liveScale)}px`;
-        // phase offset only matters relative to the area loop (additive layers);
-        // continuous lines all start at 0 so widths read as durations
-        if (additive) {
-          const firstStroke = strokes[0];
-          const phase = firstStroke?.kind === 'stroke' ? (firstStroke.animStart ?? 0) : 0;
-          bar.style.marginLeft = `${Math.max(0, (((phase % areaTotalAll) + areaTotalAll) % areaTotalAll) * liveScale)}px`;
-        }
+        // bars sit where the line actually starts on the shared time axis
+        const axis = additive ? areaTotalAll : Math.max(1, maxCycle);
+        const firstStroke = strokes[0];
+        const phase = firstStroke?.kind === 'stroke' ? (firstStroke.animStart ?? 0) : 0;
+        bar.style.marginLeft = `${Math.max(0, (((phase % axis) + axis) % axis) * liveScale)}px`;
         const inkColor = (strokes[0]?.color as string) ?? '#7048e8';
         bar.style.background = inkColor;
         const n = parseInt(inkColor.slice(1), 16) || 0;
