@@ -10,7 +10,7 @@ export interface StrokePoint {
   t: number; // seconds since stroke start
 }
 
-export type ToolKind = 'pen' | 'pencil' | 'fineliner' | 'marker';
+export type ToolKind = 'pen' | 'pencil' | 'sketch' | 'fineliner' | 'marker';
 
 export type Layer = 'back' | 'front';
 

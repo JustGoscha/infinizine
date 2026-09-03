@@ -66,6 +66,15 @@ const TOOL_OPTIONS = {
     start: { taper: w * 1.2, cap: true },
     end: { taper: w * 2.5, cap: true },
   }),
+  sketch: (w: number) => ({
+    size: w,
+    thinning: 0.6,
+    smoothing: 0.5,
+    streamline: 0.28,
+    simulatePressure: false,
+    start: { taper: w * 1.2, cap: true },
+    end: { taper: w * 2.2, cap: true },
+  }),
   pen: (w: number) => ({
     size: w,
     thinning: 0.62,
@@ -115,7 +124,7 @@ export function pencilOutlines(stroke: Stroke): number[][][] {
       p.y + (Math.sin(i * 0.27 + s2) * 0.6 + Math.sin(i * 1.51 + s3) * 0.3) * amp,
       p.p,
     ]);
-    const opts = { ...TOOL_OPTIONS.pencil(stroke.baseWidth * widths[k]) };
+    const opts = { ...TOOL_OPTIONS.sketch(stroke.baseWidth * widths[k]) };
     if (noPressure) opts.simulatePressure = true;
     passes.push(getStroke(pts, opts));
   }
@@ -128,7 +137,10 @@ export function strokeOutline(stroke: Stroke): number[][] {
   const opts = { ...TOOL_OPTIONS[stroke.tool](stroke.baseWidth) };
   // pencil emulation for pressureless input (mouse/finger): synthesize
   // pressure from stroke velocity so lines still swell and taper
-  if ((stroke.tool === 'pen' || stroke.tool === 'pencil') && stroke.points.every((p) => Math.abs(p.p - 0.5) < 0.001)) {
+  if (
+    (stroke.tool === 'pen' || stroke.tool === 'pencil' || stroke.tool === 'sketch') &&
+    stroke.points.every((p) => Math.abs(p.p - 0.5) < 0.001)
+  ) {
     opts.simulatePressure = true;
   }
   return getStroke(pts, opts);

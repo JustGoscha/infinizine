@@ -12,10 +12,11 @@ const svg = (inner: string) =>
   `<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round">${inner}</svg>`;
 
 const ICON_PATHS: Record<string, string> = {
-  pen: '<path d="M12 3 L16.5 12.5 C16.5 16.5 14.5 18.8 12 21 C9.5 18.8 7.5 16.5 7.5 12.5 Z"/><path d="M12 12.5 V17"/><circle cx="12" cy="11" r="1.1"/>',
-  pencil: '<path d="M5 19 L6.2 15.2 L15.5 5.9 A1.9 1.9 0 0 1 18.1 8.5 L8.8 17.8 Z"/><path d="M6.2 15.2 L8.8 17.8"/><path d="M14 7.5 L16.5 10"/>',
-  fineliner: '<path d="M4.5 19.5 L6 15 L16.5 4.5 L19.5 7.5 L9 18 Z"/><path d="M15 6 L18 9"/>',
-  marker: '<path d="M9 15 L4.5 19.5"/><path d="M14 4 L20 10 L11 17 L7 13 Z"/><path d="M12.5 5.5 L18.5 11.5"/>',
+  pen: '<path d="M12 3.5 C15 7.5 16.5 10 16.5 13 C16.5 16.8 14.5 19.2 12 20.5 C9.5 19.2 7.5 16.8 7.5 13 C7.5 10 9 7.5 12 3.5 Z"/><path d="M12 13.5 V17.5"/><circle cx="12" cy="12" r="1.2"/>',
+  pencil: '<path d="M8 3.5 H16 L14.8 11 C13.8 15 12.8 17.5 12 20.5 C11.2 17.5 10.2 15 9.2 11 Z"/><path d="M9.2 11 H14.8"/><path d="M11 16.5 L12 20.5 L13 16.5 Z" fill="currentColor"/>',
+  sketch: '<path d="M4.5 18.5 C7.5 12 10 12 9 15.5 C8.2 18.5 11 18 13 12.5 C14.5 8.5 16.5 8.5 15.5 12 C14.7 15 17 14.5 19.5 9.5"/>',
+  fineliner: '<path d="M10 3.5 H14 V10 L12.6 16 H11.4 L10 10 Z"/><path d="M10 10 H14"/><path d="M11.4 16 L12 20.5 L12.6 16"/>',
+  marker: '<path d="M8 3.5 H16 V10.5 L14 19.5 H10 L8 10.5 Z"/><path d="M8 10.5 H16"/><path d="M10 19.5 H14 L13.4 21 H10.6 Z" fill="currentColor"/>',
   'lasso-fill': '<path d="M12 3.5 C12 3.5 6 10.5 6 14.5 A6 6 0 0 0 18 14.5 C18 10.5 12 3.5 12 3.5 Z"/>',
   eraser: '<path d="M9.5 18.5 L4.5 13.5 L13 5 L18.5 10.5 L10.5 18.5 Z"/><path d="M8 20 H20"/>',
   'lasso-select': '<ellipse cx="12" cy="10.5" rx="7.5" ry="5.5" stroke-dasharray="3.4 2.6"/><path d="M8.5 15.5 C6.5 17.5 10 19 8 21"/>',
@@ -32,7 +33,7 @@ const ICONS: Record<string, string> = Object.fromEntries(
  * precise crosshair with the tool icon beside it. */
 function cursorFor(tool: Tool, zoom: number, baseWidth: number): string {
   const enc = (v: string) => `url("data:image/svg+xml,${encodeURIComponent(v)}")`;
-  if (tool === 'pen' || tool === 'pencil' || tool === 'fineliner' || tool === 'marker' || tool === 'eraser') {
+  if (tool === 'pen' || tool === 'pencil' || tool === 'sketch' || tool === 'fineliner' || tool === 'marker' || tool === 'eraser') {
     let d: number;
     if (tool === 'eraser') {
       const rWorld = 6 / Math.min(1, zoom) + 6;
@@ -64,6 +65,7 @@ function cursorFor(tool: Tool, zoom: number, baseWidth: number): string {
 const TOOL_INFO: Record<Tool, { label: string; key: string }> = {
   pen: { label: 'Pen', key: 'P' },
   pencil: { label: 'Pencil', key: 'B' },
+  sketch: { label: 'Sketch', key: 'K' },
   fineliner: { label: 'Fineliner', key: 'F' },
   marker: { label: 'Marker', key: 'M' },
   'lasso-fill': { label: 'Lasso fill', key: 'G' },
@@ -78,7 +80,7 @@ const TOOL_INFO: Record<Tool, { label: string; key: string }> = {
 // Tools are grouped: the toolbar shows one slot per group; tapping an active
 // group expands a flyout with the group's tools.
 const TOOL_GROUPS: { id: string; tools: Tool[] }[] = [
-  { id: 'draw', tools: ['pen', 'pencil', 'fineliner', 'marker', 'lasso-fill'] },
+  { id: 'draw', tools: ['pen', 'pencil', 'sketch', 'fineliner', 'marker', 'lasso-fill'] },
   { id: 'eraser', tools: ['eraser'] },
   { id: 'select', tools: ['cursor', 'lasso-select', 'hand'] },
   { id: 'text', tools: ['text'] },
@@ -1440,7 +1442,7 @@ export function buildUI(
     invalidate();
   });
 
-  const DRAW_TOOLS: Tool[] = ['pen', 'pencil', 'fineliner', 'marker', 'lasso-fill'];
+  const DRAW_TOOLS: Tool[] = ['pen', 'pencil', 'sketch', 'fineliner', 'marker', 'lasso-fill'];
   function refresh() {
     if (DRAW_TOOLS.includes(state.tool)) state.lastDrawTool = state.tool;
     state.updateCursor();
