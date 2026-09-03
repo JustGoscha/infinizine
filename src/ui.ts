@@ -978,26 +978,31 @@ export function buildUI(
       0.75,
       Math.min(80, Math.max(2, Math.min(30, 340 / Math.max(1, maxCycle))) * tlZoom),
     );
-    if (tlView === 'live') {
-      // time ruler: second marks labeled, half-second ticks between
+    {
+      // time ruler (both views): second marks labeled, half-second ticks between
+      const pxPerTick = tlView === 'live' ? liveScale : 30 * tlZoom;
+      const axisTicks = tlView === 'live' ? maxCycle : areaTotalAll;
       const ruler = document.createElement('div');
       ruler.className = 'tl-ruler';
       const rhead = document.createElement('div');
       rhead.className = 'tl-ruler-head';
+      rhead.style.width = tlView === 'live' ? '158px' : '130px';
       const scaleEl = document.createElement('div');
       scaleEl.className = 'tl-ruler-scale';
-      scaleEl.style.width = `${maxCycle * liveScale}px`;
-      const totalSec = maxCycle / area.fps;
-      for (let t = 0; t <= totalSec + 0.001; t += 0.5) {
+      scaleEl.style.width = `${axisTicks * pxPerTick}px`;
+      const totalSec = axisTicks / area.fps;
+      // avoid label soup when zoomed far out
+      const step = pxPerTick * area.fps < 26 ? 1 : 0.5;
+      for (let t = 0; t <= totalSec + 0.001; t += step) {
         const isSec = Math.abs(t - Math.round(t)) < 0.001;
         const tick = document.createElement('i');
         tick.className = `tl-tick${isSec ? ' sec' : ''}`;
-        tick.style.left = `${t * area.fps * liveScale}px`;
+        tick.style.left = `${t * area.fps * pxPerTick}px`;
         scaleEl.appendChild(tick);
         if (isSec) {
           const lab = document.createElement('em');
           lab.className = 'tl-tick-label';
-          lab.style.left = `${t * area.fps * liveScale + 3}px`;
+          lab.style.left = `${t * area.fps * pxPerTick + 3}px`;
           lab.textContent = `${Math.round(t)}s`;
           scaleEl.appendChild(lab);
         }
