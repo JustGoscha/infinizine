@@ -772,22 +772,22 @@ export function buildUI(
     const area = tlAreaId ? store.area(tlAreaId) : undefined;
     const timeEl = tl.querySelector('#tl-time') as HTMLElement | null;
     if (!area || !timeEl) return;
-    const total = Math.max(1, ...area.layers.map((l) => l.frames.reduce((a, f) => a + f.duration, 0)));
-    // the clock depends on the tab: keyframe loop vs longest live line
-    let clockTicks = total;
-    if (tlView === 'live') {
-      let maxCycle = 1;
-      for (const l of area.layers) {
-        if (l.kind !== 'live') continue;
-        if (l.liveMode === 'additive') { maxCycle = Math.max(maxCycle, total); continue; }
-        for (const st of store.doc.elements) {
-          if (st.kind !== 'stroke' || st.alayer !== l.id) continue;
-          const drawn = (st.points[st.points.length - 1]?.t ?? 0) * area.fps;
-          maxCycle = Math.max(maxCycle, Math.ceil(drawn + (st.animLife ?? 6)));
-        }
+    // pipeline length: longest keyframe track + every non-looping live line's end;
+    // the live-view clock also covers self-looping lines' full cycles
+    const framesTotal = Math.max(1, ...area.layers.map((l) => l.frames.reduce((a, f) => a + f.duration, 0)));
+    let total = framesTotal;
+    let liveMax = 1;
+    for (const l of area.layers) {
+      if (l.kind !== 'live') continue;
+      for (const st of store.doc.elements) {
+        if (st.kind !== 'stroke' || st.alayer !== l.id) continue;
+        const drawn = (st.points[st.points.length - 1]?.t ?? 0) * area.fps;
+        const end = Math.ceil((st.animStart ?? 0) + drawn + Math.max(1, st.animLife ?? 6));
+        liveMax = Math.max(liveMax, end);
+        if (l.loop === false) total = Math.max(total, end);
       }
-      clockTicks = maxCycle;
     }
+    const clockTicks = tlView === 'live' ? Math.max(total, liveMax) : total;
     const loopSec = clockTicks / area.fps;
     if (!state.playingAreas) {
       timeEl.textContent = `${loopSec.toFixed(1)}s`;

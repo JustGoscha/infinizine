@@ -390,8 +390,20 @@ export class Renderer {
     for (const area of this.store.doc.areas) {
       const editing =
         area.id === this.input.activeAreaId && !this.input.playingAreas && !this.input.presenting;
-      // layers don't loop independently: the area loops as one, over its longest track
-      const areaTotal = Math.max(1, ...area.layers.map((l) => l.frames.reduce((a, f) => a + f.duration, 0)));
+      // the area pipeline spans its longest keyframe track AND every non-looping
+      // live line's end (start + drawing + decay); self-looping lines don't extend it
+      let areaTotal = Math.max(1, ...area.layers.map((l) => l.frames.reduce((a, f) => a + f.duration, 0)));
+      for (const l of area.layers) {
+        if (l.kind !== 'live' || l.loop !== false) continue;
+        for (const el of this.store.doc.elements) {
+          if (el.kind !== 'stroke' || el.alayer !== l.id) continue;
+          const drawn = (el.points[el.points.length - 1]?.t ?? 0) * area.fps;
+          areaTotal = Math.max(
+            areaTotal,
+            Math.ceil((el.animStart ?? 0) + drawn + Math.max(1, el.animLife ?? 6)),
+          );
+        }
+      }
       const rawTick = Math.floor((now - this.input.playEpoch) * area.fps);
       let playTick = rawTick;
       playTick = area.loop ? ((playTick % areaTotal) + areaTotal) % areaTotal : Math.min(playTick, areaTotal - 1);
