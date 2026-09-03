@@ -703,6 +703,7 @@ export function buildUI(
   document.body.appendChild(tl);
   let tlAreaId: string | null = null;
   let tlView: 'frames' | 'live' = 'frames';
+  let tlZoom = 1; // horizontal duration-resolution zoom
 
   function closeTimeline() {
     tlAreaId = null;
@@ -895,6 +896,8 @@ export function buildUI(
         <button id="tl-play" title="Play/pause">${state.playingAreas ? '⏸' : '▶'}</button>
         <span class="tl-time" id="tl-time"></span>
         <input id="tl-fps" type="number" min="1" max="60" value="${area.fps}" title="fps"><span class="tl-fpslabel">fps</span>
+        <button id="tl-zoom-out" class="tl-zoom" title="Zoom timeline out">−</button>
+        <button id="tl-zoom-in" class="tl-zoom" title="Zoom timeline in">＋</button>
         <button id="tl-loop" class="tl-toggle ${area.loop ? 'on' : ''}">loop</button>
         <button id="tl-clip" class="tl-toggle ${area.clip ? 'on' : ''}" title="Cut off ink outside the area">clip</button>
         <button id="tl-onion" class="tl-toggle ${state.onionSkin ? 'on' : ''}">onion</button>
@@ -971,7 +974,10 @@ export function buildUI(
       return cycle;
     };
     const maxCycle = Math.max(areaTotalAll, ...area.layers.filter((l) => l.kind === 'live').map(layerCycle));
-    const liveScale = Math.max(2, Math.min(30, 340 / Math.max(1, maxCycle)));
+    const liveScale = Math.max(
+      0.75,
+      Math.min(80, Math.max(2, Math.min(30, 340 / Math.max(1, maxCycle))) * tlZoom),
+    );
     if (tlView === 'live') {
       // time ruler: second marks labeled, half-second ticks between
       const ruler = document.createElement('div');
@@ -1141,7 +1147,7 @@ export function buildUI(
         const b = document.createElement('button');
         b.className = `tl-frame${f.id === state.activeFrameId ? ' active' : ''}${filledFrames.has(f.id) ? ' filled' : ''}`;
         b.dataset.fid = f.id;
-        b.style.width = `${30 + (f.duration - 1) * 30}px`;
+        b.style.width = `${Math.max(14, 30 * f.duration * tlZoom)}px`;
         b.textContent = String(i + 1);
         b.title = `${l.name} · frame ${i + 1} · ${f.duration}f (drag to reorder)`;
         // tap selects; horizontal drag reorders within the layer
@@ -1212,6 +1218,22 @@ export function buildUI(
     q('.tl-name').addEventListener('dblclick', (e) => {
       inlineRename(e.target as HTMLElement, area.name, (v) => store.renameArea(area.id, v));
     });
+    const setTlZoom = (v: number) => {
+      tlZoom = Math.max(0.25, Math.min(8, v));
+      renderTimeline();
+    };
+    q('#tl-zoom-in').addEventListener('click', () => setTlZoom(tlZoom * 1.4));
+    q('#tl-zoom-out').addEventListener('click', () => setTlZoom(tlZoom / 1.4));
+    (tl.querySelector('#tl-tracks') as HTMLElement).addEventListener(
+      'wheel',
+      (e) => {
+        if (!(e.ctrlKey || e.metaKey)) return;
+        e.preventDefault();
+        e.stopPropagation();
+        setTlZoom(tlZoom * Math.exp(-e.deltaY * 0.01));
+      },
+      { passive: false },
+    );
     q('#tl-play').addEventListener('click', () => {
       state.playingAreas = !state.playingAreas;
       state.playEpoch = performance.now() / 1000;
