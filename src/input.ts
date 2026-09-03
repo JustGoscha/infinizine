@@ -1105,6 +1105,11 @@ export function attachInput(
   window.addEventListener('keydown', (e) => {
     const tag = (e.target as HTMLElement).tagName;
     if (tag === 'INPUT' || tag === 'TEXTAREA' || (e.target as HTMLElement).isContentEditable) return;
+    if (e.key === 'Escape' && !state.presenting && state.selection.size) {
+      state.selection.clear();
+      invalidate();
+      return;
+    }
     if ((e.key === 'Delete' || e.key === 'Backspace') && state.selection.size) {
       e.preventDefault();
       const els = store.doc.elements.filter((el) => state.selection.has(el.id));

@@ -1039,6 +1039,13 @@ export function buildUI(
             state.activeFrameId = null;
             if (dragging) {
               store.shiftLiveLayer(l.id, Math.round((ev.clientX - startX) / liveScale));
+            } else if (state.activeLayerId === l.id) {
+              // tapping the active line again deselects it
+              state.selection.clear();
+              state.blinkLayerId = null;
+              const topFrames = [...area.layers].reverse().find((x) => x.kind !== 'live');
+              state.activeLayerId = topFrames?.id ?? l.id;
+              state.activeFrameId = topFrames?.frames[0]?.id ?? null;
             } else {
               // select the layer's strokes and blink them so it's obvious which ink this is
               state.selection = new Set(strokes.map((st) => st.id));
