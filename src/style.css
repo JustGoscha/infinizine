@@ -401,17 +401,24 @@ html, body {
   margin-bottom: 8px;
   max-height: 40vh;
   overflow-y: auto;
+  overflow-x: auto; /* long or right-shifted live lines scroll as one unit */
 }
 .tl-track {
   display: flex;
   align-items: stretch;
   border-bottom: 1px solid var(--line);
+  width: max-content;
+  min-width: 100%;
 }
 .tl-track:last-child { border-bottom: none; }
 .tl-track-head {
   flex: none;
   width: 130px;
   flex-wrap: nowrap;
+  position: sticky;
+  left: 0;
+  z-index: 2;
+  background: var(--card);
   display: flex;
   align-items: center;
   gap: 2px;
@@ -419,7 +426,7 @@ html, body {
   border-right: 1px solid var(--line);
   cursor: pointer;
 }
-.tl-track.active .tl-track-head { background: rgba(112, 72, 232, 0.1); }
+.tl-track.active .tl-track-head { background: #efeafd; }
 .tl-track.live .tl-track-head { width: 175px; }
 .tl-track-head .tl-lname { margin-right: auto; font-weight: 600; font-size: 13px; }
 .tl-track.active .tl-track-head .tl-lname { color: #7048e8; }
@@ -482,11 +489,12 @@ html, body {
   padding: 0;
 }
 
-/* frames strip: flat table cells, no gaps, no rounding */
+/* frames strip: cells/bars flow inside the shared scrolling tracks area */
 .tl-frames {
   display: flex;
-  overflow-x: auto;
-  flex: 1;
+  flex: 1 0 auto;
+  width: max-content;
+  min-width: 100%;
   position: relative;
 }
 .tl-frame {
