@@ -8,7 +8,7 @@ import { AnimArea, Stroke, FillShape, Element, Page, TextBox, uid } from './type
 import { hitElement, elementsInLasso } from './geometry';
 import { layoutText, layoutHeight } from './text';
 
-export type Tool = 'pen' | 'fineliner' | 'marker' | 'eraser' | 'cursor' | 'lasso-select' | 'lasso-fill' | 'text' | 'anim' | 'hand';
+export type Tool = 'pen' | 'pencil' | 'fineliner' | 'marker' | 'eraser' | 'cursor' | 'lasso-select' | 'lasso-fill' | 'text' | 'anim' | 'hand';
 
 /** While an anim area is selected, only the active frame's elements (and the
  * area's timed live-ink strokes) are editable; otherwise only untagged ones. */
@@ -362,6 +362,7 @@ export function attachInput(
         panLast = { x: e.clientX, y: e.clientY };
         return;
       case 'pen':
+      case 'pencil':
       case 'fineliner':
       case 'marker': {
         strokeStart = performance.now() / 1000;
@@ -391,7 +392,7 @@ export function attachInput(
           };
         }
         state.live = {
-          id: uid('st'), kind: 'stroke', tool: activeTool as 'pen' | 'fineliner' | 'marker',
+          id: uid('st'), kind: 'stroke', tool: activeTool as 'pen' | 'pencil' | 'fineliner' | 'marker',
           color: state.color,
           baseWidth: state.baseWidth / (activeTool === 'fineliner' ? 1.4 : 1),
           opacity: activeTool === 'marker' ? 0.45 : 1,
@@ -1119,7 +1120,7 @@ export function attachInput(
     if (mod) return;
     const map: Record<string, Tool> = {
       p: 'pen', f: 'fineliner', m: 'marker', e: 'eraser',
-      v: 'cursor', s: 'lasso-select', g: 'lasso-fill', t: 'text', a: 'anim', h: 'hand',
+      b: 'pencil', v: 'cursor', s: 'lasso-select', g: 'lasso-fill', t: 'text', a: 'anim', h: 'hand',
     };
     const tool = map[e.key.toLowerCase()];
     if (tool) {

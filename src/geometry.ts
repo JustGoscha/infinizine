@@ -57,6 +57,15 @@ export function densify(points: StrokePoint[]): StrokePoint[] {
 }
 
 const TOOL_OPTIONS = {
+  pencil: (w: number) => ({
+    size: w,
+    thinning: 0.7, // graphite responds hard to pressure
+    smoothing: 0.5,
+    streamline: 0.28,
+    simulatePressure: false,
+    start: { taper: w * 1.2, cap: true },
+    end: { taper: w * 2.5, cap: true },
+  }),
   pen: (w: number) => ({
     size: w,
     thinning: 0.62,
@@ -92,7 +101,7 @@ export function strokeOutline(stroke: Stroke): number[][] {
   const opts = { ...TOOL_OPTIONS[stroke.tool](stroke.baseWidth) };
   // pencil emulation for pressureless input (mouse/finger): synthesize
   // pressure from stroke velocity so lines still swell and taper
-  if (stroke.tool === 'pen' && stroke.points.every((p) => Math.abs(p.p - 0.5) < 0.001)) {
+  if ((stroke.tool === 'pen' || stroke.tool === 'pencil') && stroke.points.every((p) => Math.abs(p.p - 0.5) < 0.001)) {
     opts.simulatePressure = true;
   }
   return getStroke(pts, opts);

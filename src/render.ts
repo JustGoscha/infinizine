@@ -46,6 +46,35 @@ export class Renderer {
   }
 
   invalidate() { this.dirty = true; }
+
+  // Graphite grain: a tinted noise tile fills pencil outlines. Pattern space is
+  // scaled by 1/zoom so the grain stays screen-constant like real tooth.
+  private grainCache = new Map<string, CanvasPattern>();
+  private grainPattern(color: string, z: number): CanvasPattern | string {
+    let pat = this.grainCache.get(color);
+    if (!pat) {
+      const tile = document.createElement('canvas');
+      tile.width = tile.height = 64;
+      const c = tile.getContext('2d')!;
+      c.fillStyle = color;
+      // dense speckle with holes = paper tooth showing through
+      for (let i = 0; i < 2600; i++) {
+        c.globalAlpha = 0.3 + Math.random() * 0.7;
+        const sz = Math.random() < 0.85 ? 1 : 2;
+        c.fillRect(Math.random() * 64, Math.random() * 64, sz, sz);
+      }
+      const made = this.ctx.createPattern(tile, 'repeat');
+      if (!made) return color;
+      pat = made;
+      this.grainCache.set(color, pat);
+    }
+    pat.setTransform(new DOMMatrix().scale(1.3 / z));
+    return pat;
+  }
+
+  private inkStyle(el: Stroke, z: number): CanvasPattern | string {
+    return el.tool === 'pencil' ? this.grainPattern(el.color, z) : el.color;
+  }
   dropFromCache(id: string) { this.cache.delete(id); }
   clearCache() { this.cache.clear(); }
 
@@ -136,7 +165,7 @@ export class Renderer {
       const e = this.entry(el);
       if (!bboxIntersects(e.bbox, view)) return;
       ctx.globalAlpha = el.opacity * dimFactor;
-      ctx.fillStyle = el.color;
+      ctx.fillStyle = el.kind === 'stroke' ? this.inkStyle(el, z) : el.color;
       ctx.fill(e.path);
       if (selected.has(el.id) && !presenting) {
         ctx.globalAlpha = 0.9;
@@ -158,7 +187,7 @@ export class Renderer {
         }
       }
       ctx.globalAlpha = live.opacity;
-      ctx.fillStyle = live.color;
+      ctx.fillStyle = this.inkStyle(live, z);
       ctx.fill(outlineToPath(strokeOutline(live)));
     };
     // Animation: each layer runs its own timeline. Deselected areas always play;
@@ -269,7 +298,7 @@ export class Renderer {
       }
       if (pts.length < 3) return;
       ctx.globalAlpha = el.opacity * dimFactor;
-      ctx.fillStyle = el.color;
+      ctx.fillStyle = this.inkStyle(el, z);
       ctx.fill(outlineToPath(strokeOutline({ ...el, points: pts })));
       ctx.globalAlpha = 1;
     };
