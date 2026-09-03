@@ -100,29 +100,34 @@ export class Renderer {
   // A soft grainy nib is stamped along the vector samples; low-alpha stamps
   // overlap and build up like graphite. Strokes are rasterized once per zoom
   // bucket and cached; the vector data stays the source of truth.
-  private nibCache = new Map<string, HTMLCanvasElement>();
-  private nib(color: string): HTMLCanvasElement {
-    let n = this.nibCache.get(color);
-    if (!n) {
-      n = document.createElement('canvas');
-      n.width = n.height = 64;
-      const c = n.getContext('2d')!;
-      c.fillStyle = color;
-      for (let i = 0; i < 1500; i++) {
-        // radial falloff × speckle = soft toothy dot
-        const r = Math.sqrt(Math.random()) * 31;
-        const ang = Math.random() * Math.PI * 2;
-        const fall = Math.pow(1 - r / 32, 1.4);
-        c.globalAlpha = fall * (0.25 + Math.random() * 0.75);
-        c.fillRect(32 + Math.cos(ang) * r, 32 + Math.sin(ang) * r, 1.3, 1.3);
+  // several nib variants per color — reusing one tile creates visible repeats
+  private nibCache = new Map<string, HTMLCanvasElement[]>();
+  private nibs(color: string): HTMLCanvasElement[] {
+    let set = this.nibCache.get(color);
+    if (!set) {
+      set = [];
+      for (let v = 0; v < 8; v++) {
+        const n = document.createElement('canvas');
+        n.width = n.height = 64;
+        const c = n.getContext('2d')!;
+        c.fillStyle = color;
+        for (let i = 0; i < 1500; i++) {
+          // radial falloff × speckle = soft toothy dot
+          const r = Math.sqrt(Math.random()) * 31;
+          const ang = Math.random() * Math.PI * 2;
+          const fall = Math.pow(1 - r / 32, 1.4);
+          c.globalAlpha = fall * (0.25 + Math.random() * 0.75);
+          c.fillRect(32 + Math.cos(ang) * r, 32 + Math.sin(ang) * r, 1.3, 1.3);
+        }
+        set.push(n);
       }
-      this.nibCache.set(color, n);
+      this.nibCache.set(color, set);
     }
-    return n;
+    return set;
   }
 
   private stampStroke(target: CanvasRenderingContext2D, el: Stroke, alphaScale = 1, maxStamps = Infinity) {
-    const nib = this.nib(el.color);
+    const nib = this.nibs(el.color);
     const pts = densify(filterPressure(el.points));
     const wBase = el.baseWidth;
     const spacing = Math.max(0.3, wBase * 0.28);
@@ -140,12 +145,24 @@ export class Renderer {
       }
       carry = d - len;
     }
+    // deterministic per-stamp randomness: variant, rotation, jitter — kills the
+    // repeated-texture chain look of reusing one tile in one orientation
+    const rnd = (i: number, salt: number) => {
+      const x = Math.sin(i * 127.1 + salt * 311.7) * 43758.5453;
+      return x - Math.floor(x);
+    };
     const start = Math.max(0, stamps.length - maxStamps);
     for (let i = start; i < stamps.length; i++) {
       const st = stamps[i];
-      const r = wBase * (0.3 + st.p * 0.85);
-      target.globalAlpha = alphaScale * (0.14 + st.p * 0.24);
-      target.drawImage(nib, st.x - r, st.y - r, r * 2, r * 2);
+      const r = wBase * (0.3 + st.p * 0.85) * (0.85 + rnd(i, 3) * 0.3);
+      const jx = (rnd(i, 1) - 0.5) * r * 0.5;
+      const jy = (rnd(i, 2) - 0.5) * r * 0.5;
+      target.globalAlpha = alphaScale * (0.12 + st.p * 0.24) * (0.7 + rnd(i, 4) * 0.6);
+      target.save();
+      target.translate(st.x + jx, st.y + jy);
+      target.rotate(rnd(i, 5) * Math.PI * 2);
+      target.drawImage(nib[Math.floor(rnd(i, 6) * nib.length)], -r, -r, r * 2, r * 2);
+      target.restore();
     }
     target.globalAlpha = 1;
   }
