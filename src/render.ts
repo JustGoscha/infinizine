@@ -3,7 +3,7 @@
 
 import { Camera, baseZoom } from './camera';
 import { Element, FillShape, Page, Stroke, StrokePoint } from './types';
-import { strokeOutline, pencilOutlines, outlineToPath, elementBBox, bboxIntersects, BBox } from './geometry';
+import { strokeOutline, pencilOutlines, outlineToPath, elementBBox, bboxIntersects, densify, filterPressure, BBox } from './geometry';
 import { layoutText, fontFor, segWidth, LINE_HEIGHT } from './text';
 import { moveHandleRect, moveAllHandleRect, deleteHandleRect, eyeHandleRect, type InputState } from './input';
 import { Store } from './store';
@@ -46,8 +46,8 @@ export class Renderer {
   }
 
   invalidate() { this.dirty = true; }
-  dropFromCache(id: string) { this.cache.delete(id); }
-  clearCache() { this.cache.clear(); }
+  dropFromCache(id: string) { this.cache.delete(id); this.pencilCache.delete(id); }
+  clearCache() { this.cache.clear(); this.pencilCache.clear(); }
 
   private entry(el: Stroke | FillShape): CacheEntry {
     let e = this.cache.get(el.id);
@@ -59,10 +59,6 @@ export class Renderer {
       e = { path, bbox: elementBBox(el) };
       if (el.kind === 'stroke' && el.tool === 'sketch') {
         e.passes = pencilOutlines(el).map(outlineToPath);
-      }
-      if (el.kind === 'stroke' && el.tool === 'pencil') {
-        // narrower core: graphite is dense in the middle, broken at the edges
-        e.core = outlineToPath(strokeOutline({ ...el, baseWidth: el.baseWidth * 0.55 }));
       }
       this.cache.set(el.id, e);
     }
@@ -100,23 +96,83 @@ export class Renderer {
     return el.tool === 'pencil' || el.tool === 'sketch' ? this.grainPattern(el.color, z) : el.color;
   }
 
-  /** Pencil = layered: faint solid body, grain over it, near-solid narrow core. */
-  private paintPencil(e: CacheEntry, el: Stroke, z: number, alpha: number) {
-    const { ctx } = this;
-    ctx.globalAlpha = alpha * 0.3;
-    ctx.fillStyle = el.color;
-    ctx.fill(e.path);
-    ctx.globalAlpha = alpha;
-    ctx.fillStyle = this.grainPattern(el.color, z);
-    ctx.fill(e.path);
-    if (e.core) {
-      ctx.globalAlpha = alpha * 0.75;
-      ctx.fillStyle = el.color;
-      ctx.fill(e.core);
-      ctx.globalAlpha = alpha * 0.9;
-      ctx.fillStyle = this.grainPattern(el.color, z);
-      ctx.fill(e.core);
+  // ---- pencil: stamp-based rendering (real brush-engine technique) ----
+  // A soft grainy nib is stamped along the vector samples; low-alpha stamps
+  // overlap and build up like graphite. Strokes are rasterized once per zoom
+  // bucket and cached; the vector data stays the source of truth.
+  private nibCache = new Map<string, HTMLCanvasElement>();
+  private nib(color: string): HTMLCanvasElement {
+    let n = this.nibCache.get(color);
+    if (!n) {
+      n = document.createElement('canvas');
+      n.width = n.height = 64;
+      const c = n.getContext('2d')!;
+      c.fillStyle = color;
+      for (let i = 0; i < 1500; i++) {
+        // radial falloff × speckle = soft toothy dot
+        const r = Math.sqrt(Math.random()) * 31;
+        const ang = Math.random() * Math.PI * 2;
+        const fall = Math.pow(1 - r / 32, 1.4);
+        c.globalAlpha = fall * (0.25 + Math.random() * 0.75);
+        c.fillRect(32 + Math.cos(ang) * r, 32 + Math.sin(ang) * r, 1.3, 1.3);
+      }
+      this.nibCache.set(color, n);
     }
+    return n;
+  }
+
+  private stampStroke(target: CanvasRenderingContext2D, el: Stroke, alphaScale = 1, maxStamps = Infinity) {
+    const nib = this.nib(el.color);
+    const pts = densify(filterPressure(el.points));
+    const wBase = el.baseWidth;
+    const spacing = Math.max(0.3, wBase * 0.28);
+    const stamps: { x: number; y: number; p: number }[] = [];
+    let carry = 0;
+    for (let i = 1; i < pts.length; i++) {
+      const a = pts[i - 1], b = pts[i];
+      const len = Math.hypot(b.x - a.x, b.y - a.y);
+      if (!len) continue;
+      let d = carry;
+      while (d < len) {
+        const t = d / len;
+        stamps.push({ x: a.x + (b.x - a.x) * t, y: a.y + (b.y - a.y) * t, p: a.p + (b.p - a.p) * t });
+        d += spacing;
+      }
+      carry = d - len;
+    }
+    const start = Math.max(0, stamps.length - maxStamps);
+    for (let i = start; i < stamps.length; i++) {
+      const st = stamps[i];
+      const r = wBase * (0.3 + st.p * 0.85);
+      target.globalAlpha = alphaScale * (0.14 + st.p * 0.24);
+      target.drawImage(nib, st.x - r, st.y - r, r * 2, r * 2);
+    }
+    target.globalAlpha = 1;
+  }
+
+  private pencilCache = new Map<string, { c: HTMLCanvasElement; bucket: number; bbox: BBox }>();
+  private pencilRaster(el: Stroke, z: number) {
+    let bucket = Math.pow(2, Math.round(Math.log2(Math.max(0.25, Math.min(8, z)))));
+    const hit = this.pencilCache.get(el.id);
+    if (hit && hit.bucket === bucket) return hit;
+    const bbox = elementBBox(el);
+    let w = Math.max(1, Math.ceil((bbox.maxX - bbox.minX) * bucket));
+    let h = Math.max(1, Math.ceil((bbox.maxY - bbox.minY) * bucket));
+    while ((w > 4096 || h > 4096) && bucket > 0.25) {
+      bucket /= 2;
+      w = Math.max(1, Math.ceil((bbox.maxX - bbox.minX) * bucket));
+      h = Math.max(1, Math.ceil((bbox.maxY - bbox.minY) * bucket));
+    }
+    const c = document.createElement('canvas');
+    c.width = w;
+    c.height = h;
+    const cc = c.getContext('2d')!;
+    cc.scale(bucket, bucket);
+    cc.translate(-bbox.minX, -bbox.minY);
+    this.stampStroke(cc, el);
+    const entry = { c, bucket, bbox };
+    this.pencilCache.set(el.id, entry);
+    return entry;
   }
 
   private draw() {
@@ -193,7 +249,15 @@ export class Renderer {
       const e = this.entry(el);
       if (!bboxIntersects(e.bbox, view)) return;
       if (el.kind === 'stroke' && el.tool === 'pencil') {
-        this.paintPencil(e, el, z, el.opacity * dimFactor);
+        const pr = this.pencilRaster(el, z);
+        ctx.globalAlpha = el.opacity * dimFactor;
+        ctx.drawImage(
+          pr.c,
+          pr.bbox.minX,
+          pr.bbox.minY,
+          pr.c.width / pr.bucket,
+          pr.c.height / pr.bucket,
+        );
       } else if (el.kind === 'stroke' && el.tool === 'sketch' && e.passes) {
         ctx.save();
         ctx.globalCompositeOperation = 'multiply';
@@ -228,13 +292,7 @@ export class Renderer {
         }
       }
       if (live.tool === 'pencil') {
-        const e: CacheEntry = {
-          path: outlineToPath(strokeOutline(live)),
-          bbox: elementBBox(live),
-          core: outlineToPath(strokeOutline({ ...live, baseWidth: live.baseWidth * 0.55 })),
-        };
-        this.paintPencil(e, live, z, live.opacity);
-        ctx.globalAlpha = 1;
+        this.stampStroke(ctx, live, live.opacity, 1200);
         return;
       }
       if (live.tool === 'sketch') {
