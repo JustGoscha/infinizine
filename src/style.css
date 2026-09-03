@@ -495,7 +495,7 @@ html, body {
 .tl-track-head button:active { background: var(--ink); color: var(--card); }
 .timeline.hidden { display: none; }
 
-.tl-head { display: flex; align-items: center; gap: 6px; margin-bottom: 8px; }
+.tl-head { display: flex; align-items: center; gap: 6px; margin-bottom: 8px; flex-wrap: wrap; row-gap: 4px; }
 .tl-grip { cursor: grab; color: var(--ink-soft); font-size: 15px; padding: 2px 4px; touch-action: none; }
 .tl-name { font-weight: 700; margin-right: auto; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
 .tl-head button {
@@ -618,7 +618,7 @@ body.tl-docked-side .topbar { z-index: 40; }
   display: flex;
   flex-direction: column;
   padding-top: 62px;
-  padding-bottom: 14px;
+  padding-bottom: 96px; /* keep the ops row clear of the floating toolbar */
 }
 .timeline.dock-left { left: 0 !important; right: auto !important; border-left: none; border-top: none; border-bottom: none; }
 .timeline.dock-right { right: 0 !important; left: auto !important; border-right: none; border-top: none; border-bottom: none; }
@@ -794,7 +794,7 @@ body.tl-docked-side .topbar { z-index: 40; }
 .tl-track-head.layer-hidden .tl-lname { opacity: 0.35; text-decoration: line-through; }
 .tl-track-head button svg { width: 15px; height: 15px; vertical-align: -3px; }
 
-.tl-ops { display: flex; align-items: center; gap: 2px; margin-bottom: 6px; }
+.tl-ops { display: flex; align-items: center; gap: 2px; margin-bottom: 6px; flex-wrap: wrap; row-gap: 4px; }
 .tl-ops button {
   border: 1px solid var(--line);
   background: transparent;
