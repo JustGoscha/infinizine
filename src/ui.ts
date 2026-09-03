@@ -146,7 +146,9 @@ export function buildUI(
         <button class="chip" id="docs" title="My zines">${svg('<path d="M4 7 V19 A1.5 1.5 0 0 0 5.5 20.5 H18.5 A1.5 1.5 0 0 0 20 19 V9.5 A1.5 1.5 0 0 0 18.5 8 H12 L10 5.5 H5.5 A1.5 1.5 0 0 0 4 7 Z"/>')}</button>
         <button class="chip" id="undo" title="Undo (⌘Z)">↩</button>
         <button class="chip" id="redo" title="Redo (⇧⌘Z)">↪</button>
-        <button class="chip" id="finger-toggle" title="Finger drawing"></button>
+        <button class="chip" id="finger-toggle" title="Finger mode"></button>
+        <button class="chip" id="eagle" title="Eagle view: fit everything, tap again to return">${svg('<path d="M4 9V4h5 M20 9V4h-5 M4 15v5h5 M20 15v5h-5"/><rect x="9.5" y="9.5" width="5" height="5"/>')}</button>
+        <button class="chip" id="zoom-lock" title="Zoom lock"></button>
         <button class="chip" id="present" title="Present">${svg('<path d="M8 5.5 L18 12 L8 18.5 Z"/>')}</button>
       </div>
     </header>
@@ -1381,9 +1383,59 @@ export function buildUI(
   });
 
   const fingerToggle = root.querySelector('#finger-toggle') as HTMLButtonElement;
+  // no fingers on a desktop — hide the toggle where there's no touch input
+  if (navigator.maxTouchPoints === 0) fingerToggle.hidden = true;
   fingerToggle.addEventListener('click', () => {
-    state.fingerDraws = !state.fingerDraws;
+    const order: (typeof state.fingerMode)[] = ['draw', 'pan', 'select'];
+    state.fingerMode = order[(order.indexOf(state.fingerMode) + 1) % order.length];
+    state.fingerDraws = state.fingerMode === 'draw';
     refresh();
+  });
+
+  const zoomLockBtn = root.querySelector('#zoom-lock') as HTMLButtonElement;
+  zoomLockBtn.addEventListener('click', () => {
+    state.zoomLocked = !state.zoomLocked;
+    refresh();
+    invalidate();
+  });
+
+  // Eagle view: fit all content in view; tap again to return where you were
+  const eagleBtn = root.querySelector('#eagle') as HTMLButtonElement;
+  let eaglePrev: { x: number; y: number; zoom: number } | null = null;
+  eagleBtn.addEventListener('click', () => {
+    const canvasEl = document.getElementById('canvas') as HTMLCanvasElement;
+    if (eaglePrev) {
+      camera.x = eaglePrev.x;
+      camera.y = eaglePrev.y;
+      camera.zoom = eaglePrev.zoom;
+      eaglePrev = null;
+      eagleBtn.classList.remove('on');
+      state.updateCursor();
+      invalidate();
+      return;
+    }
+    let minX = Infinity, minY = Infinity, maxX = -Infinity, maxY = -Infinity;
+    const grow = (x1: number, y1: number, x2: number, y2: number) => {
+      minX = Math.min(minX, x1); minY = Math.min(minY, y1);
+      maxX = Math.max(maxX, x2); maxY = Math.max(maxY, y2);
+    };
+    for (const pg of store.doc.pages) grow(pg.x, pg.y, pg.x + pg.w, pg.y + pg.h);
+    for (const a of store.doc.areas) grow(a.x, a.y, a.x + a.w, a.y + a.h);
+    for (const el of store.doc.elements) {
+      if (el.kind === 'text') grow(el.x, el.y, el.x + el.w, el.y + el.h);
+      else for (const pt of el.points) grow(pt.x, pt.y, pt.x, pt.y);
+    }
+    if (minX === Infinity) return;
+    eaglePrev = { x: camera.x, y: camera.y, zoom: camera.zoom };
+    eagleBtn.classList.add('on');
+    camera.x = (minX + maxX) / 2;
+    camera.y = (minY + maxY) / 2;
+    camera.zoom = Math.max(
+      0.01,
+      Math.min(canvasEl.clientWidth / (maxX - minX + 80), canvasEl.clientHeight / (maxY - minY + 80), 20),
+    );
+    state.updateCursor();
+    invalidate();
   });
 
   const DRAW_TOOLS: Tool[] = ['pen', 'fineliner', 'marker', 'lasso-fill'];
@@ -1421,10 +1473,22 @@ export function buildUI(
     layerToggle.title = state.paintBehind
       ? 'Painting behind existing ink (tap for in front)'
       : 'Painting in front (tap to paint behind)';
-    fingerToggle.textContent = state.fingerDraws ? '👆✏️' : '👆🚫';
-    fingerToggle.title = state.fingerDraws
-      ? 'Finger draws (tap to make fingers pan only)'
-      : 'Fingers pan only (tap to let fingers draw)';
+    fingerToggle.textContent =
+      state.fingerMode === 'draw' ? '👆✏️' : state.fingerMode === 'pan' ? '👆✋' : '👆➰';
+    fingerToggle.title =
+      state.fingerMode === 'draw'
+        ? 'Finger draws (tap: finger pans)'
+        : state.fingerMode === 'pan'
+          ? 'Finger pans, two fingers zoom (tap: finger selects)'
+          : 'Finger selects, two fingers pan (tap: finger draws)';
+    const lockBtn = root.querySelector('#zoom-lock') as HTMLButtonElement;
+    lockBtn.innerHTML = state.zoomLocked
+      ? svg('<rect x="5.5" y="10.5" width="13" height="9" rx="1.5"/><path d="M8.5 10.5 V8 a3.5 3.5 0 0 1 7 0 v2.5"/>')
+      : svg('<rect x="5.5" y="10.5" width="13" height="9" rx="1.5"/><path d="M8.5 10.5 V8 a3.5 3.5 0 0 1 7 0"/>');
+    lockBtn.title = state.zoomLocked
+      ? 'Zoom locked — paint with what you\'ve got (tap to unlock)'
+      : 'Zoom unlocked (tap to lock)';
+    lockBtn.classList.toggle('on', state.zoomLocked);
   }
 
   state.updateCursor = () => {

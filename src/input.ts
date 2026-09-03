@@ -74,7 +74,9 @@ export class InputState {
   selection = new Set<string>();
   hidden = new Set<string>();
   penDetected = false;
-  fingerDraws = true; // auto-disabled once a pen is seen
+  fingerDraws = true; // legacy flag, kept in sync with fingerMode === 'draw'
+  fingerMode: 'draw' | 'pan' | 'select' = 'draw'; // switches to 'pan' once a pen is seen
+  zoomLocked = true; // Notes-style: paint with what you've got; unlock to zoom
   armedPageDrag: Page | null = null; // set by the page menu's Move action
   presenting = false; // presentation mode: render only page content
   presentPage: Page | null = null; // the single page shown while presenting
@@ -156,6 +158,7 @@ export function attachInput(
   let erased: Element[] = [];
   let panLast: { x: number; y: number } | null = null;
   let pinchDist = 0;
+  let pinchMid: { x: number; y: number } | null = null;
 
   // dragging pages / areas / selection
   let dragArea: AnimArea | null = null;
@@ -207,7 +210,7 @@ export function attachInput(
   function isDrawPointer(e: PointerEvent): boolean {
     if (e.pointerType === 'pen') return true;
     if (e.pointerType === 'mouse') return e.buttons === 1;
-    return state.fingerDraws && !state.penDetected && touches.size <= 1;
+    return state.fingerMode === 'draw' && touches.size <= 1;
   }
 
   function areaLabelAt(w: { x: number; y: number }): AnimArea | null {
@@ -226,7 +229,8 @@ export function attachInput(
     return null;
   }
 
-  function startAction(e: PointerEvent) {
+  function startAction(e: PointerEvent, toolOverride?: Tool) {
+    const activeTool = toolOverride ?? state.tool;
     // Presentation mode: any drag pans, no drawing/tools
     if (state.presenting) {
       panLast = { x: e.clientX, y: e.clientY };
@@ -353,7 +357,7 @@ export function attachInput(
       return;
     }
 
-    switch (state.tool) {
+    switch (activeTool) {
       case 'hand':
         panLast = { x: e.clientX, y: e.clientY };
         return;
@@ -387,10 +391,10 @@ export function attachInput(
           };
         }
         state.live = {
-          id: uid('st'), kind: 'stroke', tool: state.tool,
+          id: uid('st'), kind: 'stroke', tool: activeTool as 'pen' | 'fineliner' | 'marker',
           color: state.color,
-          baseWidth: state.baseWidth / (state.tool === 'fineliner' ? 1.4 : 1),
-          opacity: state.tool === 'marker' ? 0.45 : 1,
+          baseWidth: state.baseWidth / (activeTool === 'fineliner' ? 1.4 : 1),
+          opacity: activeTool === 'marker' ? 0.45 : 1,
           layer: state.paintBehind ? 'back' : 'front',
           ...anim,
           points: [{ x: w.x, y: w.y, p: pressureOf(e), t: 0 }],
@@ -425,7 +429,7 @@ export function attachInput(
           dragSelection = true;
           dragStartWorld = w;
           dragTotal = { x: 0, y: 0 };
-        } else if (state.tool === 'cursor') {
+        } else if (activeTool === 'cursor') {
           state.selection.clear();
           textDragStart = w;
           state.marquee = { x: w.x, y: w.y, w: 0, h: 0 };
@@ -867,6 +871,7 @@ export function attachInput(
     canvas.setPointerCapture(e.pointerId);
     if (e.pointerType === 'pen' && !state.penDetected) {
       state.penDetected = true;
+      state.fingerMode = 'pan';
       state.fingerDraws = false;
       state.onToolChange();
     }
@@ -880,11 +885,18 @@ export function attachInput(
         panLast = null;
         const [a, b] = [...touches.values()];
         pinchDist = Math.hypot(a.x - b.x, a.y - b.y);
+        pinchMid = { x: (a.x + b.x) / 2, y: (a.y + b.y) / 2 };
         invalidate();
         return;
       }
       if (touches.size > 2) return;
       if (!isDrawPointer(e)) {
+        if (state.fingerMode === 'select' && !state.presenting) {
+          // one finger selects (cursor semantics); two fingers pan/zoom
+          drawingPointer = e.pointerId;
+          startAction(e, 'cursor');
+          return;
+        }
         panLast = { x: e.clientX, y: e.clientY };
         return;
       }
@@ -1001,11 +1013,13 @@ export function attachInput(
         const dist = Math.hypot(a.x - b.x, a.y - b.y);
         const mid = { x: (a.x + b.x) / 2, y: (a.y + b.y) / 2 };
         const r = canvas.getBoundingClientRect();
-        if (pinchDist > 0) {
+        if (pinchMid) camera.panScreen(mid.x - pinchMid.x, mid.y - pinchMid.y);
+        if (pinchDist > 0 && !state.zoomLocked) {
           camera.zoomAt(dist / pinchDist, mid.x - r.left, mid.y - r.top, vw(), vh());
           state.updateCursor();
         }
         pinchDist = dist;
+        pinchMid = mid;
         invalidate();
         return;
       }
@@ -1018,7 +1032,7 @@ export function attachInput(
 
   const finish = (e: PointerEvent) => {
     touches.delete(e.pointerId);
-    if (touches.size < 2) pinchDist = 0;
+    if (touches.size < 2) { pinchDist = 0; pinchMid = null; }
     if (drawingPointer === e.pointerId || dragPage || dragArea || dragSelection || panLast || resizeArea) {
       drawingPointer = null;
       endAction(e);
@@ -1070,8 +1084,10 @@ export function attachInput(
     e.preventDefault();
     const r = canvas.getBoundingClientRect();
     if (zooming) {
-      camera.zoomAt(Math.exp(-e.deltaY * 0.01), e.clientX - r.left, e.clientY - r.top, vw(), vh());
-      state.updateCursor();
+      if (!state.zoomLocked) {
+        camera.zoomAt(Math.exp(-e.deltaY * 0.01), e.clientX - r.left, e.clientY - r.top, vw(), vh());
+        state.updateCursor();
+      }
     } else {
       camera.panScreen(-e.deltaX, -e.deltaY);
     }

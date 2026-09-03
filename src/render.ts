@@ -1,7 +1,7 @@
 // Canvas renderer: desk background, page frames, elements (with viewport
 // culling + cached outlines), live stroke, lasso/selection overlays.
 
-import { Camera } from './camera';
+import { Camera, baseZoom } from './camera';
 import { Element, FillShape, Page, Stroke, StrokePoint } from './types';
 import { strokeOutline, outlineToPath, elementBBox, bboxIntersects, BBox } from './geometry';
 import { layoutText, fontFor, segWidth, LINE_HEIGHT } from './text';
@@ -518,12 +518,13 @@ export class Renderer {
       ctx.fill(veil, 'evenodd');
     }
 
-    // Zoom badge
+    // Zoom badge: 100% = the first page fits the screen
     if (!presenting) {
+      const pct = Math.round((z / baseZoom(this.store.doc.pages[0], vw, vh)) * 100);
       ctx.font = '600 11px "Libre Franklin", sans-serif';
       ctx.fillStyle = 'rgba(42,36,26,0.55)';
       ctx.textAlign = 'right';
-      ctx.fillText(`${this.fps}fps · ${Math.round(z * 100)}%`, vw - 14, vh - 12);
+      ctx.fillText(`${this.fps}fps · ${this.input.zoomLocked ? '🔒 ' : ''}${pct}%`, vw - 14, vh - 12);
     }
   }
 

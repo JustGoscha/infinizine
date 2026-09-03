@@ -1,6 +1,14 @@
 // Viewport: world <-> screen mapping. Zoom clamped to 1%–500% per SPEC.
 
 export const MIN_ZOOM = 0.01;
+
+/** The zoom at which a page comfortably fills the viewport — displayed as 100%.
+ * A 16:9 page fills the screen at 100%; A4 fills its height. */
+export function baseZoom(page: { w: number; h: number } | undefined, vw: number, vh: number): number {
+  const w = page?.w ?? 420;
+  const h = page?.h ?? 594;
+  return Math.min(vw / (w * 1.06), vh / (h * 1.12));
+}
 export const MAX_ZOOM = 20; // 2000%
 
 export class Camera {

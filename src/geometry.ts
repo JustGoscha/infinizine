@@ -89,7 +89,13 @@ const TOOL_OPTIONS = {
 /** Variable-width outline polygon for a stroke (world coords). */
 export function strokeOutline(stroke: Stroke): number[][] {
   const pts = densify(filterPressure(stroke.points)).map((p) => [p.x, p.y, p.p]);
-  return getStroke(pts, TOOL_OPTIONS[stroke.tool](stroke.baseWidth));
+  const opts = { ...TOOL_OPTIONS[stroke.tool](stroke.baseWidth) };
+  // pencil emulation for pressureless input (mouse/finger): synthesize
+  // pressure from stroke velocity so lines still swell and taper
+  if (stroke.tool === 'pen' && stroke.points.every((p) => Math.abs(p.p - 0.5) < 0.001)) {
+    opts.simulatePressure = true;
+  }
+  return getStroke(pts, opts);
 }
 
 export function outlineToPath(outline: number[][]): Path2D {
