@@ -328,6 +328,7 @@ export class Renderer {
         ctx.fillStyle = el.color;
         ctx.fill(e.path);
       }
+      // selection outline applies to every stroke flavor
       if (selected.has(el.id) && !presenting) {
         ctx.globalAlpha = 0.9;
         ctx.strokeStyle = '#E8590C';
