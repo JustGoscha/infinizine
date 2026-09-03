@@ -1109,7 +1109,7 @@ export function attachInput(
     if (mod) return;
     const map: Record<string, Tool> = {
       p: 'pen', f: 'fineliner', m: 'marker', e: 'eraser',
-      b: 'pencil', k: 'sketch', v: 'cursor', s: 'lasso-select', g: 'lasso-fill', t: 'text', a: 'anim', h: 'hand',
+      b: 'pencil', v: 'cursor', s: 'lasso-select', g: 'lasso-fill', t: 'text', a: 'anim', h: 'hand',
     };
     const tool = map[e.key.toLowerCase()];
     if (tool) {
