@@ -511,6 +511,26 @@ html, body {
 .tl-zoom { font-weight: 700; padding: 4px 5px !important; color: var(--ink-soft) !important; }
 #tl-dock svg { width: 15px; height: 15px; vertical-align: -2px; }
 
+.tl-resize {
+  position: absolute;
+  left: 0;
+  right: 0;
+  height: 10px;
+  cursor: ns-resize;
+  touch-action: none;
+}
+.tl-resize.edge-top { top: -5px; }
+.tl-resize.edge-bottom { bottom: -5px; }
+.tl-resize::after {
+  content: '';
+  display: block;
+  width: 44px;
+  height: 4px;
+  margin: 3px auto;
+  background: var(--ink-soft);
+  border-radius: 2px;
+}
+
 /* docked timeline: clipped to the screen edge, full width */
 .timeline.dock-bottom,
 .timeline.dock-top {
@@ -523,6 +543,8 @@ html, body {
   border-radius: 0;
   box-shadow: none;
 }
+.timeline.dock-bottom .tl-tracks,
+.timeline.dock-top .tl-tracks { max-height: 60vh; }
 .timeline.dock-bottom {
   bottom: 0 !important;
   top: auto !important;

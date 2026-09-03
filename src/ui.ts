@@ -705,6 +705,7 @@ export function buildUI(
   let tlView: 'frames' | 'live' = 'frames';
   let tlZoom = 1; // horizontal duration-resolution zoom
   let tlDock: 'float' | 'bottom' | 'top' = 'float';
+  let tlHeight: number | null = null; // user-resized tracks height
 
   function closeTimeline() {
     tlAreaId = null;
@@ -1322,7 +1323,33 @@ export function buildUI(
     };
     on('#tl-shorter', () => dur(-1));
     on('#tl-longer', () => dur(1));
-    (tl.querySelector('.tl-tracks') as HTMLElement).scrollTop = prevScroll;
+    const tracksDiv = tl.querySelector('.tl-tracks') as HTMLElement;
+    tracksDiv.scrollTop = prevScroll;
+    if (tlHeight) tracksDiv.style.maxHeight = `${tlHeight}px`;
+    // docked: a grab edge resizes the tracks up/down
+    if (tlDock !== 'float') {
+      const rz = document.createElement('div');
+      rz.className = `tl-resize ${tlDock === 'bottom' ? 'edge-top' : 'edge-bottom'}`;
+      rz.title = 'Drag to resize';
+      rz.addEventListener('pointerdown', (e) => {
+        e.preventDefault();
+        rz.setPointerCapture(e.pointerId);
+        const startY = e.clientY;
+        const startH = tracksDiv.clientHeight;
+        const onMove = (ev: PointerEvent) => {
+          const d = tlDock === 'bottom' ? startY - ev.clientY : ev.clientY - startY;
+          tlHeight = Math.max(60, Math.min(window.innerHeight * 0.8, startH + d));
+          tracksDiv.style.maxHeight = `${tlHeight}px`;
+        };
+        const onUp = () => {
+          rz.removeEventListener('pointermove', onMove);
+          rz.removeEventListener('pointerup', onUp);
+        };
+        rz.addEventListener('pointermove', onMove);
+        rz.addEventListener('pointerup', onUp);
+      });
+      tl.appendChild(rz);
+    }
     playheadLoop();
     on('#tl-life-minus', () => {
       state.liveInkLife = Math.max(1, state.liveInkLife - 1);
