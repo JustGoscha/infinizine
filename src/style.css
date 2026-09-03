@@ -531,6 +531,10 @@ html, body {
   border-radius: 2px;
 }
 
+/* a docked timeline never buries the tool panel / topbar */
+body.tl-docked-bottom .toolbar { z-index: 40; }
+body.tl-docked-top .topbar { z-index: 40; }
+
 /* docked timeline: clipped to the screen edge, full width */
 .timeline.dock-bottom,
 .timeline.dock-top {

@@ -729,6 +729,21 @@ export function buildUI(
     invalidate();
   };
 
+  function setDock(mode: 'float' | 'bottom' | 'top') {
+    tlDock = mode;
+    tl.classList.toggle('dock-bottom', mode === 'bottom');
+    tl.classList.toggle('dock-top', mode === 'top');
+    // keep the tool panel / topbar reachable above a docked timeline
+    document.body.classList.toggle('tl-docked-bottom', mode === 'bottom');
+    document.body.classList.toggle('tl-docked-top', mode === 'top');
+    // docked position is class-driven; clear any drag inline coords
+    tl.style.left = '';
+    tl.style.top = '';
+    tl.style.right = '';
+    tl.style.bottom = '';
+    renderTimeline();
+  }
+
   // dragging the window
   let tlDrag: { x: number; y: number } | null = null;
   tl.addEventListener('pointerdown', (e) => {
@@ -744,7 +759,14 @@ export function buildUI(
     tl.style.bottom = 'auto';
     tl.style.right = 'auto';
   });
-  tl.addEventListener('pointerup', () => { tlDrag = null; });
+  tl.addEventListener('pointerup', () => {
+    if (tlDrag) {
+      const r = tl.getBoundingClientRect();
+      if (r.top < 56) setDock('top');
+      else if (window.innerHeight - r.bottom < 56) setDock('bottom');
+    }
+    tlDrag = null;
+  });
 
   function inlineRename(el: HTMLElement, current: string, commitName: (v: string) => void) {
     const input = document.createElement('input');
@@ -1239,15 +1261,7 @@ export function buildUI(
       renderTimeline();
     };
     q('#tl-dock').addEventListener('click', () => {
-      tlDock = tlDock === 'float' ? 'bottom' : tlDock === 'bottom' ? 'top' : 'float';
-      tl.classList.toggle('dock-bottom', tlDock === 'bottom');
-      tl.classList.toggle('dock-top', tlDock === 'top');
-      // docked position is class-driven; clear any drag inline coords
-      tl.style.left = '';
-      tl.style.top = '';
-      tl.style.right = '';
-      tl.style.bottom = '';
-      renderTimeline();
+      setDock(tlDock === 'float' ? 'bottom' : tlDock === 'bottom' ? 'top' : 'float');
     });
     q('#tl-zoom-in').addEventListener('click', () => setTlZoom(tlZoom * 1.4));
     q('#tl-zoom-out').addEventListener('click', () => setTlZoom(tlZoom / 1.4));
