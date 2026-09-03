@@ -11,18 +11,16 @@ import { markdownToHtml, htmlToMarkdown, autoTransform, caretToEnd } from './ric
 const svg = (inner: string) =>
   `<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round">${inner}</svg>`;
 
-// a tool tip held at 45°, open (cut off) at the top-right, with the stroke
-// it makes drawn underneath
-const TIP = (inner: string) =>
-  `<g transform="rotate(45 12 12)">${inner}</g><path d="M4 21.2 C7 20.2 10.5 21.8 15 20.6"/>`;
-
 const ICON_PATHS: Record<string, string> = {
-  // classic fountain-pen nib at 45° (MDI fountain-pen-tip glyph) + its stroke
-  pen: '<path fill="currentColor" stroke="none" d="M15.54 3.5L20.5 8.46L19.07 9.88L14.12 4.93L15.54 3.5M3.5 19.78L10 13.31C9.9 13 9.97 12.61 10.23 12.35C10.62 11.96 11.26 11.96 11.65 12.35C12.04 12.75 12.04 13.38 11.65 13.77C11.39 14.03 11 14.1 10.69 14L4.22 20.5L14.83 16.95L18.36 10.59L13.42 5.64L7.05 9.17L3.5 19.78Z"/><path d="M16 22.3 C18.5 21.5 20.5 22.6 23 21.8"/>',
-  pencil: TIP('<path d="M8.5 1 L8.5 7 L12 18.5 L15.5 7 L15.5 1"/><path d="M8.5 7 H15.5"/><path d="M10.9 14.8 L12 18.5 L13.1 14.8 Z" fill="currentColor"/>'),
-  fineliner: TIP('<path d="M9 1 L9 8 L10.8 10.5 L11.4 13.5 L12.6 13.5 L13.2 10.5 L15 8 L15 1"/><path d="M9 8 H15"/><path d="M11.4 13.5 L12 18.5 L12.6 13.5 Z" fill="currentColor"/>'),
-  // marker with slanted chisel tip (MDI marker glyph) + its stroke
-  marker: '<path fill="currentColor" stroke="none" d="M18.5,1.15C17.97,1.15 17.46,1.34 17.07,1.73L11.26,7.55L16.91,13.2L22.73,7.39C23.5,6.61 23.5,5.35 22.73,4.56L19.89,1.73C19.5,1.34 19,1.15 18.5,1.15M10.3,8.5L4.34,14.46C3.56,15.24 3.56,16.5 4.36,17.31C3.14,18.54 1.9,19.77 0.67,21H6.33L7.19,20.14C7.97,20.9 9.22,20.89 10,20.12L15.95,14.16L10.3,8.5Z"/><path d="M13 22.6 C16 21.8 19 22.9 22.5 22"/>',
+  // outline pen-nib at 45° (tip bottom-left, hole + slit)
+  pen: '<path d="M13.4 4.6 L16.6 1.4 A1.2 1.2 0 0 1 18.3 1.4 L22.6 5.7 A1.2 1.2 0 0 1 22.6 7.4 L19.4 10.6"/><path d="M13.4 4.6 L6.7 7.9 L2.4 20.3 A1 1 0 0 0 3.7 21.6 L16.1 17.3 L19.4 10.6"/><circle cx="11" cy="13" r="1.7"/><path d="M9.7 14.3 L3 21"/>',
+  // outline pencil (Lucide)
+  pencil: '<path d="M21.174 6.812a1 1 0 0 0-3.986-3.987L3.842 16.174a2 2 0 0 0-.5.83l-1.321 4.352a.5.5 0 0 0 .623.622l4.353-1.32a2 2 0 0 0 .83-.497z"/><path d="m15 5 4 4"/>',
+  // fineliner: slim pen body with a fine filled tip
+  fineliner: '<path d="M21.174 6.812a1 1 0 0 0-3.986-3.987L3.842 16.174a2 2 0 0 0-.5.83l-1.321 4.352a.5.5 0 0 0 .623.622l4.353-1.32a2 2 0 0 0 .83-.497z"/><path d="M2.3 21.7 L3.6 17.7 L6.3 20.4 Z" fill="currentColor" stroke="none"/>',
+  // highlighter: outline body at 45°, stepped collar, filled chisel tip
+  // resting on the line it draws
+  marker: '<path d="M15.6 2.4 L20 6.8"/><path d="M15.6 2.4 L9.6 8.4 M20 6.8 L14 12.8"/><path d="M9.6 8.4 L7.9 10.1 L12.3 14.5 L14 12.8"/><path d="M7.9 10.1 L12.3 14.5 L8.6 18.3 L3.6 18.9 Z" fill="currentColor" stroke="none"/><path d="M3.6 19 H15.5"/>',
   'lasso-fill': '<path d="M11.5 4 L18.5 11 L11.8 17.7 C10.4 19.1 8.1 19.1 6.7 17.7 C5.3 16.3 5.3 14 6.7 12.6 Z"/><path d="M11.5 4 L8.8 6.7"/><path d="M20 14.5 C20 14.5 18.4 16.6 18.4 17.8 A1.7 1.7 0 0 0 21.8 17.8 C21.8 16.6 20 14.5 20 14.5 Z" fill="currentColor"/>',
   eraser: '<path d="M9.5 18.5 L4.5 13.5 L13 5 L18.5 10.5 L10.5 18.5 Z"/><path d="M8 20 H20"/>',
   'lasso-select': '<ellipse cx="12" cy="10.5" rx="7.5" ry="5.5" stroke-dasharray="3.4 2.6"/><path d="M8.5 15.5 C6.5 17.5 10 19 8 21"/>',
