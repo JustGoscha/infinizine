@@ -505,11 +505,11 @@ export class Renderer {
       }
       const life = Math.max(1, el.animLife ?? 6);
       const drawnTicks = (el.points[el.points.length - 1]?.t ?? 0) * tk.fps;
-      const cycle = Math.max(1, Math.ceil(drawnTicks + life));
-      const r = tk.loop
-        ? (((tk.rawTick - start) % cycle) + cycle) % cycle
-        : tk.rawTick - start;
-      drawTimedWith(el, (t) => r - t * tk.fps);
+      // animStart is a lead-in delay inside the stroke's own loop: the cycle is
+      // silence + drawing + decay, so shifting right truly schedules it later
+      const cycle = Math.max(1, Math.ceil(start + drawnTicks + life));
+      const r = tk.loop ? ((tk.rawTick % cycle) + cycle) % cycle : tk.rawTick;
+      drawTimedWith(el, (t) => r - start - t * tk.fps);
     };
 
     if (live?.layer === 'back') drawLive(); // live back-ink previews behind existing back-ink

@@ -820,22 +820,27 @@ export function buildUI(
       const prog = bar?.querySelector<HTMLElement>('.tl-liveprog');
       if (!bar || !prog) continue;
       const scale = Number(bar.dataset.scale) || 30;
+      const barStart = Number(bar.dataset.start) || 0;
       const strokes = store.doc.elements.filter((e) => e.kind === 'stroke' && e.alayer === l.id);
       let ticks: number;
       if (l.liveMode === 'additive') {
-        ticks = tick % total;
+        ticks = (tick % total) - barStart;
       } else {
         const st = strokes[0];
         if (st && st.kind === 'stroke') {
           const drawn = (st.points[st.points.length - 1]?.t ?? 0) * area.fps;
-          const cycle = Math.max(1, Math.ceil(drawn + (st.animLife ?? 6)));
-          ticks = (((rawTick - (st.animStart ?? 0)) % cycle) + cycle) % cycle;
+          const cycle = Math.max(1, Math.ceil(barStart + drawn + (st.animLife ?? 6)));
+          ticks = ((rawTick % cycle) + cycle) % cycle - barStart;
         } else {
           ticks = 0;
         }
       }
-      prog.style.display = 'block';
-      prog.style.left = `${Math.max(0, Math.min(bar.clientWidth - 3, ticks * scale))}px`;
+      if (ticks < 0) {
+        prog.style.display = 'none'; // in the lead-in silence
+      } else {
+        prog.style.display = 'block';
+        prog.style.left = `${Math.max(0, Math.min(bar.clientWidth - 3, ticks * scale))}px`;
+      }
     }
     playheadRaf = requestAnimationFrame(playheadLoop);
   }
@@ -935,7 +940,7 @@ export function buildUI(
       for (const st of store.doc.elements) {
         if (st.kind !== 'stroke' || st.alayer !== l.id) continue;
         const drawn = (st.points[st.points.length - 1]?.t ?? 0) * area.fps;
-        cycle = Math.max(cycle, Math.ceil(drawn + (st.animLife ?? 6)));
+        cycle = Math.max(cycle, Math.ceil((st.animStart ?? 0) + drawn + (st.animLife ?? 6)));
       }
       return cycle;
     };
@@ -999,16 +1004,20 @@ export function buildUI(
         );
         const additive = l.liveMode === 'additive';
         const cycle = layerCycle(l);
+        const firstStroke = strokes[0];
+        const start = firstStroke?.kind === 'stroke' ? (firstStroke.animStart ?? 0) : 0;
         const bar = document.createElement('div');
         bar.className = 'tl-livebar';
         bar.dataset.lid = l.id;
         bar.dataset.scale = String(liveScale);
-        bar.style.width = `${Math.max(24, cycle * liveScale)}px`;
-        // bars sit where the line actually starts on the shared time axis
-        const axis = additive ? areaTotalAll : Math.max(1, maxCycle);
-        const firstStroke = strokes[0];
-        const phase = firstStroke?.kind === 'stroke' ? (firstStroke.animStart ?? 0) : 0;
-        bar.style.marginLeft = `${Math.max(0, (((phase % axis) + axis) % axis) * liveScale)}px`;
+        bar.dataset.start = String(start);
+        // bar spans [delay .. delay+length]; dragging right adds lead-in silence
+        const barLen = additive ? cycle : Math.max(1, cycle - start);
+        bar.style.width = `${Math.max(24, barLen * liveScale)}px`;
+        bar.style.marginLeft = `${Math.max(
+          0,
+          (additive ? ((start % areaTotalAll) + areaTotalAll) % areaTotalAll : start) * liveScale,
+        )}px`;
         const inkColor = (strokes[0]?.color as string) ?? '#7048e8';
         bar.style.background = inkColor;
         const n = parseInt(inkColor.slice(1), 16) || 0;

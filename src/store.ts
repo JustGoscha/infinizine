@@ -679,7 +679,7 @@ export class Store {
       cycle = 1;
       for (const st of strokes) {
         const drawn = (st.points[st.points.length - 1]?.t ?? 0) * a.fps;
-        cycle = Math.max(cycle, Math.ceil(drawn + (st.animLife ?? 6)));
+        cycle = Math.max(cycle, Math.ceil((st.animStart ?? 0) + drawn + (st.animLife ?? 6)));
       }
     }
     cycle = Math.min(cycle, 600); // safety cap
@@ -692,7 +692,7 @@ export class Store {
         const ageOf = (t: number) =>
           additive
             ? ((((T - start - t * a.fps) % areaTotal) + areaTotal) % areaTotal)
-            : T - t * a.fps;
+            : T - start - t * a.fps;
         let pts;
         if (st.animTaper) {
           pts = [];
@@ -737,13 +737,18 @@ export class Store {
   /** Shift a live layer's strokes on the loop clock by whole ticks. */
   shiftLiveLayer(layerId: string, deltaTicks: number) {
     if (!deltaTicks) return;
-    const items = this.doc.elements
-      .filter((e) => e.kind === 'stroke' && e.alayer === layerId)
-      .map((e) => {
-        const before = (e.kind === 'stroke' ? e.animStart : 0) ?? 0;
-        return { id: e.id, before, after: before + deltaTicks };
-      });
-    if (items.length) this.commit({ type: 'retime-strokes', items });
+    const strokes = this.doc.elements.filter((e) => e.kind === 'stroke' && e.alayer === layerId);
+    if (!strokes.length) return;
+    const minStart = Math.min(
+      ...strokes.map((e) => ((e.kind === 'stroke' ? e.animStart : 0) ?? 0)),
+    );
+    const delta = Math.max(deltaTicks, -minStart); // never before tick 0
+    if (!delta) return;
+    const items = strokes.map((e) => {
+      const before = (e.kind === 'stroke' ? e.animStart : 0) ?? 0;
+      return { id: e.id, before, after: before + delta };
+    });
+    this.commit({ type: 'retime-strokes', items });
   }
 
   /** Group visibility (tab eyes), not undoable. */

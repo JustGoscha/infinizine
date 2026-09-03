@@ -427,7 +427,8 @@ html, body {
   cursor: pointer;
 }
 .tl-track.active .tl-track-head { background: #efeafd; }
-.tl-track.live .tl-track-head { width: 175px; }
+.tl-track.live .tl-track-head { width: 212px; }
+.tl-track-head { overflow: hidden; }
 .tl-track-head .tl-lname { margin-right: auto; font-weight: 600; font-size: 13px; }
 .tl-track.active .tl-track-head .tl-lname { color: #7048e8; }
 .tl-track-head button {
