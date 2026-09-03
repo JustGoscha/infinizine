@@ -987,7 +987,14 @@ export function buildUI(
         else if (a === 'up') store.moveAnimLayer(area.id, idx, idx + 1);
         else if (a === 'down') store.moveAnimLayer(area.id, idx, idx - 1);
         else if (a === 'del') store.deleteAnimLayer(area.id, l.id);
-        else {
+        else if (l.kind === 'live' && state.activeLayerId === l.id) {
+          // clicking the selected live layer deselects it
+          state.selection.clear();
+          state.blinkLayerId = null;
+          const topFrames = [...area.layers].reverse().find((x) => x.kind !== 'live');
+          state.activeLayerId = topFrames?.id ?? null;
+          state.activeFrameId = topFrames?.frames[0]?.id ?? null;
+        } else {
           state.activeLayerId = l.id;
           state.activeFrameId = l.frames[0]?.id ?? null;
         }
