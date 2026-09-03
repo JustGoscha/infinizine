@@ -3,12 +3,12 @@
 
 import { Camera, baseZoom } from './camera';
 import { Element, FillShape, Page, Stroke, StrokePoint } from './types';
-import { strokeOutline, outlineToPath, elementBBox, bboxIntersects, BBox } from './geometry';
+import { strokeOutline, pencilOutlines, outlineToPath, elementBBox, bboxIntersects, BBox } from './geometry';
 import { layoutText, fontFor, segWidth, LINE_HEIGHT } from './text';
 import { moveHandleRect, moveAllHandleRect, deleteHandleRect, eyeHandleRect, type InputState } from './input';
 import { Store } from './store';
 
-interface CacheEntry { path: Path2D; bbox: BBox; core?: Path2D }
+interface CacheEntry { path: Path2D; bbox: BBox; passes?: Path2D[] }
 
 export class Renderer {
   private ctx: CanvasRenderingContext2D;
@@ -46,57 +46,6 @@ export class Renderer {
   }
 
   invalidate() { this.dirty = true; }
-
-  // Graphite grain: a tinted noise tile fills pencil outlines. Pattern space is
-  // scaled by 1/zoom so the grain stays screen-constant like real tooth.
-  private grainCache = new Map<string, CanvasPattern>();
-  private grainPattern(color: string, z: number): CanvasPattern | string {
-    let pat = this.grainCache.get(color);
-    if (!pat) {
-      const tile = document.createElement('canvas');
-      tile.width = tile.height = 64;
-      const c = tile.getContext('2d')!;
-      c.fillStyle = color;
-      // paper tooth: clustered specks + short directional streaks, uneven alpha
-      for (let i = 0; i < 2200; i++) {
-        c.globalAlpha = 0.2 + Math.random() * 0.75;
-        c.fillRect(Math.random() * 64, Math.random() * 64, 1, 1);
-      }
-      for (let i = 0; i < 420; i++) {
-        c.globalAlpha = 0.15 + Math.random() * 0.5;
-        c.fillRect(Math.random() * 64, Math.random() * 64, 2 + Math.random() * 3, 1);
-      }
-      const made = this.ctx.createPattern(tile, 'repeat');
-      if (!made) return color;
-      pat = made;
-      this.grainCache.set(color, pat);
-    }
-    pat.setTransform(new DOMMatrix().scale(1.3 / z));
-    return pat;
-  }
-
-  private inkStyle(el: Stroke, z: number): CanvasPattern | string {
-    return el.tool === 'pencil' ? this.grainPattern(el.color, z) : el.color;
-  }
-
-  /** Pencil = layered: faint solid body, grain over it, near-solid narrow core. */
-  private paintPencil(e: CacheEntry, el: Stroke, z: number, alpha: number) {
-    const { ctx } = this;
-    ctx.globalAlpha = alpha * 0.3;
-    ctx.fillStyle = el.color;
-    ctx.fill(e.path);
-    ctx.globalAlpha = alpha;
-    ctx.fillStyle = this.grainPattern(el.color, z);
-    ctx.fill(e.path);
-    if (e.core) {
-      ctx.globalAlpha = alpha * 0.75;
-      ctx.fillStyle = el.color;
-      ctx.fill(e.core);
-      ctx.globalAlpha = alpha * 0.9;
-      ctx.fillStyle = this.grainPattern(el.color, z);
-      ctx.fill(e.core);
-    }
-  }
   dropFromCache(id: string) { this.cache.delete(id); }
   clearCache() { this.cache.clear(); }
 
@@ -109,12 +58,37 @@ export class Renderer {
           : polygonPath(el.points);
       e = { path, bbox: elementBBox(el) };
       if (el.kind === 'stroke' && el.tool === 'pencil') {
-        // narrower core: graphite is dense in the middle, broken at the edges
-        e.core = outlineToPath(strokeOutline({ ...el, baseWidth: el.baseWidth * 0.55 }));
+        e.passes = pencilOutlines(el).map(outlineToPath);
       }
       this.cache.set(el.id, e);
     }
     return e;
+  }
+
+  // Graphite grain tile (kept for timed live-ink trails where stamping is too hot)
+  private grainCache = new Map<string, CanvasPattern>();
+  private grainPattern(color: string, z: number): CanvasPattern | string {
+    let pat = this.grainCache.get(color);
+    if (!pat) {
+      const tile = document.createElement('canvas');
+      tile.width = tile.height = 64;
+      const c = tile.getContext('2d')!;
+      c.fillStyle = color;
+      for (let i = 0; i < 2600; i++) {
+        c.globalAlpha = 0.25 + Math.random() * 0.7;
+        c.fillRect(Math.random() * 64, Math.random() * 64, 1, 1);
+      }
+      const made = this.ctx.createPattern(tile, 'repeat');
+      if (!made) return color;
+      pat = made;
+      this.grainCache.set(color, pat);
+    }
+    pat.setTransform(new DOMMatrix().scale(1.3 / z));
+    return pat;
+  }
+
+  private inkStyle(el: Stroke, z: number): CanvasPattern | string {
+    return el.tool === 'pencil' ? this.grainPattern(el.color, z) : el.color;
   }
 
   private draw() {
@@ -190,8 +164,15 @@ export class Renderer {
       }
       const e = this.entry(el);
       if (!bboxIntersects(e.bbox, view)) return;
-      if (el.kind === 'stroke' && el.tool === 'pencil') {
-        this.paintPencil(e, el, z, el.opacity * dimFactor);
+      if (el.kind === 'stroke' && el.tool === 'pencil' && e.passes) {
+        ctx.save();
+        ctx.globalCompositeOperation = 'multiply';
+        ctx.fillStyle = el.color;
+        for (const pass of e.passes) {
+          ctx.globalAlpha = 0.42 * el.opacity * dimFactor;
+          ctx.fill(pass);
+        }
+        ctx.restore();
       } else {
         ctx.globalAlpha = el.opacity * dimFactor;
         ctx.fillStyle = el.color;
@@ -217,13 +198,14 @@ export class Renderer {
         }
       }
       if (live.tool === 'pencil') {
-        const e: CacheEntry = {
-          path: outlineToPath(strokeOutline(live)),
-          bbox: elementBBox(live),
-          core: outlineToPath(strokeOutline({ ...live, baseWidth: live.baseWidth * 0.55 })),
-        };
-        this.paintPencil(e, live, z, live.opacity);
-        ctx.globalAlpha = 1;
+        ctx.save();
+        ctx.globalCompositeOperation = 'multiply';
+        ctx.fillStyle = live.color;
+        for (const pass of pencilOutlines(live)) {
+          ctx.globalAlpha = 0.42 * live.opacity;
+          ctx.fill(outlineToPath(pass));
+        }
+        ctx.restore();
         return;
       }
       ctx.globalAlpha = live.opacity;

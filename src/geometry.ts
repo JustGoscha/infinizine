@@ -95,6 +95,33 @@ const TOOL_OPTIONS = {
   }),
 };
 
+/** Pencil rendering (Here-Dragons-Abound style, adapted to vectors): several
+ * displaced copies of the stroke, drawn at low opacity with multiply blending.
+ * Low-frequency wobble = wandering graphite line; high-frequency = rough edges. */
+export function pencilOutlines(stroke: Stroke): number[][][] {
+  let seed = 0;
+  for (let i = 0; i < stroke.id.length; i++) seed = (seed * 31 + stroke.id.charCodeAt(i)) % 9973;
+  const base = densify(filterPressure(stroke.points));
+  const noPressure = stroke.points.every((p) => Math.abs(p.p - 0.5) < 0.001);
+  const widths = [0.95, 0.78, 0.62];
+  const passes: number[][][] = [];
+  for (let k = 0; k < 3; k++) {
+    const s1 = seed * 0.13 + k * 7.3;
+    const s2 = seed * 0.31 + k * 3.1;
+    const s3 = seed * 0.7 + k * 11.7;
+    const amp = stroke.baseWidth * 0.36;
+    const pts = base.map((p, i) => [
+      p.x + (Math.sin(i * 0.31 + s1) * 0.6 + Math.sin(i * 1.37 + s2) * 0.3) * amp,
+      p.y + (Math.sin(i * 0.27 + s2) * 0.6 + Math.sin(i * 1.51 + s3) * 0.3) * amp,
+      p.p,
+    ]);
+    const opts = { ...TOOL_OPTIONS.pencil(stroke.baseWidth * widths[k]) };
+    if (noPressure) opts.simulatePressure = true;
+    passes.push(getStroke(pts, opts));
+  }
+  return passes;
+}
+
 /** Variable-width outline polygon for a stroke (world coords). */
 export function strokeOutline(stroke: Stroke): number[][] {
   const pts = densify(filterPressure(stroke.points)).map((p) => [p.x, p.y, p.p]);
