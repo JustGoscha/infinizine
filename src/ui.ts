@@ -946,6 +946,33 @@ export function buildUI(
     };
     const maxCycle = Math.max(areaTotalAll, ...area.layers.filter((l) => l.kind === 'live').map(layerCycle));
     const liveScale = Math.max(2, Math.min(30, 340 / Math.max(1, maxCycle)));
+    if (tlView === 'live') {
+      // time ruler: second marks labeled, half-second ticks between
+      const ruler = document.createElement('div');
+      ruler.className = 'tl-ruler';
+      const rhead = document.createElement('div');
+      rhead.className = 'tl-ruler-head';
+      const scaleEl = document.createElement('div');
+      scaleEl.className = 'tl-ruler-scale';
+      scaleEl.style.width = `${maxCycle * liveScale}px`;
+      const totalSec = maxCycle / area.fps;
+      for (let t = 0; t <= totalSec + 0.001; t += 0.5) {
+        const isSec = Math.abs(t - Math.round(t)) < 0.001;
+        const tick = document.createElement('i');
+        tick.className = `tl-tick${isSec ? ' sec' : ''}`;
+        tick.style.left = `${t * area.fps * liveScale}px`;
+        scaleEl.appendChild(tick);
+        if (isSec) {
+          const lab = document.createElement('em');
+          lab.className = 'tl-tick-label';
+          lab.style.left = `${t * area.fps * liveScale + 3}px`;
+          lab.textContent = `${Math.round(t)}s`;
+          scaleEl.appendChild(lab);
+        }
+      }
+      ruler.append(rhead, scaleEl);
+      tracksEl.appendChild(ruler);
+    }
     [...area.layers].reverse()
       .filter((l) => (tlView === 'live') === (l.kind === 'live'))
       .forEach((l) => {
@@ -1021,16 +1048,23 @@ export function buildUI(
         // bar spans [delay .. delay+length]; dragging right adds lead-in silence
         const barLen = additive ? cycle : Math.max(1, cycle - start);
         bar.style.width = `${Math.max(24, barLen * liveScale)}px`;
-        bar.style.marginLeft = `${Math.max(
-          0,
-          (additive ? ((start % areaTotalAll) + areaTotalAll) % areaTotalAll : start) * liveScale,
-        )}px`;
+        const startTicks = additive
+          ? ((start % areaTotalAll) + areaTotalAll) % areaTotalAll
+          : start;
+        // lead-in spacer carries the start time, right-aligned against the bar
+        const spacer = document.createElement('span');
+        spacer.className = 'tl-start';
+        spacer.style.width = `${Math.max(0, startTicks * liveScale)}px`;
+        if (startTicks * liveScale > 30) {
+          spacer.textContent = `${(startTicks / area.fps).toFixed(1)}s`;
+        }
+        strip.appendChild(spacer);
         const inkColor = (strokes[0]?.color as string) ?? '#7048e8';
         bar.style.background = inkColor;
         const n = parseInt(inkColor.slice(1), 16) || 0;
         const lum = ((n >> 16) & 255) * 0.299 + ((n >> 8) & 255) * 0.587 + (n & 255) * 0.114;
         bar.style.color = lum < 140 ? '#fff' : '#2a241a';
-        bar.textContent = `${strokes.length > 1 ? `✒${strokes.length} · ` : ''}${(cycle / area.fps).toFixed(1)}s${additive ? ' · loop' : ''}`;
+        bar.textContent = `${strokes.length > 1 ? `✒${strokes.length} · ` : ''}${(barLen / area.fps).toFixed(1)}s${additive ? ' · loop' : ''}`;
         const prog = document.createElement('div');
         prog.className = 'tl-liveprog';
         bar.appendChild(prog); // after textContent — that assignment clears children
