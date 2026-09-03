@@ -154,10 +154,10 @@ export class Renderer {
     const start = Math.max(0, stamps.length - maxStamps);
     for (let i = start; i < stamps.length; i++) {
       const st = stamps[i];
-      const r = wBase * (0.3 + st.p * 0.85) * (0.85 + rnd(i, 3) * 0.3);
-      const jx = (rnd(i, 1) - 0.5) * r * 0.5;
-      const jy = (rnd(i, 2) - 0.5) * r * 0.5;
-      target.globalAlpha = alphaScale * (0.12 + st.p * 0.24) * (0.7 + rnd(i, 4) * 0.6);
+      const r = wBase * (0.3 + st.p * 0.85) * (0.96 + rnd(i, 3) * 0.08);
+      const jx = (rnd(i, 1) - 0.5) * r * 0.16;
+      const jy = (rnd(i, 2) - 0.5) * r * 0.16;
+      target.globalAlpha = alphaScale * (0.13 + st.p * 0.24) * (0.85 + rnd(i, 4) * 0.3);
       target.save();
       target.translate(st.x + jx, st.y + jy);
       target.rotate(rnd(i, 5) * Math.PI * 2);
