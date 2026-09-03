@@ -29,10 +29,10 @@ if (store.doc.pages.length === 0 && store.doc.elements.length === 0) {
   store.addPage({ w: 420, h: 594 }, { x: 0, y: 0 }); // A4
 }
 
-// Start at 100%: the first page fits the screen (Notes-style, zoom locked)
+// Start at 100% (true physical scale), centered on the first page, zoom locked
 requestAnimationFrame(() => {
   const page = store.doc.pages[0];
-  camera.zoom = baseZoom(page, canvas.clientWidth, canvas.clientHeight);
+  camera.zoom = baseZoom();
   if (page) {
     camera.x = page.x + page.w / 2;
     camera.y = page.y + page.h / 2;

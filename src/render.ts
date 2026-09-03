@@ -520,7 +520,7 @@ export class Renderer {
 
     // Zoom badge: 100% = the first page fits the screen
     if (!presenting) {
-      const pct = Math.round((z / baseZoom(this.store.doc.pages[0], vw, vh)) * 100);
+      const pct = Math.round((z / baseZoom()) * 100);
       ctx.font = '600 11px "Libre Franklin", sans-serif';
       ctx.fillStyle = 'rgba(42,36,26,0.55)';
       ctx.textAlign = 'right';
