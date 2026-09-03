@@ -744,6 +744,18 @@ export function buildUI(
     renderTimeline();
   }
 
+  // dock preview: an expanding zone shows where the timeline will snap
+  const dockPreview = document.createElement('div');
+  dockPreview.className = 'dock-preview';
+  document.body.appendChild(dockPreview);
+  function showDockPreview(edge: 'top' | 'bottom' | null) {
+    dockPreview.classList.toggle('show', edge !== null);
+    if (edge) {
+      dockPreview.classList.toggle('at-top', edge === 'top');
+      dockPreview.classList.toggle('at-bottom', edge === 'bottom');
+    }
+  }
+
   // dragging the window (docked: dragging the grip away undocks it)
   let tlDrag: { x: number; y: number } | null = null;
   let undockStart: { x: number; y: number } | null = null;
@@ -775,9 +787,14 @@ export function buildUI(
     tl.style.top = `${e.clientY - tlDrag.y}px`;
     tl.style.bottom = 'auto';
     tl.style.right = 'auto';
+    const r = tl.getBoundingClientRect();
+    showDockPreview(
+      r.top < 56 ? 'top' : window.innerHeight - r.bottom < 56 ? 'bottom' : null,
+    );
   });
   tl.addEventListener('pointerup', () => {
     undockStart = null;
+    showDockPreview(null);
     if (tlDrag) {
       const r = tl.getBoundingClientRect();
       if (r.top < 56) setDock('top');

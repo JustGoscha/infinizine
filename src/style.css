@@ -531,6 +531,24 @@ html, body {
   border-radius: 2px;
 }
 
+/* dock preview: expands at the edge while dragging near it */
+.dock-preview {
+  position: fixed;
+  left: 0;
+  right: 0;
+  height: 150px;
+  background: rgba(112, 72, 232, 0.1);
+  border: 2px dashed #7048e8;
+  z-index: 21;
+  pointer-events: none;
+  opacity: 0;
+  transform: scaleY(0.25);
+  transition: opacity 0.15s ease, transform 0.18s ease;
+}
+.dock-preview.at-top { top: 0; bottom: auto; transform-origin: top; }
+.dock-preview.at-bottom { bottom: 0; top: auto; transform-origin: bottom; }
+.dock-preview.show { opacity: 1; transform: scaleY(1); }
+
 /* a docked timeline never buries the tool panel / topbar */
 body.tl-docked-bottom .toolbar { z-index: 40; }
 body.tl-docked-top .topbar { z-index: 40; }
