@@ -709,6 +709,8 @@ export function buildUI(
 
   function closeTimeline() {
     tlAreaId = null;
+    // hidden but the dock choice is remembered for the next open
+    document.body.classList.remove('tl-docked-bottom', 'tl-docked-top', 'tl-docked-side');
     state.activeAreaId = null;
     state.activeFrameId = null;
     state.activeLayerId = null;
@@ -720,6 +722,10 @@ export function buildUI(
   state.onAnimClose = closeTimeline;
   state.onAnimOpen = (area) => {
     tlAreaId = area.id;
+    // restore the remembered dock position (and its body classes)
+    document.body.classList.toggle('tl-docked-bottom', tlDock === 'bottom');
+    document.body.classList.toggle('tl-docked-top', tlDock === 'top');
+    document.body.classList.toggle('tl-docked-side', tlDock === 'left' || tlDock === 'right');
     state.activeAreaId = area.id;
     const top = area.layers[area.layers.length - 1];
     state.activeLayerId = top?.id ?? null;

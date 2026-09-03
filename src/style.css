@@ -493,7 +493,7 @@ html, body {
   flex: none;
 }
 .tl-track-head button:active { background: var(--ink); color: var(--card); }
-.timeline.hidden { display: none; }
+.timeline.hidden { display: none !important; }
 
 .tl-head { display: flex; align-items: center; gap: 6px; margin-bottom: 8px; flex-wrap: wrap; row-gap: 4px; }
 .tl-grip { cursor: grab; color: var(--ink-soft); font-size: 15px; padding: 2px 4px; touch-action: none; }
