@@ -198,7 +198,7 @@ export function buildUI(
   for (const g of TOOL_GROUPS) lastUsed[g.id] = g.tools[0];
 
   const closeToolFlyouts = () =>
-    toolsEl.querySelectorAll('.tool-wrap.open').forEach((w) => w.classList.remove('open'));
+    root.querySelectorAll('.tool-wrap.open').forEach((w) => w.classList.remove('open'));
 
   for (const g of TOOL_GROUPS) {
     const wrap = document.createElement('div');
@@ -265,18 +265,37 @@ export function buildUI(
   });
 
   const sizesEl = root.querySelector('#sizes')!;
-  for (const s of SIZES) {
-    const b = document.createElement('button');
-    b.className = 'size';
-    b.dataset.w = String(s.w);
-    b.innerHTML = `<i style="width:${4 + s.w * 2}px;height:${4 + s.w * 2}px"></i>`;
-    b.title = s.label;
+  sizesEl.innerHTML = `
+    <div class="tool-wrap multi size-wrap" id="size-wrap">
+      <div class="tool-flyout size-flyout">
+        <div class="size-presets">${SIZES.map(
+          (sz) => `<button class="size" data-w="${sz.w}" title="${sz.label}">
+            <i style="width:${4 + sz.w * 2}px;height:${4 + sz.w * 2}px"></i>
+          </button>`,
+        ).join('')}</div>
+        <input type="range" id="size-fader" min="0.5" max="14" step="0.5" title="Exact size">
+      </div>
+      <button class="tool tool-slot" id="size-slot" title="Stroke size"><i id="size-dot"></i></button>
+    </div>
+  `;
+  const sizeWrap = sizesEl.querySelector('#size-wrap') as HTMLElement;
+  sizesEl.querySelectorAll('.size').forEach((b) =>
     b.addEventListener('click', () => {
-      state.baseWidth = s.w;
+      state.baseWidth = Number((b as HTMLElement).dataset.w);
+      closeToolFlyouts();
       refresh();
-    });
-    sizesEl.appendChild(b);
-  }
+    }),
+  );
+  const sizeFader = sizesEl.querySelector('#size-fader') as HTMLInputElement;
+  sizeFader.addEventListener('input', () => {
+    state.baseWidth = Number(sizeFader.value);
+    refresh();
+  });
+  (sizesEl.querySelector('#size-slot') as HTMLButtonElement).addEventListener('click', () => {
+    const wasOpen = sizeWrap.classList.contains('open');
+    closeToolFlyouts();
+    sizeWrap.classList.toggle('open', !wasOpen);
+  });
 
   const palRow = root.querySelector('#pal-row') as HTMLElement;
   const palMore = root.querySelector('#pal-more') as HTMLButtonElement;
@@ -1460,6 +1479,11 @@ export function buildUI(
     root.querySelectorAll<HTMLElement>('.size').forEach((b) =>
       b.classList.toggle('active', Number(b.dataset.w) === state.baseWidth),
     );
+    const sizeDot = root.querySelector('#size-dot') as HTMLElement;
+    const d = Math.min(26, 4 + state.baseWidth * 2);
+    sizeDot.style.width = `${d}px`;
+    sizeDot.style.height = `${d}px`;
+    (root.querySelector('#size-fader') as HTMLInputElement).value = String(state.baseWidth);
     const drama = getPalette(store.doc.palette).drama;
     palRow.querySelectorAll<HTMLElement>('.pal-main').forEach((d) => {
       const hue = d.dataset.hue!;
