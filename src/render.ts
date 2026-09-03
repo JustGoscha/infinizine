@@ -126,7 +126,7 @@ export class Renderer {
     return set;
   }
 
-  private stampStroke(target: CanvasRenderingContext2D, el: Stroke, alphaScale = 1, maxStamps = Infinity) {
+  private stampStroke(target: CanvasRenderingContext2D, el: Stroke, alphaScale = 1, fromIndex = 0): number {
     const nib = this.nibs(el.color);
     const pts = densify(filterPressure(el.points));
     const wBase = el.baseWidth;
@@ -151,8 +151,7 @@ export class Renderer {
       const x = Math.sin(i * 127.1 + salt * 311.7) * 43758.5453;
       return x - Math.floor(x);
     };
-    const start = Math.max(0, stamps.length - maxStamps);
-    for (let i = start; i < stamps.length; i++) {
+    for (let i = fromIndex; i < stamps.length; i++) {
       const st = stamps[i];
       const r = wBase * (0.3 + st.p * 0.85) * (0.96 + rnd(i, 3) * 0.08);
       const jx = (rnd(i, 1) - 0.5) * r * 0.16;
@@ -165,6 +164,46 @@ export class Renderer {
       target.restore();
     }
     target.globalAlpha = 1;
+    return stamps.length;
+  }
+
+  // incremental live-pencil raster: only NEW stamps are drawn each frame, so
+  // long strokes never truncate while drawing
+  private liveStamp: {
+    canvas: HTMLCanvasElement;
+    strokeId: string;
+    count: number;
+    cam: { x: number; y: number; zoom: number };
+  } | null = null;
+
+  private drawLivePencil(live: Stroke, vw: number, vh: number, dpr: number) {
+    const { ctx, camera } = this;
+    const camNow = { x: camera.x, y: camera.y, zoom: camera.zoom };
+    let ls = this.liveStamp;
+    const stale =
+      !ls ||
+      ls.strokeId !== live.id ||
+      ls.canvas.width !== vw * dpr ||
+      ls.canvas.height !== vh * dpr ||
+      ls.cam.x !== camNow.x || ls.cam.y !== camNow.y || ls.cam.zoom !== camNow.zoom;
+    if (stale) {
+      const canvas = ls?.canvas ?? document.createElement('canvas');
+      canvas.width = vw * dpr;
+      canvas.height = vh * dpr;
+      ls = { canvas, strokeId: live.id, count: 0, cam: camNow };
+      this.liveStamp = ls;
+    }
+    const oc = ls!.canvas.getContext('2d')!;
+    oc.setTransform(dpr, 0, 0, dpr, 0, 0);
+    oc.translate(vw / 2, vh / 2);
+    oc.scale(camNow.zoom, camNow.zoom);
+    oc.translate(-camNow.x, -camNow.y);
+    ls!.count = this.stampStroke(oc, live, live.opacity, ls!.count);
+    // blit in screen space (we're inside the world transform here)
+    ctx.save();
+    ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
+    ctx.drawImage(ls!.canvas, 0, 0, vw, vh);
+    ctx.restore();
   }
 
   private pencilCache = new Map<string, { c: HTMLCanvasElement; bucket: number; bbox: BBox }>();
@@ -309,7 +348,7 @@ export class Renderer {
         }
       }
       if (live.tool === 'pencil') {
-        this.stampStroke(ctx, live, live.opacity, 1200);
+        this.drawLivePencil(live, vw, vh, dpr);
         return;
       }
       if (live.tool === 'sketch') {
