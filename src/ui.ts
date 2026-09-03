@@ -17,10 +17,11 @@ const TIP = (inner: string) =>
   `<g transform="rotate(45 12 12)">${inner}</g><path d="M4 21.2 C7 20.2 10.5 21.8 15 20.6"/>`;
 
 const ICON_PATHS: Record<string, string> = {
-  pen: TIP('<path d="M8.7 1 L8.8 7.5 C8.8 11.5 10.2 14.5 12 18.5 C13.8 14.5 15.2 11.5 15.2 7.5 L15.3 1"/><circle cx="12" cy="10.2" r="1.1"/><path d="M12 11.3 L12 16"/>'),
+  // fountain nib in side view: beak silhouette sweeping to the point
+  pen: '<path d="M21.5 0.5 C16.5 4.5 11.5 9.5 7 17 C13.5 14 18.5 10 23.5 4"/><path d="M8.6 15 C12 11.6 14.8 9.2 17.8 6.4"/><circle cx="15.6" cy="8.8" r="1.05"/><path d="M4 21.2 C7 20.2 10.5 21.8 15 20.6"/>',
   pencil: TIP('<path d="M8.5 1 L8.5 7 L12 18.5 L15.5 7 L15.5 1"/><path d="M8.5 7 H15.5"/><path d="M10.9 14.8 L12 18.5 L13.1 14.8 Z" fill="currentColor"/>'),
   fineliner: TIP('<path d="M9 1 L9 8 L10.8 10.5 L11.4 13.5 L12.6 13.5 L13.2 10.5 L15 8 L15 1"/><path d="M9 8 H15"/><path d="M11.4 13.5 L12 18.5 L12.6 13.5 Z" fill="currentColor"/>'),
-  marker: TIP('<path d="M8 1 L8 8.5 L9.5 15.5 L14.5 15.5 L16 8.5 L16 1"/><path d="M8 8.5 H16"/><path d="M9.5 15.5 L9.5 18.5 H14.5 L14.5 15.5 Z" fill="currentColor"/>'),
+  marker: TIP('<path d="M8 1 L8 8.5 L9.5 14 L14.5 14 L16 8.5 L16 1"/><path d="M8 8.5 H16"/><path d="M9.5 14 L8.6 18.5 L14.5 15.8 L14.5 14 Z" fill="currentColor"/>'),
   'lasso-fill': '<path d="M11.5 4 L18.5 11 L11.8 17.7 C10.4 19.1 8.1 19.1 6.7 17.7 C5.3 16.3 5.3 14 6.7 12.6 Z"/><path d="M11.5 4 L8.8 6.7"/><path d="M20 14.5 C20 14.5 18.4 16.6 18.4 17.8 A1.7 1.7 0 0 0 21.8 17.8 C21.8 16.6 20 14.5 20 14.5 Z" fill="currentColor"/>',
   eraser: '<path d="M9.5 18.5 L4.5 13.5 L13 5 L18.5 10.5 L10.5 18.5 Z"/><path d="M8 20 H20"/>',
   'lasso-select': '<ellipse cx="12" cy="10.5" rx="7.5" ry="5.5" stroke-dasharray="3.4 2.6"/><path d="M8.5 15.5 C6.5 17.5 10 19 8 21"/>',
