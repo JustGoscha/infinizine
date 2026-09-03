@@ -11,11 +11,16 @@ import { markdownToHtml, htmlToMarkdown, autoTransform, caretToEnd } from './ric
 const svg = (inner: string) =>
   `<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round">${inner}</svg>`;
 
+// a tool tip held at 45°, open (cut off) at the top-right, with the stroke
+// it makes drawn underneath
+const TIP = (inner: string) =>
+  `<g transform="rotate(45 12 12)">${inner}</g><path d="M4 21.2 C7 20.2 10.5 21.8 15 20.6"/>`;
+
 const ICON_PATHS: Record<string, string> = {
-  pen: '<path d="M12 20.8 L8.2 14 C7.4 10 9 5.8 12 3.2 C15 5.8 16.6 10 15.8 14 Z"/><circle cx="12" cy="11.5" r="1.25"/><path d="M12 12.8 V18.6"/>',
-  pencil: '<path d="M7.5 3.5 H16.5 V7.5 L12 20.5 L7.5 7.5 Z"/><path d="M7.5 7.5 H16.5"/><path d="M10.7 16 L12 20.5 L13.3 16 Z" fill="currentColor"/>',
-  fineliner: '<path d="M9.5 3.5 H14.5 V8.5 L13.2 11.5 L12.4 15 H11.6 L10.8 11.5 L9.5 8.5 Z"/><path d="M9.5 8.5 H14.5"/><path d="M11.6 15 L12 20.5 L12.4 15 Z" fill="currentColor"/>',
-  marker: '<path d="M7 3.5 H17 V10 L15 19 H9 L7 10 Z"/><path d="M7 10 H17"/><path d="M9 19 H15 V21 H9 Z" fill="currentColor"/>',
+  pen: TIP('<path d="M8.7 1 L8.8 7.5 C8.8 11.5 10.2 14.5 12 18.5 C13.8 14.5 15.2 11.5 15.2 7.5 L15.3 1"/><circle cx="12" cy="10.2" r="1.1"/><path d="M12 11.3 L12 16"/>'),
+  pencil: TIP('<path d="M8.5 1 L8.5 7 L12 18.5 L15.5 7 L15.5 1"/><path d="M8.5 7 H15.5"/><path d="M10.9 14.8 L12 18.5 L13.1 14.8 Z" fill="currentColor"/>'),
+  fineliner: TIP('<path d="M9 1 L9 8 L10.8 10.5 L11.4 13.5 L12.6 13.5 L13.2 10.5 L15 8 L15 1"/><path d="M9 8 H15"/><path d="M11.4 13.5 L12 18.5 L12.6 13.5 Z" fill="currentColor"/>'),
+  marker: TIP('<path d="M8 1 L8 8.5 L9.5 15.5 L14.5 15.5 L16 8.5 L16 1"/><path d="M8 8.5 H16"/><path d="M9.5 15.5 L9.5 18.5 H14.5 L14.5 15.5 Z" fill="currentColor"/>'),
   'lasso-fill': '<path d="M11.5 4 L18.5 11 L11.8 17.7 C10.4 19.1 8.1 19.1 6.7 17.7 C5.3 16.3 5.3 14 6.7 12.6 Z"/><path d="M11.5 4 L8.8 6.7"/><path d="M20 14.5 C20 14.5 18.4 16.6 18.4 17.8 A1.7 1.7 0 0 0 21.8 17.8 C21.8 16.6 20 14.5 20 14.5 Z" fill="currentColor"/>',
   eraser: '<path d="M9.5 18.5 L4.5 13.5 L13 5 L18.5 10.5 L10.5 18.5 Z"/><path d="M8 20 H20"/>',
   'lasso-select': '<ellipse cx="12" cy="10.5" rx="7.5" ry="5.5" stroke-dasharray="3.4 2.6"/><path d="M8.5 15.5 C6.5 17.5 10 19 8 21"/>',

@@ -146,7 +146,7 @@ html, body {
 }
 .tool { color: var(--ink); }
 .tool-icon { display: grid; place-items: center; }
-.tool-icon svg { width: 22px; height: 22px; }
+.tool-icon svg { width: 27px; height: 27px; }
 
 /* grouped tools: slot + expandable flyout */
 .tool-wrap { position: relative; }
