@@ -509,6 +509,32 @@ html, body {
 }
 .tl-head button:active { background: var(--ink); color: var(--card); }
 .tl-zoom { font-weight: 700; padding: 4px 5px !important; color: var(--ink-soft) !important; }
+#tl-dock svg { width: 15px; height: 15px; vertical-align: -2px; }
+
+/* docked timeline: clipped to the screen edge, full width */
+.timeline.dock-bottom,
+.timeline.dock-top {
+  left: 0 !important;
+  right: 0 !important;
+  width: 100%;
+  max-width: 100%;
+  border-left: none;
+  border-right: none;
+  border-radius: 0;
+  box-shadow: none;
+}
+.timeline.dock-bottom {
+  bottom: 0 !important;
+  top: auto !important;
+  border-bottom: none;
+  padding-bottom: 78px; /* keep the ops row clear of the floating toolbar */
+}
+.timeline.dock-top {
+  top: 0 !important;
+  bottom: auto !important;
+  border-top: none;
+  padding-top: 62px; /* keep the header clear of the topbar chips */
+}
 .tl-toggle { color: var(--ink-soft) !important; font-weight: 600; padding: 4px 10px !important; }
 .tl-toggle.on { background: #7048e8 !important; color: #fff !important; }
 /* fps reads as plain text; only a subtle underline hints it's editable */

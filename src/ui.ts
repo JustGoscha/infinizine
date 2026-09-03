@@ -704,6 +704,7 @@ export function buildUI(
   let tlAreaId: string | null = null;
   let tlView: 'frames' | 'live' = 'frames';
   let tlZoom = 1; // horizontal duration-resolution zoom
+  let tlDock: 'float' | 'bottom' | 'top' = 'float';
 
   function closeTimeline() {
     tlAreaId = null;
@@ -731,7 +732,7 @@ export function buildUI(
   let tlDrag: { x: number; y: number } | null = null;
   tl.addEventListener('pointerdown', (e) => {
     const head = (e.target as HTMLElement).closest('.tl-grip');
-    if (!head) return;
+    if (!head || tlDock !== 'float') return;
     tlDrag = { x: e.clientX - tl.offsetLeft, y: e.clientY - tl.offsetTop };
     tl.setPointerCapture(e.pointerId);
   });
@@ -901,6 +902,15 @@ export function buildUI(
         <button id="tl-loop" class="tl-toggle ${area.loop ? 'on' : ''}">loop</button>
         <button id="tl-clip" class="tl-toggle ${area.clip ? 'on' : ''}" title="Cut off ink outside the area">clip</button>
         <button id="tl-onion" class="tl-toggle ${state.onionSkin ? 'on' : ''}">onion</button>
+        <button id="tl-dock" title="${
+          tlDock === 'float' ? 'Dock to bottom' : tlDock === 'bottom' ? 'Dock to top' : 'Undock'
+        }">${
+          tlDock === 'bottom'
+            ? svg('<rect x="4" y="4" width="16" height="16"/><path d="M4 14 H20 V20 H4 Z" fill="currentColor"/>')
+            : tlDock === 'top'
+              ? svg('<rect x="4" y="4" width="16" height="16"/><path d="M4 4 H20 V10 H4 Z" fill="currentColor"/>')
+              : svg('<rect x="4" y="4" width="16" height="16"/><path d="M4 14 H20"/>')
+        }</button>
         <button id="tl-delarea" title="Delete area">🗑</button>
         <button id="tl-close" title="Close">✕</button>
       </div>
@@ -1227,6 +1237,17 @@ export function buildUI(
       tlZoom = Math.max(0.25, Math.min(8, v));
       renderTimeline();
     };
+    q('#tl-dock').addEventListener('click', () => {
+      tlDock = tlDock === 'float' ? 'bottom' : tlDock === 'bottom' ? 'top' : 'float';
+      tl.classList.toggle('dock-bottom', tlDock === 'bottom');
+      tl.classList.toggle('dock-top', tlDock === 'top');
+      // docked position is class-driven; clear any drag inline coords
+      tl.style.left = '';
+      tl.style.top = '';
+      tl.style.right = '';
+      tl.style.bottom = '';
+      renderTimeline();
+    });
     q('#tl-zoom-in').addEventListener('click', () => setTlZoom(tlZoom * 1.4));
     q('#tl-zoom-out').addEventListener('click', () => setTlZoom(tlZoom / 1.4));
     (tl.querySelector('#tl-tracks') as HTMLElement).addEventListener(
