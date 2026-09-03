@@ -650,6 +650,7 @@ export class Store {
       name: `Live ${n}`,
       kind: 'live',
       liveMode: mode,
+      loop: true,
       frames: [],
     };
     stroke.alayer = alayer.id;
@@ -761,11 +762,11 @@ export class Store {
     this.onChange();
   }
 
-  /** View/behavior toggle on a live layer, not undoable. */
-  setLiveMode(areaId: string, layerId: string, mode: 'additive' | 'continuous') {
+  /** Per-line loop toggle, not undoable. */
+  setLayerLoop(areaId: string, layerId: string, loop: boolean) {
     const l = this.animLayer(areaId, layerId);
     if (!l) return;
-    l.liveMode = mode;
+    l.loop = loop;
     this.scheduleSave();
     this.onChange();
   }

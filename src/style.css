@@ -427,7 +427,7 @@ html, body {
   cursor: pointer;
 }
 .tl-track.active .tl-track-head { background: #efeafd; }
-.tl-track.live .tl-track-head { width: 212px; }
+.tl-track.live .tl-track-head { width: 158px; }
 .tl-track-head { overflow: hidden; }
 
 /* lead-in spacer before a live bar, carrying its start time */
@@ -456,7 +456,7 @@ html, body {
 }
 .tl-ruler-head {
   flex: none;
-  width: 212px;
+  width: 158px;
   position: sticky;
   left: 0;
   background: var(--card);
@@ -632,12 +632,48 @@ html, body {
   margin-right: auto;
   flex: none;
 }
-.tl-mode {
-  font-size: 10px !important;
-  font-weight: 700;
-  padding: 1px 4px !important;
+/* per-line loop toggle: black with white symbol when on */
+.tl-looptgl {
+  width: 24px;
+  height: 24px;
   border: 1px solid var(--line) !important;
+  border-radius: 3px;
+  display: inline-grid;
+  place-items: center;
 }
+.tl-looptgl svg { width: 15px; height: 15px; }
+.tl-looptgl.on {
+  background: var(--ink) !important;
+  color: var(--card) !important;
+  border-color: var(--ink) !important;
+}
+
+/* layer kebab menu */
+.tl-kebab {
+  position: fixed;
+  z-index: 60;
+  background: var(--panel);
+  border: var(--panel-border);
+  border-radius: 3px;
+  box-shadow: var(--shadow);
+  display: flex;
+  flex-direction: column;
+  min-width: 180px;
+}
+.tl-kebab.hidden { display: none; }
+.tl-kebab button {
+  border: none;
+  background: transparent;
+  font: inherit;
+  font-size: 13px;
+  font-weight: 600;
+  color: var(--ink);
+  text-align: left;
+  padding: 9px 12px;
+  cursor: pointer;
+}
+.tl-kebab button:hover { background: rgba(90, 75, 50, 0.08); }
+#kb-delete { color: #c0392b; }
 .tl-time { font-size: 11px; font-weight: 700; color: var(--ink-soft); min-width: 64px; font-variant-numeric: tabular-nums; }
 .tl-track-head.layer-hidden .tl-lname { opacity: 0.35; text-decoration: line-through; }
 .tl-track-head button svg { width: 15px; height: 15px; vertical-align: -3px; }

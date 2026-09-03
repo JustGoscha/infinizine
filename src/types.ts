@@ -25,7 +25,8 @@ export interface AnimLayer {
   name: string;
   hidden?: boolean; // hidden layers don't render (eye toggle)
   kind?: 'frames' | 'live'; // live layers hold timed live-ink strokes, no frames
-  liveMode?: 'additive' | 'continuous'; // additive: overdubs onto the area loop; continuous: replays its full length
+  liveMode?: 'additive' | 'continuous'; // legacy, unused
+  loop?: boolean; // live layers: loop immediately on their own cycle (default) or play once on the pipeline
   frames: AnimFrame[]; // each layer has its own frame track (empty for live layers)
 }
 

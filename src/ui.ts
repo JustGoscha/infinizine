@@ -822,18 +822,14 @@ export function buildUI(
       const scale = Number(bar.dataset.scale) || 30;
       const barStart = Number(bar.dataset.start) || 0;
       const strokes = store.doc.elements.filter((e) => e.kind === 'stroke' && e.alayer === l.id);
-      let ticks: number;
-      if (l.liveMode === 'additive') {
-        ticks = (tick % total) - barStart;
-      } else {
-        const st = strokes[0];
-        if (st && st.kind === 'stroke') {
-          const drawn = (st.points[st.points.length - 1]?.t ?? 0) * area.fps;
-          const cycle = Math.max(1, Math.ceil(barStart + drawn + (st.animLife ?? 6)));
-          ticks = ((rawTick % cycle) + cycle) % cycle - barStart;
-        } else {
-          ticks = 0;
-        }
+      let ticks = 0;
+      const st = strokes[0];
+      if (st && st.kind === 'stroke') {
+        const drawn = (st.points[st.points.length - 1]?.t ?? 0) * area.fps;
+        const cycle = Math.max(1, Math.ceil(barStart + drawn + (st.animLife ?? 6)));
+        ticks = l.loop !== false
+          ? ((rawTick % cycle) + cycle) % cycle - barStart // loops on its own cycle
+          : tick - barStart; // rides the area pipeline once per loop
       }
       if (ticks < 0) {
         prog.style.display = 'none'; // in the lead-in silence
@@ -844,6 +840,38 @@ export function buildUI(
     }
     playheadRaf = requestAnimationFrame(playheadLoop);
   }
+
+  // kebab menu for a live layer: convert to keyframes / delete
+  const kebab = document.createElement('div');
+  kebab.className = 'tl-kebab hidden';
+  document.body.appendChild(kebab);
+  function openLayerKebab(e: { clientX: number; clientY: number }, layerId: string) {
+    kebab.innerHTML = `
+      <button id="kb-convert">Convert to keyframes</button>
+      <button id="kb-delete">Delete line</button>
+    `;
+    kebab.classList.remove('hidden');
+    kebab.style.left = `${Math.min(e.clientX, window.innerWidth - 190)}px`;
+    kebab.style.top = `${e.clientY + 8}px`;
+    (kebab.querySelector('#kb-convert') as HTMLButtonElement).addEventListener('click', () => {
+      if (tlAreaId) {
+        store.convertLiveLayer(tlAreaId, layerId);
+        tlView = 'frames';
+      }
+      kebab.classList.add('hidden');
+      renderTimeline();
+      invalidate();
+    });
+    (kebab.querySelector('#kb-delete') as HTMLButtonElement).addEventListener('click', () => {
+      if (tlAreaId) store.deleteAnimLayer(tlAreaId, layerId);
+      kebab.classList.add('hidden');
+      renderTimeline();
+      invalidate();
+    });
+  }
+  document.addEventListener('pointerdown', (e) => {
+    if (!(e.target as HTMLElement).closest?.('.tl-kebab')) kebab.classList.add('hidden');
+  });
 
   function renderTimeline() {
     const area = tlAreaId ? store.area(tlAreaId) : undefined;
@@ -900,7 +928,6 @@ export function buildUI(
         <span class="tl-life" id="tl-life">${state.liveInkLife} frames</span>
         <button id="tl-life-plus" title="Longer">＋</button>
         <button id="tl-taper" class="tl-toggle ${state.liveInkTaper ? 'on' : ''}" title="Tail eats away over its life">taper</button>
-        <button id="tl-mode" class="tl-toggle on" title="Recording mode: additive overdubs the loop, continuous replays full length">${state.liveInkMode === 'additive' ? 'add' : 'cont'}</button>
         <button id="tl-showink" class="tl-toggle ${state.showLiveInk ? 'on' : ''}" title="Show live ink while editing (it always shows in playback)">show</button>
       </div>`}
     `;
@@ -935,7 +962,6 @@ export function buildUI(
       ...area.layers.filter((x) => x.kind !== 'live').map((x) => x.frames.reduce((acc, f) => acc + f.duration, 0)),
     );
     const layerCycle = (l: (typeof area.layers)[number]): number => {
-      if (l.liveMode === 'additive') return areaTotalAll;
       let cycle = 1;
       for (const st of store.doc.elements) {
         if (st.kind !== 'stroke' || st.alayer !== l.id) continue;
@@ -986,12 +1012,13 @@ export function buildUI(
         l.kind === 'live'
           ? (store.doc.elements.find((e) => e.kind === 'stroke' && e.alayer === l.id)?.color ?? '#7048e8')
           : '';
+      const loopOn = l.loop !== false;
       head.innerHTML = `${
         l.kind === 'live'
           ? `<span class="tl-ldot" style="background:${liveColor}"></span>`
           : `<span class="tl-lname">${l.name}</span>`
       }
-        ${l.kind === 'live' ? `<button data-a="mode" class="tl-mode" title="Toggle additive/continuous">${l.liveMode === 'additive' ? 'add' : 'cont'}</button><button data-a="bake" class="tl-mode" title="Convert to keyframes">bake</button>` : ''}
+        ${l.kind === 'live' ? `<button data-a="loop" class="tl-looptgl${loopOn ? ' on' : ''}" title="${loopOn ? 'Loops immediately on its own cycle' : 'Plays once at its place in the pipeline'}">${svg('<path d="M7 6 H15 A4.5 4.5 0 0 1 15 15 H9 A4.5 4.5 0 0 1 9 6"/><path d="M9 3.5 L6.5 6 L9 8.5"/>')}</button>` : ''}
         <button data-a="eye" title="${l.hidden ? 'Show layer' : 'Hide layer'}">${
           l.hidden
             ? svg('<path d="M4 5 L20 19"/><path d="M3 12 C6 7 9 5.5 12 5.5 C15 5.5 18 7 21 12 C19.5 14.5 17.8 16.2 16 17.2 M9.5 17.9 C7.2 17.1 5 15.2 3 12"/>')
@@ -999,17 +1026,19 @@ export function buildUI(
         }</button>
         <button data-a="up" title="Layer up">↑</button>
         <button data-a="down" title="Layer down">↓</button>
-        <button data-a="del" title="Delete layer">✕</button>`;
+        ${l.kind === 'live'
+          ? `<button data-a="menu" title="More">⋮</button>`
+          : `<button data-a="del" title="Delete layer">✕</button>`}`;
       head.querySelector('.tl-lname')?.addEventListener('dblclick', (e) => {
         e.stopPropagation();
         inlineRename(e.target as HTMLElement, l.name, (v) => store.renameAnimLayer(area.id, l.id, v));
       });
       head.addEventListener('click', (e) => {
         const a = (e.target as HTMLElement).closest('button')?.dataset?.a;
-        if (a === 'bake') {
-          store.convertLiveLayer(area.id, l.id);
-          tlView = 'frames';
-        } else if (a === 'mode') store.setLiveMode(area.id, l.id, l.liveMode === 'additive' ? 'continuous' : 'additive');
+        if (a === 'menu') {
+          openLayerKebab(e as PointerEvent | MouseEvent, l.id);
+          return;
+        } else if (a === 'loop') store.setLayerLoop(area.id, l.id, l.loop === false);
         else if (a === 'eye') store.setLayerHidden(area.id, l.id, !l.hidden);
         else if (a === 'up') store.moveAnimLayer(area.id, idx, idx + 1);
         else if (a === 'down') store.moveAnimLayer(area.id, idx, idx - 1);
@@ -1036,7 +1065,6 @@ export function buildUI(
         const strokes = store.doc.elements.filter(
           (e) => e.kind === 'stroke' && e.alayer === l.id,
         );
-        const additive = l.liveMode === 'additive';
         const cycle = layerCycle(l);
         const firstStroke = strokes[0];
         const start = firstStroke?.kind === 'stroke' ? (firstStroke.animStart ?? 0) : 0;
@@ -1046,11 +1074,9 @@ export function buildUI(
         bar.dataset.scale = String(liveScale);
         bar.dataset.start = String(start);
         // bar spans [delay .. delay+length]; dragging right adds lead-in silence
-        const barLen = additive ? cycle : Math.max(1, cycle - start);
+        const barLen = Math.max(1, cycle - start);
         bar.style.width = `${Math.max(24, barLen * liveScale)}px`;
-        const startTicks = additive
-          ? ((start % areaTotalAll) + areaTotalAll) % areaTotalAll
-          : start;
+        const startTicks = start;
         // lead-in spacer carries the start time, right-aligned against the bar
         const spacer = document.createElement('span');
         spacer.className = 'tl-start';
@@ -1064,13 +1090,11 @@ export function buildUI(
         const n = parseInt(inkColor.slice(1), 16) || 0;
         const lum = ((n >> 16) & 255) * 0.299 + ((n >> 8) & 255) * 0.587 + (n & 255) * 0.114;
         bar.style.color = lum < 140 ? '#fff' : '#2a241a';
-        bar.textContent = `${strokes.length > 1 ? `✒${strokes.length} · ` : ''}${(barLen / area.fps).toFixed(1)}s${additive ? ' · loop' : ''}`;
+        bar.textContent = `${strokes.length > 1 ? `✒${strokes.length} · ` : ''}${(barLen / area.fps).toFixed(1)}s`;
         const prog = document.createElement('div');
         prog.className = 'tl-liveprog';
         bar.appendChild(prog); // after textContent — that assignment clears children
-        bar.title = additive
-          ? 'Additive live ink: overdubs stack onto the area loop'
-          : 'Continuous live ink: replays its full length, then restarts';
+        bar.title = 'Live line — drag to move it in time';
         // tap selects; horizontal drag shifts the layer's timing on the loop clock
         bar.addEventListener('pointerdown', (e) => {
           bar.setPointerCapture(e.pointerId);
@@ -1262,10 +1286,6 @@ export function buildUI(
     });
     on('#tl-taper', () => {
       state.liveInkTaper = !state.liveInkTaper;
-      renderTimeline();
-    });
-    on('#tl-mode', () => {
-      state.liveInkMode = state.liveInkMode === 'additive' ? 'continuous' : 'additive';
       renderTimeline();
     });
     on('#tl-showink', () => {

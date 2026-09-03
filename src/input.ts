@@ -100,7 +100,6 @@ export class InputState {
   onionSkin = true; // on by default; 3 frames back (red) and 3 forward (green)
   liveInkLife = 6; // ticks a stroke drawn during playback stays visible
   liveInkTaper = true; // its tail eats away over its lifetime
-  liveInkMode: 'additive' | 'continuous' = 'continuous'; // recording mode for live ink
   showLiveInk = false; // show live-ink strokes while editing (they always show in playback)
   blinkLayerId: string | null = null; // layer briefly opacity-blinking (selection feedback)
   blinkStart = 0;
@@ -740,24 +739,8 @@ export function attachInput(
         s.points.push({ ...p0, x: p0.x + 0.15, t: 0.01 }); // dot
       }
       if (s.area) {
-        // live ink lands on live layers
-        if (state.liveInkMode === 'continuous') {
-          // continuous: every stroke gets its own layer with its own cycle
-          store.addLiveLayer(s.area, s, 'continuous');
-        } else {
-          // additive: overdub onto the active (or latest) additive live layer
-          const a = store.area(s.area);
-          const target =
-            a?.layers.find(
-              (l) => l.id === state.activeLayerId && l.kind === 'live' && l.liveMode === 'additive',
-            ) ?? [...(a?.layers ?? [])].reverse().find((l) => l.kind === 'live' && l.liveMode === 'additive');
-          if (target) {
-            s.alayer = target.id;
-            store.addElement(s);
-          } else {
-            store.addLiveLayer(s.area, s, 'additive');
-          }
-        }
+        // live ink: every stroke gets its own live layer with its own cycle
+        store.addLiveLayer(s.area, s, 'continuous');
       } else {
         store.addElement(s);
       }

@@ -485,30 +485,25 @@ export class Renderer {
       ctx.globalAlpha = 1;
     };
 
-    // Replay modes:
-    // - continuous (Quill-style): the stroke loops on its OWN cycle — full draw
-    //   time plus decay — independent of the area loop, phasing over it.
-    // - additive (looper overdub): every point is pinned to its loop position;
-    //   passes stack onto the area loop.
+    // Live-line replay:
+    // - loop ON (default): the line loops immediately on its OWN cycle
+    //   (lead-in + drawing + decay), independent of the area loop.
+    // - loop OFF: the line rides the area pipeline — starts at its start time,
+    //   plays once, repeats only when the whole area loop restarts.
     const drawTimed = (
       el: Stroke,
       tk: { tick: number; rawTick: number; total: number; loop: boolean; fps: number },
-      mode: 'additive' | 'continuous',
+      looping: boolean,
     ) => {
       const start = el.animStart ?? 0;
-      if (mode === 'additive' && tk.loop) {
-        drawTimedWith(el, (t) => {
-          const a = tk.rawTick - (start + t * tk.fps);
-          return ((a % tk.total) + tk.total) % tk.total;
-        });
-        return;
-      }
       const life = Math.max(1, el.animLife ?? 6);
       const drawnTicks = (el.points[el.points.length - 1]?.t ?? 0) * tk.fps;
-      // animStart is a lead-in delay inside the stroke's own loop: the cycle is
-      // silence + drawing + decay, so shifting right truly schedules it later
       const cycle = Math.max(1, Math.ceil(start + drawnTicks + life));
-      const r = tk.loop ? ((tk.rawTick % cycle) + cycle) % cycle : tk.rawTick;
+      const r = looping
+        ? tk.loop
+          ? ((tk.rawTick % cycle) + cycle) % cycle
+          : tk.rawTick
+        : tk.tick; // area pipeline clock (wrapped/clamped by the area loop)
       drawTimedWith(el, (t) => r - start - t * tk.fps);
     };
 
@@ -567,14 +562,14 @@ export class Renderer {
           }
         }
         if (activeLive || tk) {
-          const mode = layer.liveMode ?? 'continuous';
+          const looping = layer.loop !== false;
           for (const el of visible) {
             if (
               el.kind === 'stroke' && el.area === area.id &&
               (el.alayer === layer.id || (!el.alayer && layer === area.layers[0]))
             ) {
               if (activeLive) drawEl(el);
-              else if (tk) drawTimed(el, tk, mode);
+              else if (tk) drawTimed(el, tk, looping);
               if (blinkPulse > 0) {
                 // pulsing accent outline so the pick is unmissable
                 ctx.save();
