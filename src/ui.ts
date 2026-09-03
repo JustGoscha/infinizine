@@ -21,7 +21,7 @@ const ICON_PATHS: Record<string, string> = {
   // highlighter: outline body at 45°, stepped collar, filled chisel tip
   // resting on the line it draws
   marker: '<path d="M15.6 2.4 L20 6.8"/><path d="M15.6 2.4 L9.6 8.4 M20 6.8 L14 12.8"/><path d="M9.6 8.4 L7.9 10.1 L12.3 14.5 L14 12.8"/><path d="M7.9 10.1 L12.3 14.5 L8.6 18.3 L3.6 18.9 Z" fill="currentColor" stroke="none"/><path d="M3.6 19 H15.5"/>',
-  'lasso-fill': '<path d="M11.5 4 L18.5 11 L11.8 17.7 C10.4 19.1 8.1 19.1 6.7 17.7 C5.3 16.3 5.3 14 6.7 12.6 Z"/><path d="M11.5 4 L8.8 6.7"/><path d="M20 14.5 C20 14.5 18.4 16.6 18.4 17.8 A1.7 1.7 0 0 0 21.8 17.8 C21.8 16.6 20 14.5 20 14.5 Z" fill="currentColor"/>',
+  'lasso-fill': '<path d="m19 11-8-8-8.6 8.6a2 2 0 0 0 0 2.8l5.2 5.2c.8.8 2 .8 2.8 0L19 11Z"/><path d="m5 2 5 5"/><path d="M2 13h15"/><path d="M22 20a2 2 0 1 1-4 0c0-1.6 1.7-2.4 2-3 .3.6 2 1.4 2 3Z" fill="currentColor"/>',
   eraser: '<path d="M9.5 18.5 L4.5 13.5 L13 5 L18.5 10.5 L10.5 18.5 Z"/><path d="M8 20 H20"/>',
   'lasso-select': '<ellipse cx="12" cy="10.5" rx="7.5" ry="5.5" stroke-dasharray="3.4 2.6"/><path d="M8.5 15.5 C6.5 17.5 10 19 8 21"/>',
   cursor: '<path d="M6.5 3.5 L18 13 L12.8 13.8 L15.6 19.6 L13 20.8 L10.3 14.9 L6.5 17.8 Z"/>',
