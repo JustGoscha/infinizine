@@ -8,6 +8,8 @@ import { AnimArea, Stroke, FillShape, Element, Page, TextBox, uid } from './type
 import { hitElement, elementsInLasso } from './geometry';
 import { layoutText, layoutHeight } from './text';
 
+const CLIP_KEY = 'infinizine-clipboard';
+
 export type Tool = 'pen' | 'pencil' | 'sketch' | 'fineliner' | 'marker' | 'eraser' | 'cursor' | 'lasso-select' | 'lasso-fill' | 'text' | 'anim' | 'hand';
 
 /** While an anim area is selected, only the active frame's elements (and the
@@ -848,6 +850,118 @@ export function attachInput(
     }
   }
 
+  // ---- copy / cut / paste (works across zines via localStorage) ----
+  function copySelection(): boolean {
+    let payload: unknown = null;
+    if (state.selection.size) {
+      const els = store.doc.elements.filter((el) => state.selection.has(el.id));
+      if (els.length) payload = { app: 'infinizine-clip', kind: 'elements', elements: els };
+    } else if (state.activeAreaId) {
+      const area = store.doc.areas.find((a) => a.id === state.activeAreaId);
+      if (area) {
+        const ids = new Set(store.areaContentIds(area.id));
+        payload = {
+          app: 'infinizine-clip',
+          kind: 'area',
+          area,
+          elements: store.doc.elements.filter((el) => ids.has(el.id)),
+        };
+      }
+    }
+    if (!payload) return false;
+    try {
+      localStorage.setItem(CLIP_KEY, JSON.stringify(payload));
+    } catch {
+      return false;
+    }
+    return true;
+  }
+
+  function pasteClipboard() {
+    let raw: string | null = null;
+    try {
+      raw = localStorage.getItem(CLIP_KEY);
+    } catch { /* ignore */ }
+    if (!raw) return;
+    let payload: {
+      app?: string;
+      kind?: string;
+      elements?: Element[];
+      area?: AnimArea;
+    };
+    try {
+      payload = JSON.parse(raw);
+    } catch {
+      return;
+    }
+    if (payload.app !== 'infinizine-clip' || !payload.elements) return;
+
+    // paste centered on the current view, slightly offset
+    let minX = Infinity, minY = Infinity, maxX = -Infinity, maxY = -Infinity;
+    const grow = (x: number, y: number) => {
+      minX = Math.min(minX, x); minY = Math.min(minY, y);
+      maxX = Math.max(maxX, x); maxY = Math.max(maxY, y);
+    };
+    for (const el of payload.elements) {
+      if (el.kind === 'text') { grow(el.x, el.y); grow(el.x + el.w, el.y + el.h); }
+      else for (const pt of el.points) grow(pt.x, pt.y);
+    }
+    if (payload.kind === 'area' && payload.area) {
+      grow(payload.area.x, payload.area.y);
+      grow(payload.area.x + payload.area.w, payload.area.y + payload.area.h);
+    }
+    if (minX === Infinity) { minX = 0; minY = 0; maxX = 0; maxY = 0; }
+    const dx = camera.x - (minX + maxX) / 2 + 20;
+    const dy = camera.y - (minY + maxY) / 2 + 20;
+
+    if (payload.kind === 'area' && payload.area) {
+      // remap every id so the pasted area is fully independent
+      const area = structuredClone(payload.area) as AnimArea;
+      const idMap = new Map<string, string>();
+      const remap = (old: string) => {
+        let n = idMap.get(old);
+        if (!n) { n = uid('cp'); idMap.set(old, n); }
+        return n;
+      };
+      area.id = remap(area.id);
+      area.x += dx; area.y += dy;
+      for (const l of area.layers) {
+        l.id = remap(l.id);
+        l.frames = l.frames.map((f) => ({ ...f, id: remap(f.id) }));
+      }
+      const els = payload.elements.map((el) => {
+        const c = structuredClone(el) as Element;
+        c.id = uid('cp');
+        translateElement(c, dx, dy);
+        if (c.frame) c.frame = remap(c.frame);
+        if (c.alayer) c.alayer = remap(c.alayer);
+        if (c.kind === 'stroke' && c.area) c.area = remap(c.area);
+        return c;
+      });
+      store.addAreaWithContent(area, els);
+      state.selection.clear();
+    } else {
+      const els = payload.elements.map((el) => {
+        const c = structuredClone(el) as Element;
+        c.id = uid('cp');
+        translateElement(c, dx, dy);
+        // plain-element pastes drop animation ties; retag to the open frame if any
+        c.frame = state.activeFrameId ?? undefined;
+        c.alayer = state.activeFrameId ? state.activeLayerId ?? undefined : undefined;
+        if (c.kind === 'stroke') {
+          c.area = undefined;
+          c.animStart = undefined;
+          c.animLife = undefined;
+          c.animTaper = undefined;
+        }
+        return c;
+      });
+      store.addElements(els);
+      state.selection = new Set(els.map((el) => el.id));
+    }
+    invalidate();
+  }
+
   let dropCache: (id: string) => void = () => {};
   const api = { setDropCache(fn: (id: string) => void) { dropCache = fn; } };
 
@@ -876,6 +990,20 @@ export function attachInput(
       }
       if (touches.size > 2) return;
       if (!isDrawPointer(e)) {
+        // pencil users: double-tap the canvas with one finger to flip eraser/draw
+        if (state.fingerMode === 'pan' && state.penDetected && !state.presenting && touches.size === 1) {
+          const now = performance.now();
+          if (
+            now - fingerTap.t < 300 &&
+            Math.hypot(e.clientX - fingerTap.x, e.clientY - fingerTap.y) < 30
+          ) {
+            state.tool = state.tool === 'eraser' ? state.lastDrawTool : 'eraser';
+            state.onToolChange();
+            fingerTap = { t: 0, x: 0, y: 0 };
+          } else {
+            fingerTap = { t: now, x: e.clientX, y: e.clientY };
+          }
+        }
         if (state.fingerMode === 'select' && !state.presenting) {
           // one finger selects (cursor semantics); two fingers pan/zoom
           drawingPointer = e.pointerId;
@@ -1050,6 +1178,7 @@ export function attachInput(
     if (el) openEditor(el);
   });
   let lastTap = { t: 0, x: 0, y: 0 };
+  let fingerTap = { t: 0, x: 0, y: 0 };
   canvas.addEventListener('pointerdown', (e) => {
     if (e.pointerType !== 'touch' || state.presenting || !CURSOR_TOOLS.includes(state.tool)) return;
     const now = performance.now();
@@ -1101,6 +1230,33 @@ export function attachInput(
       return;
     }
     const mod = e.metaKey || e.ctrlKey;
+    if (mod && e.key === 'c') {
+      if (copySelection()) e.preventDefault();
+      return;
+    }
+    if (mod && e.key === 'x') {
+      if (copySelection()) {
+        e.preventDefault();
+        const els = store.doc.elements.filter((el) => state.selection.has(el.id));
+        if (els.length) {
+          state.selection.clear();
+          store.deleteElements(els);
+        } else if (state.activeAreaId) {
+          const area = store.doc.areas.find((a) => a.id === state.activeAreaId);
+          if (area) {
+            store.deleteArea(area);
+            state.onAnimClose();
+          }
+        }
+        invalidate();
+      }
+      return;
+    }
+    if (mod && e.key === 'v') {
+      e.preventDefault();
+      pasteClipboard();
+      return;
+    }
     if (mod && e.key === 'z') {
       e.preventDefault();
       e.shiftKey ? store.redo() : store.undo();

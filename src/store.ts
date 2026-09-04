@@ -436,6 +436,12 @@ export class Store {
   get canRedo() { return this.redoStack.length > 0; }
 
   addElement(el: Element) { this.commit({ type: 'add-elements', elements: [el] }); }
+  addElements(els: Element[]) {
+    if (els.length) this.commit({ type: 'add-elements', elements: els });
+  }
+  addAreaWithContent(area: AnimArea, elements: Element[]) {
+    this.commit({ type: 'add-area', area, elements });
+  }
   deleteElements(els: Element[]) { if (els.length) this.commit({ type: 'delete-elements', elements: els }); }
   updateText(id: string, before: TextContent, after: TextContent) {
     this.commit({ type: 'update-text', id, before, after });
