@@ -428,7 +428,16 @@ export function pressureOutline(
     const l = Math.hypot(dx, dy);
     if (l < 1e-6) return;
     dx /= l; dy /= l;
-    for (let i = j; i !== from + dir; i += dir) { tx[i] = dx; ty[i] = dy; }
+    // blend toward the averaged direction as we approach the end — a hard
+    // switch would register as a sharp turn and spawn a corner fan there
+    let d = 0;
+    for (let i = from; i !== j - dir; i -= dir) {
+      if (i !== from) d += Math.hypot(pts[i].x - pts[i + dir].x, pts[i].y - pts[i + dir].y);
+      const w = Math.max(0, 1 - d / dist);
+      let bx = tx[i] + (dx - tx[i]) * w, by = ty[i] + (dy - ty[i]) * w;
+      const bl = Math.hypot(bx, by) || 1;
+      tx[i] = bx / bl; ty[i] = by / bl;
+    }
   };
   if (n > 2) { steady(n - 1, 1); steady(0, -1); }
   const left: number[][] = [], right: number[][] = [];
