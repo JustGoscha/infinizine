@@ -74,7 +74,7 @@ export interface ToolPressure {
 export type PressureParams = Record<ToolKind, ToolPressure>;
 const base = {
   curve: [0.55, 0.9, 0.5, 0.95] as [number, number, number, number],
-  smooth: 1.2,
+  smooth: 2,
   pSmooth: 0.3,
   tilt: 1,
   // flat-ish angles count, near-upright barely: eases in, then ramps
