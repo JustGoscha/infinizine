@@ -181,6 +181,7 @@ export function attachInput(
   // and low-pass the rest so the outline width doesn't shiver.
   let pEma: number | null = null;
   let lastValidP: number | null = null;
+  let rawPMax: number | null = null; // peak raw pressure of the stroke (taps become dots at this)
   const P_EMA = 0.3;
   const MIN_DIST_PX = 1.2; // screen px; drops stacked samples at slow speed
   let minDistSq = 0; // world-space square of MIN_DIST_PX, fixed at stroke start
@@ -192,6 +193,7 @@ export function attachInput(
     const raw = e.pressure;
     const uncertain = raw <= 0 || raw === 0.5;
     if (!uncertain) {
+      rawPMax = Math.max(rawPMax ?? 0, raw);
       if (lastValidP === null && state.live) {
         // first real reading: back-fill the uncertain head of the stroke
         for (const pt of state.live.points) pt.p = raw;
@@ -464,6 +466,7 @@ export function attachInput(
         ema = null;
         pEma = null;
         lastValidP = null;
+        rawPMax = null;
         lastEventT = e.timeStamp;
         strokeZoom = camera.zoom;
         minDistSq = (MIN_DIST_PX / camera.zoom) ** 2;
@@ -874,14 +877,23 @@ export function attachInput(
     if (state.live) {
       const s = state.live;
       state.live = null;
-      if (s.points.length === 1) {
-        const p0 = s.points[0];
-        s.points.push({ ...p0, x: p0.x + 0.15, t: 0.01 }); // dot
+      let travel = 0;
+      for (let i = 1; i < s.points.length; i++) {
+        travel += Math.hypot(s.points[i].x - s.points[i - 1].x, s.points[i].y - s.points[i - 1].y);
       }
-      // digitiser quantisation is ~1 screen px; smooth it away in world units
-      // scaled by the zoom you drew at, so zoomed-out lines don't kink when
-      // you zoom back in and zoomed-in lines keep every intended wiggle
-      s.points = denoise(s.points, 1.2 / strokeZoom);
+      if (travel < s.baseWidth * 0.5) {
+        // a tap: one point at the centroid, carrying the peak pressure of the
+        // touch → renders as a perfect round dot (see geometry.dotOutline)
+        const n = s.points.length;
+        const cx = s.points.reduce((a, p) => a + p.x, 0) / n;
+        const cy = s.points.reduce((a, p) => a + p.y, 0) / n;
+        s.points = [{ x: cx, y: cy, p: rawPMax ?? s.points[0].p, t: 0 }];
+      } else {
+        // digitiser quantisation is ~1 screen px; smooth it away in world units
+        // scaled by the zoom you drew at, so zoomed-out lines don't kink when
+        // you zoom back in and zoomed-in lines keep every intended wiggle
+        s.points = denoise(s.points, 1.2 / strokeZoom);
+      }
       if (s.area) {
         // live ink: every stroke gets its own live layer with its own cycle
         store.addLiveLayer(s.area, s, 'continuous');

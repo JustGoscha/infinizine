@@ -150,9 +150,14 @@ const TOOL_OPTIONS = {
 export function pencilOutlines(stroke: Stroke, detail = 1): number[][][] {
   let seed = 0;
   for (let i = 0; i < stroke.id.length; i++) seed = (seed * 31 + stroke.id.charCodeAt(i)) % 9973;
+  const widths = [0.95, 0.78, 0.62];
+  if (stroke.points.length === 1) {
+    const j = stroke.baseWidth * 0.18;
+    return widths.map((wk, k) =>
+      dotOutline(stroke, detail, wk, Math.sin(seed + k * 2.1) * j, Math.cos(seed * 0.7 + k * 1.3) * j));
+  }
   const base = densify(filterPressure(stroke.points), 2.2 / detail);
   const noPressure = stroke.points.every((p) => Math.abs(p.p - 0.5) < 0.001);
-  const widths = [0.95, 0.78, 0.62];
   const passes: number[][][] = [];
   for (let k = 0; k < 3; k++) {
     const s1 = seed * 0.13 + k * 7.3;
@@ -172,11 +177,33 @@ export function pencilOutlines(stroke: Stroke, detail = 1): number[][][] {
   return passes;
 }
 
+/** A tap: one point → a perfect circle at the radius perfect-freehand would
+ * give that pressure (size × easing(0.5 − thinning × (0.5 − p))). */
+export function dotRadius(stroke: Stroke): number {
+  const o = TOOL_OPTIONS[stroke.tool](stroke.baseWidth) as { size: number; thinning: number; easing?: (t: number) => number };
+  const p = stroke.points[0]?.p ?? 0.5;
+  const ease = o.easing ?? ((t: number) => t);
+  return Math.max(0.05, o.size * ease(0.5 - o.thinning * (0.5 - p)));
+}
+
+function dotOutline(stroke: Stroke, detail: number, radiusScale = 1, dx = 0, dy = 0): number[][] {
+  const c = stroke.points[0];
+  const r = dotRadius(stroke) * radiusScale;
+  const n = Math.max(24, Math.min(96, Math.round(24 * Math.sqrt(detail) * Math.sqrt(Math.max(1, r)))));
+  const out: number[][] = [];
+  for (let i = 0; i < n; i++) {
+    const a = (i / n) * Math.PI * 2;
+    out.push([c.x + dx + Math.cos(a) * r, c.y + dy + Math.sin(a) * r]);
+  }
+  return out;
+}
+
 /** Variable-width outline polygon for a stroke (world coords).
  * `detail` = zoom relative to 100% (bucketed by the renderer): in-between
  * spacing and outline vertex density scale with it so a stroke has the same
  * screen-space smoothness whether you're at 25% or 800%. */
 export function strokeOutline(stroke: Stroke, detail = 1): number[][] {
+  if (stroke.points.length === 1) return dotOutline(stroke, detail);
   const pts = densify(filterPressure(stroke.points), 2.2 / detail).map((p) => [p.x, p.y, p.p]);
   const opts = { ...TOOL_OPTIONS[stroke.tool](stroke.baseWidth) };
   // perfect-freehand's `smoothing` is really a vertex-skip distance (size × smoothing);

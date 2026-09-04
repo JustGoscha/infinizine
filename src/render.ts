@@ -152,8 +152,27 @@ export class Renderer {
     const nib = this.nibs(el.color);
     const pts = densify(filterPressure(el.points));
     const wBase = el.baseWidth;
-    const spacing = Math.max(0.3, wBase * 0.28);
+    // deterministic per-stamp randomness: variant, rotation, jitter — kills the
+    // repeated-texture chain look of reusing one tile in one orientation
+    const rnd = (i: number, salt: number) => {
+      const x = Math.sin(i * 127.1 + salt * 311.7) * 43758.5453;
+      return x - Math.floor(x);
+    };
+    // graphite: pressure barely widens the line — it packs more, darker
+    // stamps into the same width (spacing shrinks ~3× from light to hard)
+    const spacingAt = (p: number) => Math.max(0.2, wBase * 0.3 * (1.35 - p * 0.9));
     const stamps: { x: number; y: number; p: number }[] = [];
+    if (pts.length === 1) {
+      // a tap: a dense disc of stamps at the tap pressure
+      const c = pts[0];
+      const R = wBase * 0.6;
+      const n = Math.round(14 + c.p * 30);
+      for (let i = 0; i < n; i++) {
+        const a = rnd(i, 7) * Math.PI * 2;
+        const d = Math.sqrt(rnd(i, 8)) * R;
+        stamps.push({ x: c.x + Math.cos(a) * d, y: c.y + Math.sin(a) * d, p: c.p });
+      }
+    }
     let carry = 0;
     for (let i = 1; i < pts.length; i++) {
       const a = pts[i - 1], b = pts[i];
@@ -162,23 +181,18 @@ export class Renderer {
       let d = carry;
       while (d < len) {
         const t = d / len;
-        stamps.push({ x: a.x + (b.x - a.x) * t, y: a.y + (b.y - a.y) * t, p: a.p + (b.p - a.p) * t });
-        d += spacing;
+        const p = a.p + (b.p - a.p) * t;
+        stamps.push({ x: a.x + (b.x - a.x) * t, y: a.y + (b.y - a.y) * t, p });
+        d += spacingAt(p);
       }
       carry = d - len;
     }
-    // deterministic per-stamp randomness: variant, rotation, jitter — kills the
-    // repeated-texture chain look of reusing one tile in one orientation
-    const rnd = (i: number, salt: number) => {
-      const x = Math.sin(i * 127.1 + salt * 311.7) * 43758.5453;
-      return x - Math.floor(x);
-    };
     for (let i = fromIndex; i < stamps.length; i++) {
       const st = stamps[i];
-      const r = wBase * (0.3 + st.p * 0.85) * (0.96 + rnd(i, 3) * 0.08);
+      const r = wBase * (0.6 + st.p * 0.2) * (0.96 + rnd(i, 3) * 0.08);
       const jx = (rnd(i, 1) - 0.5) * r * 0.16;
       const jy = (rnd(i, 2) - 0.5) * r * 0.16;
-      target.globalAlpha = alphaScale * (0.13 + st.p * 0.24) * (0.85 + rnd(i, 4) * 0.3);
+      target.globalAlpha = alphaScale * (0.07 + st.p * 0.4) * (0.85 + rnd(i, 4) * 0.3);
       target.save();
       target.translate(st.x + jx, st.y + jy);
       target.rotate(rnd(i, 5) * Math.PI * 2);
@@ -526,7 +540,7 @@ export class Renderer {
           pts.push({ ...pt, p: pt.p * (0.08 + 0.92 * k) });
         }
       }
-      if (pts.length < 3) return;
+      if (pts.length < 3 && !(el.points.length === 1 && pts.length === 1)) return; // dots survive
       if (el.tool === 'pencil') {
         // same stamp engine as static pencil, on the living slice
         this.stampStroke(ctx, { ...el, points: pts }, el.opacity * dimFactor);
