@@ -1343,6 +1343,12 @@ body.presenting .popover { display: none; }
 .pg-tool svg { width: 16px; height: 16px; }
 .pg-tool.active { background: var(--ink); color: var(--card); }
 .pg-curve[hidden] { display: none; }
+.pg-curve-bar { display: flex; gap: 6px; align-items: center; min-height: 24px; margin-top: -4px; }
+.pg-curve-bar[hidden] { display: none; }
+.pg-curve-bar button { display: none; border: 1.5px solid var(--ink); background: transparent; color: var(--ink); border-radius: 2px; padding: 2px 8px; font: inherit; font-size: 11px; font-weight: 600; cursor: pointer; }
+.pg-curve-bar.active button { display: inline-flex; }
+.pg-curve-bar.active .pg-curve-tip { display: none; }
+.pg-curve-tip { color: var(--ink-soft); font-size: 11px; }
 .pg-curve { width: 100%; height: auto; border: 1.5px solid var(--line); border-radius: 2px; background: rgba(255,255,255,0.5); touch-action: none; cursor: crosshair; }
 .pg-row { display: grid; grid-template-columns: 74px 1fr 44px; align-items: center; gap: 6px; }
 .pg-row[hidden] { display: none; }

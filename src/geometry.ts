@@ -62,30 +62,73 @@ export function densify(points: StrokePoint[], spacing = 2.2): StrokePoint[] {
  * maximum, so the curve saturates early, with a soft start so feather-light
  * touches stay light:  10% → 14%, 25% → 42%, 50% → 79%, 75% → 97%. */
 export type ToolKind = Stroke['tool'];
+/** Piecewise cubic Bézier through anchors from (0,0) to (1,1). Handles are
+ * relative to their anchor: `o` leaves toward the next anchor, `i` arrives
+ * from the previous. `s` = smooth (handles mirrored) vs corner. */
+export interface CurveNode { x: number; y: number; i: [number, number]; o: [number, number]; s: boolean }
+export type Curve = CurveNode[];
+/** Two-handle shorthand → anchors, as the editor used to store it. */
+export function curveFromHandles(h: [number, number, number, number]): Curve {
+  return [
+    { x: 0, y: 0, i: [0, 0], o: [h[0], h[1]], s: false },
+    { x: 1, y: 1, i: [h[2] - 1, h[3] - 1], o: [0, 0], s: false },
+  ];
+}
+function normalizeCurve(c: unknown, fallback: Curve): Curve {
+  if (Array.isArray(c) && c.length >= 2) {
+    if (typeof c[0] === 'number') return curveFromHandles(c as [number, number, number, number]);
+    if (typeof c[0] === 'object' && c[0] && 'x' in c[0]) {
+      return (c as CurveNode[]).map((n) => ({ x: n.x, y: n.y, i: [...(n.i ?? [0, 0])] as [number, number], o: [...(n.o ?? [0, 0])] as [number, number], s: !!n.s }));
+    }
+  }
+  return structuredClone(fallback);
+}
+/** y at x: locate the segment by anchor x, solve the segment's cubic for t by bisection. */
+export function curveAt(c: Curve, x: number): number {
+  x = Math.max(0, Math.min(1, x));
+  let k = 0;
+  while (k < c.length - 2 && x > c[k + 1].x) k++;
+  const a = c[k], b = c[k + 1];
+  const p0x = a.x, p0y = a.y, p1x = a.x + a.o[0], p1y = a.y + a.o[1];
+  const p2x = b.x + b.i[0], p2y = b.y + b.i[1], p3x = b.x, p3y = b.y;
+  if (p3x - p0x < 1e-9) return Math.max(0, Math.min(1, x <= p0x ? p0y : p3y));
+  let lo = 0, hi = 1, t = 0.5;
+  for (let it = 0; it < 24; it++) {
+    t = (lo + hi) / 2;
+    const u = 1 - t;
+    const bx = u * u * u * p0x + 3 * u * u * t * p1x + 3 * u * t * t * p2x + t * t * t * p3x;
+    if (bx < x) lo = t; else hi = t;
+  }
+  const u = 1 - t;
+  const y = u * u * u * p0y + 3 * u * u * t * p1y + 3 * u * t * t * p2y + t * t * t * p3y;
+  return Math.max(0, Math.min(1, y));
+}
+
 export interface ToolPressure {
-  curve: [number, number, number, number]; // cubic Bézier handles (x1,y1,x2,y2) from (0,0) to (1,1): pressure → effect
+  curve: Curve; // pressure → effect
   smooth: number; // position denoise radius in screen px (applied after drawing, live + commit)
   pSmooth: number; // pressure low-pass factor 0..1 (1 = raw)
   min: number; // width at zero pressure as a fraction of max
   max: number; // max width as × baseWidth
   tilt: number; // pencil: how much a flat Pencil widens a light stroke (1 = ignore tilt, 3 = up to 3×)
-  tiltCurve: [number, number, number, number]; // Bézier: tilt (0 upright … 1 flat) → tilt effect 0..1
+  tiltCurve: Curve; // tilt (0 upright … 1 flat) → tilt effect 0..1
 }
 export type PressureParams = Record<ToolKind, ToolPressure>;
 const base = {
-  curve: [0.55, 0.9, 0.5, 0.95] as [number, number, number, number],
+  curve: curveFromHandles([0.55, 0.9, 0.5, 0.95]),
   smooth: 2,
   pSmooth: 0.3,
   tilt: 1,
   // flat-ish angles count, near-upright barely: eases in, then ramps
-  tiltCurve: [0.6, 0.05, 0.7, 1] as [number, number, number, number],
+  tiltCurve: curveFromHandles([0.6, 0.05, 0.7, 1]),
 };
+const fresh = () => structuredClone(base);
 export const DEFAULT_PRESSURE: PressureParams = {
-  pen: { ...base, min: 0.22, max: 1.6 },
-  fineliner: { ...base, min: 0.86, max: 1.3 },
-  pencil: { ...base, min: 0.6, max: 1.3, tilt: 2.4 },
-  sketch: { ...base, min: 0.45, max: 1.4 },
-  marker: { ...base, min: 1, max: 2.4 },
+  pen: { ...fresh(), min: 0.22, max: 1.6 },
+  fineliner: { ...fresh(), min: 0.86, max: 1.3 },
+  pencil: { ...fresh(), min: 0.8, max: 1, tilt: 2.4 },
+  sketch: { ...fresh(), min: 0.45, max: 1.4 },
+  marker: { ...fresh(), min: 1, max: 2.4 },
 };
 const PRESSURE_KEY = 'infinizine-pressure-v3';
 export const pressure: PressureParams = (() => {
@@ -97,8 +140,8 @@ export const pressure: PressureParams = (() => {
       for (const t of Object.keys(out) as ToolKind[]) {
         if (!p[t]) continue;
         Object.assign(out[t], p[t], {
-          curve: [...(p[t]!.curve ?? out[t].curve)],
-          tiltCurve: [...(p[t]!.tiltCurve ?? out[t].tiltCurve)],
+          curve: normalizeCurve(p[t]!.curve, out[t].curve),
+          tiltCurve: normalizeCurve(p[t]!.tiltCurve, out[t].tiltCurve),
         });
       }
     }
@@ -134,9 +177,9 @@ export function bezierAt(c: [number, number, number, number], x: number): number
   return Math.max(0, Math.min(1, 3 * u * u * t * y1 + 3 * u * t * t * y2 + t * t * t));
 }
 
-export const easeP = (t: number, tool: ToolKind = 'pen') => bezierAt(pressure[tool].curve, t);
+export const easeP = (t: number, tool: ToolKind = 'pen') => curveAt(pressure[tool].curve, t);
 /** tilt 0..1 → effect 0..1 through the tool's tilt curve */
-export const easeTilt = (a: number, tool: ToolKind = 'pencil') => bezierAt(pressure[tool].tiltCurve, a);
+export const easeTilt = (a: number, tool: ToolKind = 'pencil') => curveAt(pressure[tool].tiltCurve, a);
 
 /** Spatial Gaussian denoise along the polyline. `sigma` is in world units —
  * pass ~1.2 screen px worth (1.2 / zoom at drawing time) so quantisation

@@ -8,7 +8,7 @@ import { Camera, baseZoom, pxPerMm, setPxPerMm } from './camera';
 import { PALETTES, getPalette, shades } from './palettes';
 import { UNITS_PER_MM, uid } from './types';
 import { layoutText, layoutHeight, FONTS } from './text';
-import { pressure, savePressure, resetPressure, loadPressure, easeP, bezierAt } from './geometry';
+import { pressure, savePressure, resetPressure, loadPressure, easeP, curveAt, type Curve, type CurveNode } from './geometry';
 import { markdownToHtml, htmlToMarkdown, autoTransform, caretToEnd } from './richedit';
 
 function toast(msg: string) {
@@ -1959,20 +1959,29 @@ export function buildUI(
   let pgSaved = structuredClone(pressure); // what's on disk; unsaved edits revert to this on close
   const pgDirty = () => JSON.stringify(pgSaved) !== JSON.stringify(pressure);
   const pgCurve = pg.querySelector('#pg-curve') as HTMLCanvasElement;
-  // ---- Bézier curve editor (pressure → effect, tilt → widening) ----
+  // ---- piecewise Bézier curve editor (pressure → effect, tilt → widening) ----
+  // tap the curve to add an anchor · tap an anchor to select it (shows its two
+  // handles) · drag anchors/handles · bar below: smooth⇄corner, delete
   const PAD = 12;
-  type Curve = [number, number, number, number];
   function curveEditor(
     cv: HTMLCanvasElement,
     getCurve: () => Curve,
     labels: { x: string; y: string; readout: (fx: (t: number) => number) => string },
     band?: () => ((t: number) => number) | null,
   ) {
+    const bar = document.createElement('div');
+    bar.className = 'pg-curve-bar';
+    bar.innerHTML = `<button data-act="smooth"></button><button data-act="delete">Delete point</button><span class="pg-curve-tip">tap the curve to add a point</span>`;
+    cv.insertAdjacentElement('afterend', bar);
+    let sel: number | null = null; // selected anchor index
     const toPx = (x: number, y: number): [number, number] => [PAD + (cv.width - 2 * PAD) * x, cv.height - PAD - (cv.height - 2 * PAD) * y];
-    const fx = (t: number) => bezierAt(getCurve(), t);
+    const fx = (t: number) => curveAt(getCurve(), t);
+    const clamp01 = (v: number) => Math.max(0, Math.min(1, v));
     function draw() {
       const c = cv.getContext('2d')!;
       const W = cv.width, H = cv.height;
+      const curve = getCurve();
+      if (sel !== null && sel >= curve.length) sel = null;
       c.clearRect(0, 0, W, H);
       c.strokeStyle = 'rgba(42,36,26,0.18)';
       c.lineWidth = 1;
@@ -1991,62 +2000,168 @@ export function buildUI(
         }
         c.lineTo(...toPx(1, 0)); c.lineTo(...toPx(0, 0)); c.closePath(); c.fill();
       }
-      const [x1, y1, x2, y2] = getCurve();
-      c.strokeStyle = 'rgba(224,90,40,0.7)';
-      c.lineWidth = 1.5;
-      c.beginPath(); c.moveTo(...toPx(0, 0)); c.lineTo(...toPx(x1, y1)); c.stroke();
-      c.beginPath(); c.moveTo(...toPx(1, 1)); c.lineTo(...toPx(x2, y2)); c.stroke();
+      // curve
       c.strokeStyle = '#2a241a';
       c.lineWidth = 2.5;
       c.beginPath();
-      for (let i = 0; i <= 100; i++) {
-        const [x, y] = toPx(i / 100, fx(i / 100));
+      for (let i = 0; i <= 120; i++) {
+        const [x, y] = toPx(i / 120, fx(i / 120));
         i ? c.lineTo(x, y) : c.moveTo(x, y);
       }
       c.stroke();
-      for (const [hx, hy] of [[x1, y1], [x2, y2]]) {
-        const [x, y] = toPx(hx, hy);
-        c.fillStyle = '#E05A28';
-        c.strokeStyle = '#fff';
+      // handles: endpoints always, plus the selected anchor
+      const showHandles = (k: number) => k === 0 || k === curve.length - 1 || k === sel;
+      curve.forEach((n, k) => {
+        if (!showHandles(n && k)) return;
+        const [ax, ay] = toPx(n.x, n.y);
+        c.strokeStyle = 'rgba(224,90,40,0.7)';
+        c.lineWidth = 1.5;
+        for (const h of [k > 0 ? n.i : null, k < curve.length - 1 ? n.o : null]) {
+          if (!h) continue;
+          const [hx, hy] = toPx(n.x + h[0], n.y + h[1]);
+          c.beginPath(); c.moveTo(ax, ay); c.lineTo(hx, hy); c.stroke();
+          c.fillStyle = '#E05A28'; c.strokeStyle = '#fff'; c.lineWidth = 2;
+          c.beginPath(); c.arc(hx, hy, 6.5, 0, Math.PI * 2); c.fill(); c.stroke();
+        }
+      });
+      // anchors
+      curve.forEach((n, k) => {
+        const [ax, ay] = toPx(n.x, n.y);
+        const inner = k > 0 && k < curve.length - 1;
+        c.fillStyle = k === sel ? '#2a241a' : '#fff';
+        c.strokeStyle = '#2a241a';
         c.lineWidth = 2;
-        c.beginPath(); c.arc(x, y, 7, 0, Math.PI * 2); c.fill(); c.stroke();
-      }
+        c.beginPath();
+        if (inner && !n.s) c.rect(ax - 5.5, ay - 5.5, 11, 11); // corner = square
+        else c.arc(ax, ay, inner ? 6 : 5, 0, Math.PI * 2);
+        c.fill(); c.stroke();
+      });
       c.fillStyle = 'rgba(42,36,26,0.6)';
       c.font = '10px Libre Franklin, sans-serif';
       c.fillText(labels.x, PAD + 2, H - 2);
       c.save(); c.translate(2, PAD + 44); c.rotate(-Math.PI / 2); c.fillText(labels.y, 0, 8); c.restore();
       const ro = labels.readout(fx);
       c.fillText(ro, W - PAD - c.measureText(ro).width, PAD + 12);
+      // bar
+      const inner = sel !== null && sel > 0 && sel < curve.length - 1;
+      bar.classList.toggle('active', inner);
+      if (inner) (bar.querySelector('[data-act="smooth"]') as HTMLButtonElement).textContent = curve[sel!].s ? 'Smooth → corner' : 'Corner → smooth';
     }
-    let drag: 0 | 1 | null = null;
+    // ---- interaction ----
+    type Hit = { kind: 'anchor'; k: number } | { kind: 'handle'; k: number; h: 'i' | 'o' } | { kind: 'curve'; x: number } | null;
     const pos = (e: PointerEvent) => {
       const r = cv.getBoundingClientRect();
       const px = (e.clientX - r.left) * (cv.width / r.width), py = (e.clientY - r.top) * (cv.height / r.height);
-      return {
-        x: Math.max(0, Math.min(1, (px - PAD) / (cv.width - 2 * PAD))),
-        y: Math.max(0, Math.min(1, (cv.height - PAD - py) / (cv.height - 2 * PAD))),
-        px, py,
-      };
+      return { x: (px - PAD) / (cv.width - 2 * PAD), y: (cv.height - PAD - py) / (cv.height - 2 * PAD), px, py };
     };
+    function hitTest(px: number, py: number): Hit {
+      const curve = getCurve();
+      const d = (x: number, y: number) => { const [a, b] = toPx(x, y); return Math.hypot(px - a, py - b); };
+      const R = 16;
+      // handles of the visible anchors first (they sit on top)
+      for (let k = 0; k < curve.length; k++) {
+        if (!(k === 0 || k === curve.length - 1 || k === sel)) continue;
+        const n = curve[k];
+        if (k > 0 && d(n.x + n.i[0], n.y + n.i[1]) < R) return { kind: 'handle', k, h: 'i' };
+        if (k < curve.length - 1 && d(n.x + n.o[0], n.y + n.o[1]) < R) return { kind: 'handle', k, h: 'o' };
+      }
+      for (let k = 0; k < curve.length; k++) if (d(curve[k].x, curve[k].y) < R) return { kind: 'anchor', k };
+      // on the curve?
+      const x = clamp01((px - PAD) / (cv.width - 2 * PAD));
+      if (d(x, fx(x)) < 14) return { kind: 'curve', x };
+      return null;
+    }
+    let drag: Hit = null;
+    let downAt = 0;
+    let lastTap = { t: 0, k: -1 };
     cv.addEventListener('pointerdown', (e) => {
       const { px, py } = pos(e);
-      const [x1, y1, x2, y2] = getCurve();
-      const d = (hx: number, hy: number) => { const [x, y] = toPx(hx, hy); return Math.hypot(px - x, py - y); };
-      const d1 = d(x1, y1), d2 = d(x2, y2);
-      drag = Math.min(d1, d2) < 40 ? (d1 <= d2 ? 0 : 1) : null;
-      if (drag !== null) { cv.setPointerCapture(e.pointerId); e.preventDefault(); }
+      const hit = hitTest(px, py);
+      const curve = getCurve();
+      downAt = performance.now();
+      if (hit?.kind === 'curve') {
+        // insert an anchor on the curve, smooth, tangent along the curve
+        const x = hit.x, y = fx(x);
+        let k = 0;
+        while (k < curve.length - 1 && curve[k + 1].x < x) k++;
+        const a = curve[k], b = curve[k + 1];
+        const dx = Math.min(x - a.x, b.x - x) * 0.4;
+        const slope = (fx(Math.min(1, x + 0.01)) - fx(Math.max(0, x - 0.01))) / 0.02;
+        const node: CurveNode = { x, y, i: [-dx, -dx * slope], o: [dx, dx * slope], s: true };
+        // shorten neighbours' handles so they don't overshoot the new anchor
+        a.o = [Math.min(a.o[0], (x - a.x) * 0.9), a.o[1]];
+        b.i = [Math.max(b.i[0], (x - b.x) * 0.9), b.i[1]];
+        curve.splice(k + 1, 0, node);
+        sel = k + 1;
+        drag = { kind: 'anchor', k: sel };
+        cv.setPointerCapture(e.pointerId);
+        restyle();
+        return;
+      }
+      if (hit?.kind === 'anchor') {
+        const now = performance.now();
+        if (lastTap.k === hit.k && now - lastTap.t < 350 && hit.k > 0 && hit.k < curve.length - 1) {
+          curve.splice(hit.k, 1); sel = null; drag = null; lastTap = { t: 0, k: -1 };
+          restyle();
+          return;
+        }
+        lastTap = { t: now, k: hit.k };
+        sel = hit.k;
+      }
+      drag = hit;
+      if (drag) { cv.setPointerCapture(e.pointerId); e.preventDefault(); }
+      else sel = null;
+      draw();
     });
     cv.addEventListener('pointermove', (e) => {
-      if (drag === null) return;
+      if (!drag || drag.kind === 'curve') return;
+      const curve = getCurve();
       const { x, y } = pos(e);
-      const c = getCurve();
-      if (drag === 0) { c[0] = x; c[1] = y; } else { c[2] = x; c[3] = y; }
+      if (drag.kind === 'anchor') {
+        const k = drag.k;
+        if (k === 0 || k === curve.length - 1) return; // endpoints are fixed
+        const n = curve[k];
+        n.x = Math.max(curve[k - 1].x + 0.01, Math.min(curve[k + 1].x - 0.01, x));
+        n.y = clamp01(y);
+      } else {
+        const n = curve[drag.k];
+        // handle x is clamped between its anchor and the neighbour so x(t) stays monotone
+        const lo = drag.h === 'i' ? curve[drag.k - 1].x : n.x;
+        const hi = drag.h === 'o' ? curve[drag.k + 1].x : n.x;
+        const hx = Math.max(lo, Math.min(hi, x)) - n.x;
+        const hy = Math.max(-1, Math.min(2, y)) - n.y;
+        n[drag.h] = [hx, hy];
+        if (n.s && drag.k > 0 && drag.k < curve.length - 1) {
+          // smooth: mirror direction onto the other handle, keep its own length
+          const other = drag.h === 'i' ? 'o' : 'i';
+          const len = Math.hypot(n[other][0], n[other][1]) || Math.hypot(hx, hy);
+          const l = Math.hypot(hx, hy) || 1;
+          let mx = (-hx / l) * len, my = (-hy / l) * len;
+          const olo = other === 'i' ? curve[drag.k - 1].x : n.x;
+          const ohi = other === 'o' ? curve[drag.k + 1].x : n.x;
+          mx = Math.max(olo, Math.min(ohi, n.x + mx)) - n.x;
+          n[other] = [mx, my];
+        }
+      }
       restyle();
     });
     const end = () => { drag = null; };
     cv.addEventListener('pointerup', end);
     cv.addEventListener('pointercancel', end);
-    return { draw };
+    bar.addEventListener('click', (e) => {
+      const act = (e.target as HTMLElement).closest('button')?.dataset.act;
+      const curve = getCurve();
+      if (sel === null || sel <= 0 || sel >= curve.length - 1) return;
+      const k = sel;
+      if (act === 'delete') { curve.splice(k, 1); sel = null; }
+      if (act === 'smooth') {
+        const n = curve[k];
+        n.s = !n.s;
+        if (n.s) { const l = Math.hypot(n.o[0], n.o[1]) || 0.05; const li = Math.hypot(n.i[0], n.i[1]) || l; n.i = [(-n.o[0] / l) * li, (-n.o[1] / l) * li]; }
+      }
+      restyle();
+    });
+    return { draw, deselect: () => { sel = null; } };
   }
   const pressureEditor = curveEditor(
     pgCurve,
@@ -2066,6 +2181,7 @@ export function buildUI(
   function drawCurve() {
     pressureEditor.draw();
     pgTiltCv.hidden = pgTool !== 'pencil';
+    (pgTiltCv.nextElementSibling as HTMLElement).hidden = pgTiltCv.hidden;
     if (!pgTiltCv.hidden) tiltEditor.draw();
   }
 
@@ -2106,6 +2222,7 @@ export function buildUI(
   pg.querySelectorAll<HTMLElement>('.pg-tool').forEach((b) =>
     b.addEventListener('click', () => {
       pgTool = b.dataset.t as PTool;
+      pressureEditor.deselect(); tiltEditor.deselect();
       rigState.tool = pgTool;
       rigState.lastDrawTool = pgTool;
       rigState.updateCursor();

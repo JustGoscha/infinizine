@@ -234,7 +234,10 @@ export class Renderer {
       // a flat Pencil lays the side of the graphite down: light strokes get
       // much wider and fainter (shading); pressing hard sharpens back to a line
       const tiltMul = 1 + (pressure.pencil.tilt - 1) * easeTilt(st.a ?? 0, 'pencil') * (1 - st.p);
-      const r = wBase * (0.72 - st.p * 0.12) * tiltMul * (0.98 + rnd(i, 3) * 0.04);
+      // min/max width from the playground shape the effective width (st.p is already eased)
+      const kp = pressure.pencil;
+      const wEff = wBase * kp.max * (kp.min + (1 - kp.min) * st.p);
+      const r = wEff * (0.72 - st.p * 0.12) * tiltMul * (0.98 + rnd(i, 3) * 0.04);
       const jx = (rnd(i, 1) - 0.5) * r * 0.07;
       const jy = (rnd(i, 2) - 0.5) * r * 0.07;
       const wobble = 0.9 + rnd(i, 4) * 0.2;
@@ -248,7 +251,7 @@ export class Renderer {
       // dense core: kicks in past mid pressure, near-solid at full
       const core = Math.max(0, (st.p - 0.4) / 0.6);
       if (core > 0) {
-        const rc = wBase * (0.62 - core * 0.2) * (0.98 + rnd(i, 3) * 0.04);
+        const rc = wEff * (0.62 - core * 0.2) * (0.98 + rnd(i, 3) * 0.04);
         target.globalAlpha = alphaScale * Math.pow(core, 1.3) * 0.9 * wobble;
         target.drawImage(nib.dense[Math.floor(rnd(i, 9) * 8)], -rc, -rc, rc * 2, rc * 2);
       }
