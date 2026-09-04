@@ -7,8 +7,8 @@ type TextMetrics = { x: number; w: number; h: number; fontSize: number };
 type BoxRect = { x: number; y: number; w: number; h: number };
 
 type Op =
-  | { type: 'add-elements'; elements: Element[] }
-  | { type: 'delete-elements'; elements: Element[] }
+  | { type: 'add-elements'; elements: Element[]; at?: number[] }
+  | { type: 'delete-elements'; elements: Element[]; at?: number[] }
   | { type: 'move-elements'; ids: string[]; dx: number; dy: number }
   | { type: 'update-text'; id: string; before: TextContent; after: TextContent }
   | { type: 'resize-text'; id: string; before: TextMetrics; after: TextMetrics }
@@ -35,7 +35,10 @@ type Op =
   | { type: 'frame-duration'; areaId: string; layerId: string; frameId: string; before: number; after: number }
   | { type: 'area-settings'; areaId: string; before: { fps: number; loop: boolean; clip: boolean }; after: { fps: number; loop: boolean; clip: boolean } }
   | { type: 'rename-area'; areaId: string; before: string; after: string }
-  | { type: 'rename-anim-layer'; areaId: string; layerId: string; before: string; after: string };
+  | { type: 'rename-anim-layer'; areaId: string; layerId: string; before: string; after: string }
+  | { type: 'doc-style'; field: 'palette' | 'paper' | 'pattern'; before: string; after: string }
+  | { type: 'layer-flag'; areaId: string; layerId: string; field: 'hidden' | 'loop'; before: boolean; after: boolean }
+  | { type: 'area-flag'; areaId: string; field: 'hideFrames' | 'hideLive'; before: boolean; after: boolean };
 
 // Zine library: an index of saved documents + one localStorage entry per doc.
 const LEGACY_KEY = 'infinicanvas-doc-v1';
@@ -202,14 +205,24 @@ export class Store {
     const d = this.doc;
     switch (op.type) {
       case 'add-elements':
-        // 'back' ink goes behind everything, including earlier back-layer ink
-        for (const el of op.elements) {
-          if (el.layer === 'back') d.elements.unshift(el);
-          else d.elements.push(el);
+        if (op.at && op.at.length === op.elements.length) {
+          // restoring a delete: put every element back at its original index
+          op.elements
+            .map((el, i) => ({ el, at: op.at![i] }))
+            .sort((a, b) => a.at - b.at)
+            .forEach(({ el, at }) => d.elements.splice(Math.min(at, d.elements.length), 0, el));
+        } else {
+          // 'back' ink goes behind everything, including earlier back-layer ink
+          for (const el of op.elements) {
+            if (el.layer === 'back') d.elements.unshift(el);
+            else d.elements.push(el);
+          }
         }
         break;
       case 'delete-elements': {
         const ids = new Set(op.elements.map((e) => e.id));
+        // remember positions so undo restores the original paint order
+        op.at = op.elements.map((el) => d.elements.findIndex((e) => e.id === el.id));
         d.elements = d.elements.filter((e) => !ids.has(e.id));
         break;
       }
@@ -379,6 +392,22 @@ export class Store {
         if (l) l.name = op.after;
         break;
       }
+      case 'doc-style': {
+        if (op.field === 'palette') d.palette = op.after;
+        else if (op.field === 'paper') d.paper = op.after;
+        else d.pattern = op.after as Doc['pattern'];
+        break;
+      }
+      case 'layer-flag': {
+        const l = this.animLayer(op.areaId, op.layerId);
+        if (l) l[op.field] = op.after;
+        break;
+      }
+      case 'area-flag': {
+        const a = this.area(op.areaId);
+        if (a) a[op.field] = op.after;
+        break;
+      }
     }
   }
 
@@ -393,7 +422,7 @@ export class Store {
   private invert(op: Op): Op {
     switch (op.type) {
       case 'add-elements': return { type: 'delete-elements', elements: op.elements };
-      case 'delete-elements': return { type: 'add-elements', elements: op.elements };
+      case 'delete-elements': return { type: 'add-elements', elements: op.elements, at: op.at };
       case 'move-elements': return { ...op, dx: -op.dx, dy: -op.dy };
       case 'update-text': return { ...op, before: op.after, after: op.before };
       case 'resize-text': return { ...op, before: op.after, after: op.before };
@@ -423,6 +452,9 @@ export class Store {
       case 'area-settings': return { ...op, before: op.after, after: op.before };
       case 'rename-area': return { ...op, before: op.after, after: op.before };
       case 'rename-anim-layer': return { ...op, before: op.after, after: op.before };
+      case 'doc-style': return { ...op, before: op.after, after: op.before };
+      case 'layer-flag': return { ...op, before: op.after, after: op.before };
+      case 'area-flag': return { ...op, before: op.after, after: op.before };
     }
   }
 
@@ -786,23 +818,18 @@ export class Store {
     this.commit({ type: 'retime-strokes', items });
   }
 
-  /** Group visibility (tab eyes), not undoable. */
   setAreaGroupHidden(areaId: string, group: 'frames' | 'live', hidden: boolean) {
     const a = this.area(areaId);
     if (!a) return;
-    if (group === 'frames') a.hideFrames = hidden;
-    else a.hideLive = hidden;
-    this.scheduleSave();
-    this.onChange();
+    const field = group === 'frames' ? 'hideFrames' : 'hideLive';
+    if (!!a[field] === hidden) return;
+    this.commit({ type: 'area-flag', areaId, field, before: !!a[field], after: hidden });
   }
 
-  /** Per-line loop toggle, not undoable. */
   setLayerLoop(areaId: string, layerId: string, loop: boolean) {
     const l = this.animLayer(areaId, layerId);
-    if (!l) return;
-    l.loop = loop;
-    this.scheduleSave();
-    this.onChange();
+    if (!l || (l.loop !== false) === loop) return;
+    this.commit({ type: 'layer-flag', areaId, layerId, field: 'loop', before: l.loop !== false, after: loop });
   }
 
   moveFrame(areaId: string, layerId: string, from: number, to: number) {
@@ -811,13 +838,10 @@ export class Store {
     this.commit({ type: 'move-frame', areaId, layerId, from, to });
   }
 
-  /** View-state toggle, not undoable. */
   setLayerHidden(areaId: string, layerId: string, hidden: boolean) {
     const l = this.animLayer(areaId, layerId);
-    if (!l) return;
-    l.hidden = hidden;
-    this.scheduleSave();
-    this.onChange();
+    if (!l || !!l.hidden === hidden) return;
+    this.commit({ type: 'layer-flag', areaId, layerId, field: 'hidden', before: !!l.hidden, after: hidden });
   }
 
   /** Move the selected elements to the bottom (or top) of the paint order. */
@@ -874,20 +898,19 @@ export class Store {
   }
 
   setPalette(id: string) {
-    this.doc.palette = id;
-    this.scheduleSave();
-    this.onChange();
+    if (id === this.doc.palette) return;
+    this.commit({ type: 'doc-style', field: 'palette', before: this.doc.palette, after: id });
   }
 
   setPaper(color: string) {
-    this.doc.paper = color;
-    this.scheduleSave();
-    this.onChange();
+    const before = this.doc.paper ?? '#F7F4EC';
+    if (color === before) return;
+    this.commit({ type: 'doc-style', field: 'paper', before, after: color });
   }
 
   setPattern(pattern: 'blank' | 'dots' | 'grid' | 'lines') {
-    this.doc.pattern = pattern;
-    this.scheduleSave();
-    this.onChange();
+    const before = this.doc.pattern ?? 'dots';
+    if (pattern === before) return;
+    this.commit({ type: 'doc-style', field: 'pattern', before, after: pattern });
   }
 }
