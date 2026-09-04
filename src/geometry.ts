@@ -230,7 +230,7 @@ export const DEFAULT_PRESSURE: PressureParams = {
     tilt: 1,
     min: 1,
     max: 2.4,
-    nib: 0,
+    nib: 45, // chisel edge ~45° to the lean, the classic broad-nib hold
     nibMode: 'azimuth',
   },
 };
@@ -247,6 +247,8 @@ export const pressure: PressureParams = (() => {
           curve: normalizeCurve(p[t]!.curve, out[t].curve),
           tiltCurve: normalizeCurve(p[t]!.tiltCurve, out[t].tiltCurve),
         });
+        // settings saved before the nib offset existed carry a 0: adopt the new default
+        if (t === 'marker' && (p[t] as { nib?: number }).nib === 0) out[t].nib = DEFAULT_PRESSURE.marker.nib;
       }
     }
   } catch { /* ignore */ }
