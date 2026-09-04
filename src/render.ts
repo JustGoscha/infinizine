@@ -226,7 +226,9 @@ export class Renderer {
     }
     for (let i = fromIndex; i < stamps.length; i++) {
       const st = stamps[i];
-      const r = wBase * (0.6 + st.p * 0.2) * (0.98 + rnd(i, 3) * 0.04);
+      // graphite sharpens as you press: the faint halo is widest at light
+      // pressure, the solid core that takes over is narrower than the halo
+      const r = wBase * (0.72 - st.p * 0.12) * (0.98 + rnd(i, 3) * 0.04);
       const jx = (rnd(i, 1) - 0.5) * r * 0.07;
       const jy = (rnd(i, 2) - 0.5) * r * 0.07;
       const wobble = 0.9 + rnd(i, 4) * 0.2;
@@ -240,7 +242,7 @@ export class Renderer {
       // dense core: kicks in past mid pressure, near-solid at full
       const core = Math.max(0, (st.p - 0.4) / 0.6);
       if (core > 0) {
-        const rc = r * 0.92;
+        const rc = wBase * (0.62 - core * 0.2) * (0.98 + rnd(i, 3) * 0.04);
         target.globalAlpha = alphaScale * Math.pow(core, 1.3) * 0.9 * wobble;
         target.drawImage(nib.dense[Math.floor(rnd(i, 9) * 8)], -rc, -rc, rc * 2, rc * 2);
       }
