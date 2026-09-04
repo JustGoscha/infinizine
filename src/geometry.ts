@@ -31,9 +31,9 @@ function cr(p0: number, p1: number, p2: number, p3: number, t: number): number {
     (-p0 + 3 * p1 - 3 * p2 + p3) * t3);
 }
 
-export function densify(points: StrokePoint[]): StrokePoint[] {
+export function densify(points: StrokePoint[], spacing = 2.2): StrokePoint[] {
   if (points.length < 3) return points;
-  const SPACING = 2.2; // world units between in-betweens
+  const SPACING = spacing; // world units between in-betweens
   const out: StrokePoint[] = [points[0]];
   for (let i = 0; i < points.length - 1; i++) {
     const p0 = points[Math.max(0, i - 1)];
@@ -41,7 +41,7 @@ export function densify(points: StrokePoint[]): StrokePoint[] {
     const p2 = points[i + 1];
     const p3 = points[Math.min(points.length - 1, i + 2)];
     const dist = Math.hypot(p2.x - p1.x, p2.y - p1.y);
-    const n = Math.min(24, Math.floor(dist / SPACING));
+    const n = Math.min(64, Math.floor(dist / SPACING));
     for (let j = 1; j <= n; j++) {
       const t = j / (n + 1);
       out.push({
@@ -61,11 +61,42 @@ export function densify(points: StrokePoint[]): StrokePoint[] {
 // Pencil is noisiest and stops the "spaghetti" width swings.
 const easeP = (t: number) => 0.5 - 0.5 * Math.cos(Math.PI * Math.max(0, Math.min(1, t)));
 
+/** Spatial Gaussian denoise along the polyline. `sigma` is in world units —
+ * pass ~1.2 screen px worth (1.2 / zoom at drawing time) so quantisation
+ * jitter from the digitiser is removed identically at every zoom level:
+ * zoomed out, the screen-pixel steps are huge in world space and get
+ * averaged away; zoomed in, sigma is tiny and the line is left untouched. */
+export function denoise(points: StrokePoint[], sigma: number): StrokePoint[] {
+  const n = points.length;
+  if (n < 3 || sigma <= 0) return points;
+  const arc = new Float64Array(n);
+  for (let i = 1; i < n; i++) {
+    arc[i] = arc[i - 1] + Math.hypot(points[i].x - points[i - 1].x, points[i].y - points[i - 1].y);
+  }
+  const reach = sigma * 3;
+  const inv = 1 / (2 * sigma * sigma);
+  const out: StrokePoint[] = new Array(n);
+  out[0] = points[0];
+  out[n - 1] = points[n - 1];
+  let lo = 0;
+  for (let i = 1; i < n - 1; i++) {
+    while (arc[i] - arc[lo] > reach) lo++;
+    let sx = 0, sy = 0, sw = 0;
+    for (let j = lo; j < n && arc[j] - arc[i] <= reach; j++) {
+      const d = arc[j] - arc[i];
+      const w = Math.exp(-d * d * inv);
+      sx += points[j].x * w; sy += points[j].y * w; sw += w;
+    }
+    out[i] = { ...points[i], x: sx / sw, y: sy / sw };
+  }
+  return out;
+}
+
 const TOOL_OPTIONS = {
   pencil: (w: number) => ({
     size: w,
     thinning: 0.45,
-    smoothing: 0.6,
+    smoothing: 0.35,
     streamline: 0.4,
     easing: easeP,
     simulatePressure: false,
@@ -75,7 +106,7 @@ const TOOL_OPTIONS = {
   sketch: (w: number) => ({
     size: w,
     thinning: 0.4,
-    smoothing: 0.6,
+    smoothing: 0.35,
     streamline: 0.4,
     easing: easeP,
     simulatePressure: false,
@@ -85,7 +116,7 @@ const TOOL_OPTIONS = {
   pen: (w: number) => ({
     size: w,
     thinning: 0.38, // Notes-like: visible swell, no spaghetti
-    smoothing: 0.65,
+    smoothing: 0.35,
     streamline: 0.45,
     easing: easeP,
     simulatePressure: false,
@@ -95,7 +126,7 @@ const TOOL_OPTIONS = {
   fineliner: (w: number) => ({
     size: w,
     thinning: 0.1, // near-constant width
-    smoothing: 0.65,
+    smoothing: 0.35,
     streamline: 0.45,
     easing: easeP,
     simulatePressure: false,
@@ -105,7 +136,7 @@ const TOOL_OPTIONS = {
   marker: (w: number) => ({
     size: w * 2.4,
     thinning: 0.06,
-    smoothing: 0.65,
+    smoothing: 0.35,
     streamline: 0.45,
     simulatePressure: false,
     start: { cap: false, taper: 0 },
@@ -116,10 +147,10 @@ const TOOL_OPTIONS = {
 /** Pencil rendering (Here-Dragons-Abound style, adapted to vectors): several
  * displaced copies of the stroke, drawn at low opacity with multiply blending.
  * Low-frequency wobble = wandering graphite line; high-frequency = rough edges. */
-export function pencilOutlines(stroke: Stroke): number[][][] {
+export function pencilOutlines(stroke: Stroke, detail = 1): number[][][] {
   let seed = 0;
   for (let i = 0; i < stroke.id.length; i++) seed = (seed * 31 + stroke.id.charCodeAt(i)) % 9973;
-  const base = densify(filterPressure(stroke.points));
+  const base = densify(filterPressure(stroke.points), 2.2 / detail);
   const noPressure = stroke.points.every((p) => Math.abs(p.p - 0.5) < 0.001);
   const widths = [0.95, 0.78, 0.62];
   const passes: number[][][] = [];
@@ -134,16 +165,23 @@ export function pencilOutlines(stroke: Stroke): number[][][] {
       p.p,
     ]);
     const opts = { ...TOOL_OPTIONS.sketch(stroke.baseWidth * widths[k]) };
+    opts.smoothing /= detail;
     if (noPressure) opts.simulatePressure = true;
     passes.push(getStroke(pts, opts));
   }
   return passes;
 }
 
-/** Variable-width outline polygon for a stroke (world coords). */
-export function strokeOutline(stroke: Stroke): number[][] {
-  const pts = densify(filterPressure(stroke.points)).map((p) => [p.x, p.y, p.p]);
+/** Variable-width outline polygon for a stroke (world coords).
+ * `detail` = zoom relative to 100% (bucketed by the renderer): in-between
+ * spacing and outline vertex density scale with it so a stroke has the same
+ * screen-space smoothness whether you're at 25% or 800%. */
+export function strokeOutline(stroke: Stroke, detail = 1): number[][] {
+  const pts = densify(filterPressure(stroke.points), 2.2 / detail).map((p) => [p.x, p.y, p.p]);
   const opts = { ...TOOL_OPTIONS[stroke.tool](stroke.baseWidth) };
+  // perfect-freehand's `smoothing` is really a vertex-skip distance (size × smoothing);
+  // shrink it with zoom so round tips stay round instead of turning polygonal
+  opts.smoothing /= detail;
   // pencil emulation for pressureless input (mouse/finger): synthesize
   // pressure from stroke velocity so lines still swell and taper
   if (

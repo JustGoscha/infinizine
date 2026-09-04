@@ -5,7 +5,7 @@
 import { Camera } from './camera';
 import { Store } from './store';
 import { AnimArea, Stroke, FillShape, Element, ImageBox, Page, TextBox, uid } from './types';
-import { hitElement, elementsInLasso } from './geometry';
+import { hitElement, elementsInLasso, denoise } from './geometry';
 import { layoutText, layoutHeight } from './text';
 
 const CLIP_KEY = 'infinizine-clipboard';
@@ -133,6 +133,24 @@ export function attachInput(
   invalidate: () => void,
 ) {
   const touches = new Map<number, TouchInfo>();
+  // multi-finger gestures: 2-finger tap = undo, 3-finger tap = redo,
+  // 2-finger hold (no motion) then horizontal swipe = scrub through history
+  let gesture: { fingers: number; t: number; moved: number; mid: { x: number; y: number } } | null = null;
+  let scrub: { x: number } | null = null; // active undo/redo scrub, last stepped x
+  let scrubTimer = 0;
+  const SCRUB_HOLD_MS = 380;
+  const SCRUB_STEP_PX = 36;
+  const TAP_MAX_MS = 320;
+  const TAP_MAX_PX = 14;
+  function armScrub() {
+    window.clearTimeout(scrubTimer);
+    scrubTimer = window.setTimeout(() => {
+      if (!gesture || touches.size !== 2 || gesture.moved > TAP_MAX_PX || scrub) return;
+      const [a, b] = [...touches.values()];
+      scrub = { x: (a.x + b.x) / 2 };
+      toast('← undo · redo →');
+    }, SCRUB_HOLD_MS);
+  }
   let drawingPointer: number | null = null;
   let strokeStart = 0;
   let textDragStart = { x: 0, y: 0 };
@@ -164,7 +182,9 @@ export function attachInput(
   let pEma: number | null = null;
   let lastValidP: number | null = null;
   const P_EMA = 0.3;
-  const MIN_DIST_SQ = 0.35 * 0.35; // world units; drops stacked samples at slow speed
+  const MIN_DIST_PX = 1.2; // screen px; drops stacked samples at slow speed
+  let minDistSq = 0; // world-space square of MIN_DIST_PX, fixed at stroke start
+  let strokeZoom = 1; // zoom at drawing time → denoise radius on commit
   let lastEventT = 0;
 
   function conditionPressure(e: PointerEvent): number {
@@ -444,6 +464,8 @@ export function attachInput(
         pEma = null;
         lastValidP = null;
         lastEventT = e.timeStamp;
+        strokeZoom = camera.zoom;
+        minDistSq = (MIN_DIST_PX / camera.zoom) ** 2;
         smooth(w);
         // drawing into a PLAYING area records a timed stroke on the loop clock
         const playingArea =
@@ -639,7 +661,7 @@ export function attachInput(
         const last = state.live.points[state.live.points.length - 1];
         const dx = cw.x - last.x, dy = cw.y - last.y;
         const p = conditionPressure(ce as PointerEvent);
-        if (dx * dx + dy * dy < MIN_DIST_SQ) {
+        if (dx * dx + dy * dy < minDistSq) {
           last.p = p; // keep the freshest pressure, no new vertex
           continue;
         }
@@ -855,6 +877,10 @@ export function attachInput(
         const p0 = s.points[0];
         s.points.push({ ...p0, x: p0.x + 0.15, t: 0.01 }); // dot
       }
+      // digitiser quantisation is ~1 screen px; smooth it away in world units
+      // scaled by the zoom you drew at, so zoomed-out lines don't kink when
+      // you zoom back in and zoomed-in lines keep every intended wiggle
+      s.points = denoise(s.points, 1.2 / strokeZoom);
       if (s.area) {
         // live ink: every stroke gets its own live layer with its own cycle
         store.addLiveLayer(s.area, s, 'continuous');
@@ -1249,10 +1275,18 @@ export function attachInput(
         const [a, b] = [...touches.values()];
         pinchDist = Math.hypot(a.x - b.x, a.y - b.y);
         pinchMid = { x: (a.x + b.x) / 2, y: (a.y + b.y) / 2 };
+        gesture = { fingers: 2, t: performance.now(), moved: 0, mid: { ...pinchMid } };
+        scrub = null;
+        armScrub();
         invalidate();
         return;
       }
-      if (touches.size > 2) return;
+      if (touches.size > 2) {
+        if (gesture) gesture.fingers = Math.max(gesture.fingers, touches.size);
+        window.clearTimeout(scrubTimer);
+        scrub = null;
+        return;
+      }
       if (!isDrawPointer(e)) {
         // pencil users: double-tap the canvas with one finger to flip eraser/draw
         if (state.fingerMode === 'pan' && state.penDetected && !state.presenting && touches.size === 1) {
@@ -1415,6 +1449,23 @@ export function attachInput(
         const dist = Math.hypot(a.x - b.x, a.y - b.y);
         const mid = { x: (a.x + b.x) / 2, y: (a.y + b.y) / 2 };
         const r = canvas.getBoundingClientRect();
+        if (gesture) {
+          gesture.moved = Math.max(gesture.moved, Math.hypot(mid.x - gesture.mid.x, mid.y - gesture.mid.y));
+          if (gesture.moved > TAP_MAX_PX && !scrub) window.clearTimeout(scrubTimer);
+        }
+        if (scrub) {
+          // history scrub: every step left undoes, every step right redoes
+          let steps = Math.trunc((mid.x - scrub.x) / SCRUB_STEP_PX);
+          if (steps !== 0) {
+            scrub.x += steps * SCRUB_STEP_PX;
+            for (; steps < 0; steps++) store.undo();
+            for (; steps > 0; steps--) store.redo();
+            invalidate();
+          }
+          pinchDist = dist;
+          pinchMid = mid;
+          return;
+        }
         if (pinchMid) camera.panScreen(mid.x - pinchMid.x, mid.y - pinchMid.y);
         if (pinchDist > 0 && !state.zoomLocked) {
           camera.zoomAt(dist / pinchDist, mid.x - r.left, mid.y - r.top, vw(), vh());
@@ -1435,6 +1486,18 @@ export function attachInput(
   const finish = (e: PointerEvent) => {
     touches.delete(e.pointerId);
     if (touches.size < 2) { pinchDist = 0; pinchMid = null; }
+    if (e.pointerType === 'touch' && gesture && touches.size === 0) {
+      window.clearTimeout(scrubTimer);
+      const g = gesture;
+      gesture = null;
+      const wasScrub = !!scrub;
+      scrub = null;
+      if (!wasScrub && performance.now() - g.t < TAP_MAX_MS && g.moved < TAP_MAX_PX && !state.presenting) {
+        if (g.fingers === 2) { store.undo(); toast('Undo'); }
+        else if (g.fingers >= 3) { store.redo(); toast('Redo'); }
+        invalidate();
+      }
+    }
     if (drawingPointer === e.pointerId || dragPage || dragArea || dragSelection || panLast || resizeArea || resizeImg) {
       drawingPointer = null;
       endAction(e);
@@ -1442,6 +1505,12 @@ export function attachInput(
   };
   canvas.addEventListener('pointerup', finish);
   canvas.addEventListener('pointercancel', finish);
+  // Safari runs its double-tap gesture recogniser on the raw touch events and
+  // swallows the second quick Pencil tap unless these are cancelled here
+  // (touch-action:none alone isn't enough) — same trick Doodely uses.
+  for (const t of ['touchstart', 'touchmove', 'touchend', 'touchcancel']) {
+    canvas.addEventListener(t, (e) => e.preventDefault(), { passive: false });
+  }
 
   // Double-click / double-tap a textbox in cursor modes (select/hand) jumps into editing
   const CURSOR_TOOLS: Tool[] = ['cursor', 'lasso-select', 'hand', 'text'];

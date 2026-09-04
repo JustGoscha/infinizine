@@ -8,7 +8,7 @@ import { layoutText, fontFor, segWidth, LINE_HEIGHT } from './text';
 import { moveHandleRect, moveAllHandleRect, deleteHandleRect, eyeHandleRect, type InputState } from './input';
 import { Store } from './store';
 
-interface CacheEntry { path: Path2D; bbox: BBox; passes?: Path2D[]; core?: Path2D }
+interface CacheEntry { path: Path2D; bbox: BBox; passes?: Path2D[]; core?: Path2D; detail: number }
 
 export class Renderer {
   private ctx: CanvasRenderingContext2D;
@@ -62,16 +62,25 @@ export class Renderer {
   dropFromCache(id: string) { this.cache.delete(id); this.pencilCache.delete(id); }
   clearCache() { this.cache.clear(); this.pencilCache.clear(); }
 
+  /** Outline detail bucket for the current zoom: 1 at 100%, doubling per
+   * zoom octave. Cached outlines are rebuilt when the bucket changes so a
+   * stroke has the same screen-space smoothness at every zoom level. */
+  private detail(): number {
+    const rel = this.camera.zoom / baseZoom();
+    return Math.min(16, Math.max(0.25, 2 ** Math.round(Math.log2(rel))));
+  }
+
   private entry(el: Stroke | FillShape): CacheEntry {
+    const detail = this.detail();
     let e = this.cache.get(el.id);
-    if (!e) {
+    if (!e || e.detail !== detail) {
       const path =
         el.kind === 'stroke'
-          ? outlineToPath(strokeOutline(el))
+          ? outlineToPath(strokeOutline(el, detail))
           : polygonPath(el.points);
-      e = { path, bbox: elementBBox(el) };
+      e = { path, bbox: elementBBox(el), detail };
       if (el.kind === 'stroke' && el.tool === 'sketch') {
-        e.passes = pencilOutlines(el).map(outlineToPath);
+        e.passes = pencilOutlines(el, detail).map(outlineToPath);
       }
       this.cache.set(el.id, e);
     }
@@ -388,7 +397,7 @@ export class Renderer {
         ctx.save();
         ctx.globalCompositeOperation = 'multiply';
         ctx.fillStyle = live.color;
-        for (const pass of pencilOutlines(live)) {
+        for (const pass of pencilOutlines(live, this.detail())) {
           ctx.globalAlpha = 0.42 * live.opacity;
           ctx.fill(outlineToPath(pass));
         }
@@ -397,7 +406,7 @@ export class Renderer {
       }
       ctx.globalAlpha = live.opacity;
       ctx.fillStyle = this.inkStyle(live, z);
-      ctx.fill(outlineToPath(strokeOutline(live)));
+      ctx.fill(outlineToPath(strokeOutline(live, this.detail())));
     };
     // Animation: each layer runs its own timeline. Deselected areas always play;
     // in the edited area, the active layer holds on the active frame and the other
@@ -525,7 +534,7 @@ export class Renderer {
       }
       ctx.globalAlpha = el.opacity * dimFactor;
       ctx.fillStyle = this.inkStyle(el, z);
-      ctx.fill(outlineToPath(strokeOutline({ ...el, points: pts })));
+      ctx.fill(outlineToPath(strokeOutline({ ...el, points: pts }, this.detail())));
       ctx.globalAlpha = 1;
     };
 
