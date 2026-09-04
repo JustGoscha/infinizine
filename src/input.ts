@@ -2,7 +2,7 @@
 // mouse works for desktop/browser verification. Coalesced events used
 // for high-frequency stroke sampling.
 
-import { Camera } from './camera';
+import { Camera, baseZoom } from './camera';
 import { Store } from './store';
 import { AnimArea, Stroke, FillShape, Element, ImageBox, Page, TextBox, uid } from './types';
 import { hitElement, elementsInLasso, denoise } from './geometry';
@@ -85,7 +85,12 @@ export function textHandleRect(el: TextBox, zoom: number) {
 export class InputState {
   tool: Tool = 'pen';
   color = '#1a1a1a';
-  baseWidth = 3.5;
+  baseWidth = 1.6; // world units at 100% (2 per mm)
+  adaptiveSize = readPref('infinizine-adaptive-size') === '1'; // keep on-screen size across zoom
+  /** brush width in world units for a stroke started at this zoom */
+  effectiveWidth(zoom: number): number {
+    return this.adaptiveSize ? this.baseWidth * (baseZoom() / zoom) : this.baseWidth;
+  }
   paintBehind = false; // 'back' layer toggle for new strokes/fills
   font = 'franklin'; // typeface for new textboxes
   textSize = 8; // world units; Title 18 / Heading 12 / Body 8 / Sub 6
@@ -512,7 +517,7 @@ export function attachInput(
         state.live = {
           id: uid('st'), kind: 'stroke', tool: activeTool as import('./types').ToolKind,
           color: state.color,
-          baseWidth: state.baseWidth / (activeTool === 'fineliner' ? 1.4 : 1),
+          baseWidth: state.effectiveWidth(camera.zoom) / (activeTool === 'fineliner' ? 1.4 : 1),
           opacity: activeTool === 'marker' ? 0.45 : 1,
           layer: state.paintBehind ? 'back' : 'front',
           ...anim,

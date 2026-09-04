@@ -88,10 +88,13 @@ const TOOL_GROUPS: { id: string; tools: Tool[] }[] = [
 ];
 
 const SIZES = [
-  { w: 2, label: 'S' },
-  { w: 3.5, label: 'M' },
-  { w: 6, label: 'L' },
+  { w: 0.8, label: 'XS' },
+  { w: 1.2, label: 'S' },
+  { w: 1.6, label: 'M' },
+  { w: 2.4, label: 'L' },
+  { w: 4, label: 'XL' },
 ];
+const ADAPTIVE_KEY = 'infinizine-adaptive-size';
 
 interface Fmt { label: string; w: number; h: number; screen?: boolean } // w/h in world units (2/mm); screen = fit to viewport on pick
 const mm = (w: number, h: number) => ({ w: w * UNITS_PER_MM, h: h * UNITS_PER_MM });
@@ -282,10 +285,11 @@ export function buildUI(
       <div class="tool-flyout size-flyout">
         <div class="size-presets">${SIZES.map(
           (sz) => `<button class="size" data-w="${sz.w}" title="${sz.label}">
-            <i style="width:${4 + sz.w * 2}px;height:${4 + sz.w * 2}px"></i>
+            <i style="width:${3 + sz.w * 3}px;height:${3 + sz.w * 3}px"></i>
           </button>`,
         ).join('')}</div>
-        <input type="range" id="size-fader" min="0.5" max="14" step="0.5" title="Exact size">
+        <input type="range" id="size-fader" min="0.3" max="12" step="0.1" title="Exact size">
+        <button class="size-adaptive" id="size-adaptive" title="Adaptive: the brush keeps its on-screen size at every zoom level">${svg('<circle cx="10.5" cy="10.5" r="6.5"/><path d="M15.5 15.5 L21 21"/><path d="M8 10.5h5 M10.5 8v5"/>')}<span>adaptive</span></button>
       </div>
       <button class="tool tool-slot" id="size-slot" title="Stroke size"><i id="size-dot"></i></button>
     </div>
@@ -301,6 +305,12 @@ export function buildUI(
   const sizeFader = sizesEl.querySelector('#size-fader') as HTMLInputElement;
   sizeFader.addEventListener('input', () => {
     state.baseWidth = Number(sizeFader.value);
+    refresh();
+  });
+  const adaptiveBtn = sizesEl.querySelector('#size-adaptive') as HTMLButtonElement;
+  adaptiveBtn.addEventListener('click', () => {
+    state.adaptiveSize = !state.adaptiveSize;
+    writePref(ADAPTIVE_KEY, state.adaptiveSize ? '1' : '0');
     refresh();
   });
   (sizesEl.querySelector('#size-slot') as HTMLButtonElement).addEventListener('click', () => {
@@ -1769,8 +1779,9 @@ export function buildUI(
     root.querySelectorAll<HTMLElement>('.size').forEach((b) =>
       b.classList.toggle('active', Number(b.dataset.w) === state.baseWidth),
     );
+    (root.querySelector('#size-adaptive') as HTMLElement).classList.toggle('on', state.adaptiveSize);
     const sizeDot = root.querySelector('#size-dot') as HTMLElement;
-    const d = Math.min(26, 4 + state.baseWidth * 2);
+    const d = Math.min(26, 3 + state.baseWidth * 3);
     sizeDot.style.width = `${d}px`;
     sizeDot.style.height = `${d}px`;
     (root.querySelector('#size-fader') as HTMLInputElement).value = String(state.baseWidth);
@@ -1808,7 +1819,7 @@ export function buildUI(
   }
 
   state.updateCursor = () => {
-    state.toolCursor = cursorFor(state.tool, camera.zoom, state.baseWidth);
+    state.toolCursor = cursorFor(state.tool, camera.zoom, state.effectiveWidth(camera.zoom));
     (document.getElementById('canvas') as HTMLCanvasElement).style.cursor = state.toolCursor;
   };
   // ---------- toast notifications ----------
