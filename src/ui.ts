@@ -2172,22 +2172,16 @@ export function buildUI(
         n.y = clamp01(y);
       } else {
         const n = curve[drag.k];
-        // handle x is clamped between its anchor and the neighbour so x(t) stays monotone
-        const lo = drag.h === 'i' ? curve[drag.k - 1].x : n.x;
-        const hi = drag.h === 'o' ? curve[drag.k + 1].x : n.x;
-        const hx = Math.max(lo, Math.min(hi, x)) - n.x;
-        const hy = Math.max(LO, Math.min(LO + SPAN, y)) - n.y; // may leave the unit box
+        // handles roam the whole visible domain (the curve may fold back; curveAt copes)
+        const hx = Math.max(LO, Math.min(LO + SPAN, x)) - n.x;
+        const hy = Math.max(LO, Math.min(LO + SPAN, y)) - n.y;
         n[drag.h] = [hx, hy];
         if (n.s && drag.k > 0 && drag.k < curve.length - 1) {
           // smooth: mirror direction onto the other handle, keep its own length
           const other = drag.h === 'i' ? 'o' : 'i';
           const len = Math.hypot(n[other][0], n[other][1]) || Math.hypot(hx, hy);
           const l = Math.hypot(hx, hy) || 1;
-          let mx = (-hx / l) * len, my = (-hy / l) * len;
-          const olo = other === 'i' ? curve[drag.k - 1].x : n.x;
-          const ohi = other === 'o' ? curve[drag.k + 1].x : n.x;
-          mx = Math.max(olo, Math.min(ohi, n.x + mx)) - n.x;
-          n[other] = [mx, my];
+          n[other] = [(-hx / l) * len, (-hy / l) * len];
         }
       }
       restyle();

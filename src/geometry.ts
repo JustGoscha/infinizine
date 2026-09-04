@@ -83,25 +83,45 @@ function normalizeCurve(c: unknown, fallback: Curve): Curve {
   }
   return structuredClone(fallback);
 }
-/** y at x: locate the segment by anchor x, solve the segment's cubic for t by bisection. */
+/** y at x. Handles may overshoot past neighbouring anchors (x(t) non-monotone,
+ * the curve loops back), so instead of solving for t we rasterise the whole
+ * path into a 256-entry lookup by x — later parts of the path win where it
+ * folds — and interpolate. Cached per curve object until its shape changes. */
+const lutCache = new WeakMap<Curve, { sig: string; lut: Float32Array }>();
 export function curveAt(c: Curve, x: number): number {
-  x = Math.max(0, Math.min(1, x));
-  let k = 0;
-  while (k < c.length - 2 && x > c[k + 1].x) k++;
-  const a = c[k], b = c[k + 1];
-  const p0x = a.x, p0y = a.y, p1x = a.x + a.o[0], p1y = a.y + a.o[1];
-  const p2x = b.x + b.i[0], p2y = b.y + b.i[1], p3x = b.x, p3y = b.y;
-  if (p3x - p0x < 1e-9) return Math.max(0, Math.min(1, x <= p0x ? p0y : p3y));
-  let lo = 0, hi = 1, t = 0.5;
-  for (let it = 0; it < 24; it++) {
-    t = (lo + hi) / 2;
-    const u = 1 - t;
-    const bx = u * u * u * p0x + 3 * u * u * t * p1x + 3 * u * t * t * p2x + t * t * t * p3x;
-    if (bx < x) lo = t; else hi = t;
+  const sig = JSON.stringify(c);
+  let e = lutCache.get(c);
+  if (!e || e.sig !== sig) {
+    const N = 256;
+    const lut = new Float32Array(N).fill(NaN);
+    for (let k = 0; k < c.length - 1; k++) {
+      const a = c[k], b = c[k + 1];
+      const p0x = a.x, p0y = a.y, p1x = a.x + a.o[0], p1y = a.y + a.o[1];
+      const p2x = b.x + b.i[0], p2y = b.y + b.i[1], p3x = b.x, p3y = b.y;
+      for (let i = 0; i <= 1024; i++) {
+        const t = i / 1024, u = 1 - t;
+        const bx = u * u * u * p0x + 3 * u * u * t * p1x + 3 * u * t * t * p2x + t * t * t * p3x;
+        const by = u * u * u * p0y + 3 * u * u * t * p1y + 3 * u * t * t * p2y + t * t * t * p3y;
+        if (bx < 0 || bx > 1) continue;
+        lut[Math.round(bx * (N - 1))] = Math.max(0, Math.min(1, by));
+      }
+    }
+    // fill gaps by linear interpolation between known entries
+    let prev = -1;
+    for (let i = 0; i < N; i++) {
+      if (Number.isNaN(lut[i])) continue;
+      if (prev < 0) { for (let j = 0; j < i; j++) lut[j] = lut[i]; }
+      else for (let j = prev + 1; j < i; j++) lut[j] = lut[prev] + ((lut[i] - lut[prev]) * (j - prev)) / (i - prev);
+      prev = i;
+    }
+    if (prev < 0) lut.fill(0);
+    else for (let j = prev + 1; j < N; j++) lut[j] = lut[prev];
+    e = { sig, lut };
+    lutCache.set(c, e);
   }
-  const u = 1 - t;
-  const y = u * u * u * p0y + 3 * u * u * t * p1y + 3 * u * t * t * p2y + t * t * t * p3y;
-  return Math.max(0, Math.min(1, y));
+  const f = Math.max(0, Math.min(1, x)) * 255;
+  const i = Math.floor(f), frac = f - i;
+  return i >= 255 ? e.lut[255] : e.lut[i] + (e.lut[i + 1] - e.lut[i]) * frac;
 }
 
 export interface ToolPressure {
