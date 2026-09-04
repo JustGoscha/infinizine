@@ -2,11 +2,45 @@
 
 export const MIN_ZOOM = 0.01;
 
-/** 100% = true physical scale: world units are 2/mm, and CSS defines 96px/inch,
- * so an A4 page at 100% measures a real 210×297mm (on a standard-density display).
- * The same convention print/design apps use for their 100%. */
+/** 100% = true physical scale: world units are 2/mm, so an A4 page at 100%
+ * should measure a real 210×297mm. Browsers can't report physical size —
+ * CSS assumes 96px/inch, but an iPad is ~132 CSS px/inch (264ppi at 2×), so we
+ * guess per device class and let the user calibrate against a credit card. */
+const CAL_KEY = 'infinizine-pxmm';
+let pxMm: number | null = null;
+
+export function detectPxPerMm(): number {
+  const ua = navigator.userAgent;
+  const iOS = /iPad|iPhone/.test(ua) || (/Macintosh/.test(ua) && navigator.maxTouchPoints > 1);
+  if (iOS) {
+    if (/iPhone/.test(ua)) return (devicePixelRatio >= 3 ? 460 / 3 : 326 / 2) / 25.4;
+    const long = Math.max(screen.width, screen.height); // CSS px
+    // iPad mini (326ppi) has a 1133px long side; every other iPad is 264ppi
+    return (long >= 1120 && long <= 1140 ? 163 : 132) / 25.4;
+  }
+  return 96 / 25.4;
+}
+
+export function pxPerMm(): number {
+  if (pxMm === null) {
+    let stored = NaN;
+    try { stored = Number(localStorage.getItem(CAL_KEY)); } catch { /* ignore */ }
+    pxMm = stored > 0 ? stored : detectPxPerMm();
+  }
+  return pxMm;
+}
+
+/** null = back to the device guess */
+export function setPxPerMm(v: number | null) {
+  pxMm = v ?? detectPxPerMm();
+  try {
+    if (v) localStorage.setItem(CAL_KEY, String(v));
+    else localStorage.removeItem(CAL_KEY);
+  } catch { /* ignore */ }
+}
+
 export function baseZoom(): number {
-  return 96 / 25.4 / 2; // css px per mm ÷ world units per mm ≈ 1.89
+  return pxPerMm() / 2; // css px per mm ÷ world units per mm
 }
 export const MAX_ZOOM = 20; // 2000%
 

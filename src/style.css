@@ -1173,6 +1173,48 @@ body.presenting .popover { display: none; }
   color: var(--ink-soft);
 }
 .fmt-custom-label { font-weight: 600; }
+.fmt-cal {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  margin-top: 10px;
+  padding-top: 10px;
+  border-top: 1.5px solid var(--line);
+  font-size: 12px;
+  color: var(--ink-soft);
+  flex-wrap: wrap;
+}
+.fmt-cal-hint { flex: 1 1 100%; font-size: 11px; }
+.fmt-cal input[type='range'] { flex: 1; min-width: 140px; accent-color: var(--ink); }
+.fmt-cal button {
+  border: 1.5px solid var(--ink);
+  background: transparent;
+  color: var(--ink);
+  border-radius: 2px;
+  padding: 3px 10px;
+  font: inherit;
+  font-size: 12px;
+  font-weight: 600;
+  cursor: pointer;
+}
+.cal-card {
+  position: fixed;
+  left: 50%;
+  top: 40%;
+  transform: translate(-50%, -50%);
+  border: 2px dashed var(--ink);
+  border-radius: 3.2mm;
+  pointer-events: none;
+  z-index: 30;
+  display: flex;
+  align-items: flex-end;
+  justify-content: center;
+  padding-bottom: 6px;
+  font-size: 12px;
+  color: var(--ink-soft);
+  background: rgba(253, 252, 248, 0.5);
+}
+.cal-card.hidden { display: none; }
 .fmt-custom input {
   border: 1px solid var(--line);
   border-radius: 2px;

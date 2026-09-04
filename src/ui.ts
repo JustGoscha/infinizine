@@ -2,7 +2,7 @@
 
 import { InputState, Tool, CLIP_PENDING_KEY } from './input';
 import { Store } from './store';
-import { Camera } from './camera';
+import { Camera, baseZoom, pxPerMm, setPxPerMm } from './camera';
 import { PALETTES, getPalette, shades } from './palettes';
 import { UNITS_PER_MM, uid } from './types';
 import { layoutText, layoutHeight, FONTS } from './text';
@@ -302,6 +302,19 @@ export function buildUI(
   const palMore = root.querySelector('#pal-more') as HTMLButtonElement;
   const palettePop = root.querySelector('#palette-popover') as HTMLElement;
   const pagePop = root.querySelector('#page-popover') as HTMLElement;
+  // credit-card outline (85.60 × 53.98 mm) for screen calibration
+  const calCard = document.createElement('div');
+  calCard.className = 'cal-card hidden';
+  calCard.innerHTML = '<span>credit card · 85.6 × 54 mm</span>';
+  document.body.appendChild(calCard);
+  let calTimer = 0;
+  function showCalCard() {
+    calCard.style.width = `${85.6 * pxPerMm()}px`;
+    calCard.style.height = `${53.98 * pxPerMm()}px`;
+    calCard.classList.remove('hidden');
+    window.clearTimeout(calTimer);
+    calTimer = window.setTimeout(() => calCard.classList.add('hidden'), 2500);
+  }
 
   function closeFlyouts() {
     palRow.querySelectorAll('.pal-wrap.open').forEach((w) => w.classList.remove('open'));
@@ -461,7 +474,27 @@ export function buildUI(
         <input id="fmt-h" type="number" min="10" max="2000" placeholder="H"> mm
         <button id="fmt-add">Add</button>
       </div>
+      <div class="fmt-cal">
+        <span class="fmt-custom-label">real size</span>
+        <span class="fmt-cal-hint">hold a credit card on the outline, slide until it fits</span>
+        <input id="cal-slider" type="range" min="2.4" max="8" step="0.01">
+        <button id="cal-auto" title="Back to the device guess">Auto</button>
+      </div>
     `;
+    const slider = pagePop.querySelector('#cal-slider') as HTMLInputElement;
+    slider.value = String(pxPerMm());
+    const applyCal = (v: number | null) => {
+      const before = baseZoom();
+      setPxPerMm(v);
+      camera.zoom *= baseZoom() / before; // keep the zoom percentage, not the pixels
+      slider.value = String(pxPerMm());
+      showCalCard();
+      state.updateCursor();
+      invalidate();
+    };
+    slider.addEventListener('input', () => applyCal(Number(slider.value)));
+    slider.addEventListener('pointerdown', showCalCard);
+    (pagePop.querySelector('#cal-auto') as HTMLButtonElement).addEventListener('click', () => applyCal(null));
     pagePop.querySelectorAll('.fmt').forEach((b) =>
       b.addEventListener('click', () => {
         const f = all[Number((b as HTMLElement).dataset.i)];
