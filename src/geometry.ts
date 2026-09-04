@@ -8,7 +8,7 @@ import type { Stroke, StrokePoint, Element } from './types';
 export function filterPressure(points: StrokePoint[]): StrokePoint[] {
   if (points.length < 3) return points;
   const out = points.map((p) => ({ ...p }));
-  const MAX_DELTA = 0.14; // max pressure change between consecutive samples
+  const MAX_DELTA = 0.08; // max pressure change between consecutive samples
   for (let i = 1; i < out.length; i++) {
     const prev = out[i - 1].p;
     const d = out[i].p - prev;
@@ -56,48 +56,57 @@ export function densify(points: StrokePoint[]): StrokePoint[] {
   return out;
 }
 
+// Raised-cosine pressure response (from Doodely): gentle at the light and
+// heavy ends, most responsive mid-range — hides pressure noise where the
+// Pencil is noisiest and stops the "spaghetti" width swings.
+const easeP = (t: number) => 0.5 - 0.5 * Math.cos(Math.PI * Math.max(0, Math.min(1, t)));
+
 const TOOL_OPTIONS = {
   pencil: (w: number) => ({
     size: w,
-    thinning: 0.7, // graphite responds hard to pressure
-    smoothing: 0.5,
-    streamline: 0.28,
+    thinning: 0.45,
+    smoothing: 0.6,
+    streamline: 0.4,
+    easing: easeP,
     simulatePressure: false,
     start: { taper: w * 1.2, cap: true },
-    end: { taper: w * 2.5, cap: true },
+    end: { taper: w * 2.0, cap: true },
   }),
   sketch: (w: number) => ({
     size: w,
-    thinning: 0.6,
-    smoothing: 0.5,
-    streamline: 0.28,
+    thinning: 0.4,
+    smoothing: 0.6,
+    streamline: 0.4,
+    easing: easeP,
     simulatePressure: false,
     start: { taper: w * 1.2, cap: true },
-    end: { taper: w * 2.2, cap: true },
+    end: { taper: w * 2.0, cap: true },
   }),
   pen: (w: number) => ({
     size: w,
-    thinning: 0.62,
-    smoothing: 0.55,
-    streamline: 0.3,
+    thinning: 0.38, // Notes-like: visible swell, no spaghetti
+    smoothing: 0.65,
+    streamline: 0.45,
+    easing: easeP,
     simulatePressure: false,
-    start: { taper: w * 1.5, cap: true },
-    end: { taper: w * 2.2, cap: true },
+    start: { taper: w * 1.2, cap: true },
+    end: { taper: w * 1.8, cap: true },
   }),
   fineliner: (w: number) => ({
     size: w,
-    thinning: 0, // constant width, ignores pressure
-    smoothing: 0.5,
-    streamline: 0.3,
+    thinning: 0.1, // near-constant width
+    smoothing: 0.65,
+    streamline: 0.45,
+    easing: easeP,
     simulatePressure: false,
     start: { cap: true },
     end: { cap: true },
   }),
   marker: (w: number) => ({
     size: w * 2.4,
-    thinning: 0.08,
-    smoothing: 0.6,
-    streamline: 0.35,
+    thinning: 0.06,
+    smoothing: 0.65,
+    streamline: 0.45,
     simulatePressure: false,
     start: { cap: false, taper: 0 },
     end: { cap: false, taper: 0 },

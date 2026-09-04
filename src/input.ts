@@ -157,6 +157,32 @@ export function attachInput(
   let resizeStart = { x: 0, w: 0, h: 0, fontSize: 0, wx: 0, wy: 0 };
   let ema: { x: number; y: number } | null = null; // input smoothing (Doodely-style EMA)
   const EMA_FACTOR = 0.6; // higher = more responsive, lower = smoother
+  // pressure conditioning (ported from Doodely): Apple Pencil reports noisy
+  // pressure and an exact 0.5 when it hasn't measured yet → carry the last
+  // valid value, back-fill the uncertain head once a real reading arrives,
+  // and low-pass the rest so the outline width doesn't shiver.
+  let pEma: number | null = null;
+  let lastValidP: number | null = null;
+  const P_EMA = 0.3;
+  const MIN_DIST_SQ = 0.35 * 0.35; // world units; drops stacked samples at slow speed
+  let lastEventT = 0;
+
+  function conditionPressure(e: PointerEvent): number {
+    if (e.pointerType !== 'pen') return 0.5;
+    const raw = e.pressure;
+    const uncertain = raw <= 0 || raw === 0.5;
+    if (!uncertain) {
+      if (lastValidP === null && state.live) {
+        // first real reading: back-fill the uncertain head of the stroke
+        for (const pt of state.live.points) pt.p = raw;
+        pEma = raw;
+      }
+      lastValidP = raw;
+    }
+    const target = uncertain ? (lastValidP ?? 0.5) : raw;
+    pEma = pEma === null ? target : pEma + P_EMA * (target - pEma);
+    return pEma;
+  }
 
   function smooth(w: { x: number; y: number }): { x: number; y: number } {
     if (!ema) {
@@ -415,6 +441,9 @@ export function attachInput(
       case 'marker': {
         strokeStart = performance.now() / 1000;
         ema = null;
+        pEma = null;
+        lastValidP = null;
+        lastEventT = e.timeStamp;
         smooth(w);
         // drawing into a PLAYING area records a timed stroke on the loop clock
         const playingArea =
@@ -446,9 +475,11 @@ export function attachInput(
           opacity: activeTool === 'marker' ? 0.45 : 1,
           layer: state.paintBehind ? 'back' : 'front',
           ...anim,
-          points: [{ x: w.x, y: w.y, p: pressureOf(e), t: 0 }],
+          points: [{ x: w.x, y: w.y, p: 0.5, t: 0 }],
           startTime: Date.now() / 1000,
         };
+        conditionPressure(e);
+        state.live.points[0].p = pEma ?? 0.5;
         return;
       }
       case 'eraser':
@@ -601,9 +632,19 @@ export function attachInput(
     if (state.live) {
       const events = e.getCoalescedEvents?.() ?? [e];
       for (const ce of events) {
+        // drop out-of-order coalesced samples (loop-back artifacts)
+        if (ce.timeStamp && ce.timeStamp < lastEventT) continue;
+        if (ce.timeStamp) lastEventT = ce.timeStamp;
         const cw = smooth(toWorld(ce));
+        const last = state.live.points[state.live.points.length - 1];
+        const dx = cw.x - last.x, dy = cw.y - last.y;
+        const p = conditionPressure(ce as PointerEvent);
+        if (dx * dx + dy * dy < MIN_DIST_SQ) {
+          last.p = p; // keep the freshest pressure, no new vertex
+          continue;
+        }
         state.live.points.push({
-          x: cw.x, y: cw.y, p: pressureOf(ce as PointerEvent),
+          x: cw.x, y: cw.y, p,
           t: performance.now() / 1000 - strokeStart,
         });
       }
@@ -1512,8 +1553,3 @@ export function attachInput(
   return api;
 }
 
-function pressureOf(e: PointerEvent): number {
-  if (e.pointerType !== 'pen') return 0.5;
-  // 0 or exactly 0.5 usually means "not reported"
-  return e.pressure > 0 ? e.pressure : 0.5;
-}
