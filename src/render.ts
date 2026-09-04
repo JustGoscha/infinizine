@@ -3,7 +3,7 @@
 
 import { Camera, baseZoom } from './camera';
 import { Element, FillShape, Page, Stroke, StrokePoint } from './types';
-import { strokeOutline, pencilOutlines, outlineToPath, elementBBox, bboxIntersects, densify, filterPressure, easeP, BBox } from './geometry';
+import { strokeOutline, pencilOutlines, outlineToPath, elementBBox, bboxIntersects, densify, filterPressure, easeP, denoise, BBox } from './geometry';
 import { layoutText, fontFor, segWidth, LINE_HEIGHT } from './text';
 import { moveHandleRect, moveAllHandleRect, deleteHandleRect, eyeHandleRect, type InputState } from './input';
 import { Store } from './store';
@@ -408,11 +408,16 @@ export class Renderer {
         this.drawLivePencil(live, vw, vh, dpr);
         return;
       }
+      // same screen-space denoise the stroke gets on commit, so the live line
+      // looks like the final one and the tip never flickers on sample jitter
+      const shown: Stroke = live.points.length > 2
+        ? { ...live, points: denoise(live.points, 1.2 / this.camera.zoom) }
+        : live;
       if (live.tool === 'sketch') {
         ctx.save();
         ctx.globalCompositeOperation = 'multiply';
         ctx.fillStyle = live.color;
-        for (const pass of pencilOutlines(live, this.detail())) {
+        for (const pass of pencilOutlines(shown, this.detail())) {
           ctx.globalAlpha = 0.42 * live.opacity;
           ctx.fill(outlineToPath(pass));
         }
@@ -421,7 +426,7 @@ export class Renderer {
       }
       ctx.globalAlpha = live.opacity;
       ctx.fillStyle = this.inkStyle(live, z);
-      ctx.fill(outlineToPath(strokeOutline(live, this.detail(), true)));
+      ctx.fill(outlineToPath(strokeOutline(shown, this.detail(), true)));
     };
     // Animation: each layer runs its own timeline. Deselected areas always play;
     // in the edited area, the active layer holds on the active frame and the other

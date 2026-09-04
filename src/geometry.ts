@@ -102,7 +102,7 @@ const TOOL_OPTIONS = {
     size: w,
     thinning: 0.45,
     smoothing: 0.35,
-    streamline: 0.4,
+    streamline: 0.3,
     easing: easeP,
     simulatePressure: false,
     start: { taper: w * 1.2, cap: true },
@@ -112,7 +112,7 @@ const TOOL_OPTIONS = {
     size: w,
     thinning: 0.4,
     smoothing: 0.35,
-    streamline: 0.4,
+    streamline: 0.3,
     easing: easeP,
     simulatePressure: false,
     start: { taper: w * 1.2, cap: true },
@@ -122,7 +122,7 @@ const TOOL_OPTIONS = {
     size: w,
     thinning: 0.6, // pressure does the tapering (see strokeOutline); fast curve keeps mid-range calm
     smoothing: 0.35,
-    streamline: 0.45,
+    streamline: 0.3,
     easing: easeP,
     simulatePressure: false,
     start: { taper: w * 1.2, cap: true },
@@ -132,7 +132,7 @@ const TOOL_OPTIONS = {
     size: w,
     thinning: 0.1, // near-constant width
     smoothing: 0.35,
-    streamline: 0.45,
+    streamline: 0.3,
     easing: easeP,
     simulatePressure: false,
     start: { cap: true },
@@ -233,8 +233,11 @@ export function strokeOutline(stroke: Stroke, detail = 1, live = false): number[
   };
   if (typeof o.start?.taper === 'number') o.start = { ...o.start, taper: Math.min(o.start.taper, maxTaper) };
   if (typeof o.end?.taper === 'number') o.end = { ...o.end, taper: Math.min(o.end.taper, maxTaper) };
-  // while drawing, the end isn't an end yet: no exit taper chasing the tip
-  if (live) o.last = false;
+  // the last sample is the pen tip: don't streamline it away (PF default is
+  // last:false, which lags the outline behind the tip). While drawing there is
+  // no exit taper yet — it only appears on lift.
+  o.last = true;
+  if (live) o.end = { cap: true, taper: 0 };
   // pencil emulation for pressureless input (mouse/finger): synthesize
   // pressure from stroke velocity so lines still swell and taper
   if (
