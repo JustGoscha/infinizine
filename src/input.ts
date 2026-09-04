@@ -1383,7 +1383,7 @@ export function attachInput(
   canvas.addEventListener('pointercancel', finish);
 
   // Double-click / double-tap a textbox in cursor modes (select/hand) jumps into editing
-  const CURSOR_TOOLS: Tool[] = ['lasso-select', 'hand', 'text'];
+  const CURSOR_TOOLS: Tool[] = ['cursor', 'lasso-select', 'hand', 'text'];
   function textAt(w: { x: number; y: number }): TextBox | null {
     return (
       [...store.doc.elements]
