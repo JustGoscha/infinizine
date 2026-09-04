@@ -296,7 +296,10 @@ export class Renderer {
 
   private pencilCache = new Map<string, { c: HTMLCanvasElement; bucket: number; bbox: BBox }>();
   private pencilRaster(el: Stroke, z: number) {
-    let bucket = Math.pow(2, Math.round(Math.log2(Math.max(0.25, Math.min(8, z)))));
+    // raster resolution = zoom bucket × device pixel ratio, so a cached pencil
+    // stroke is as sharp on a retina screen as the live one being drawn
+    const dpr = window.devicePixelRatio || 1;
+    let bucket = Math.pow(2, Math.round(Math.log2(Math.max(0.25, Math.min(8, z))))) * dpr;
     const hit = this.pencilCache.get(el.id);
     if (hit && hit.bucket === bucket) return hit;
     const bbox = elementBBox(el);
