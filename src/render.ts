@@ -3,7 +3,7 @@
 
 import { Camera, baseZoom } from './camera';
 import { Element, FillShape, Page, Stroke, StrokePoint } from './types';
-import { strokeOutline, pencilOutlines, outlineToPath, elementBBox, bboxIntersects, densify, filterPressure, BBox } from './geometry';
+import { strokeOutline, pencilOutlines, outlineToPath, elementBBox, bboxIntersects, densify, filterPressure, easeP, BBox } from './geometry';
 import { layoutText, fontFor, segWidth, LINE_HEIGHT } from './text';
 import { moveHandleRect, moveAllHandleRect, deleteHandleRect, eyeHandleRect, type InputState } from './input';
 import { Store } from './store';
@@ -150,7 +150,8 @@ export class Renderer {
 
   private stampStroke(target: CanvasRenderingContext2D, el: Stroke, alphaScale = 1, fromIndex = 0): number {
     const nib = this.nibs(el.color);
-    const pts = densify(filterPressure(el.points));
+    // same fast-ramping pressure response as the vector tools
+    const pts = densify(filterPressure(el.points)).map((p) => ({ ...p, p: easeP(p.p) }));
     const wBase = el.baseWidth;
     // deterministic per-stamp randomness: variant, rotation, jitter — kills the
     // repeated-texture chain look of reusing one tile in one orientation

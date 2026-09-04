@@ -56,10 +56,13 @@ export function densify(points: StrokePoint[], spacing = 2.2): StrokePoint[] {
   return out;
 }
 
-// Raised-cosine pressure response (from Doodely): gentle at the light and
-// heavy ends, most responsive mid-range — hides pressure noise where the
-// Pencil is noisiest and stops the "spaghetti" width swings.
-const easeP = (t: number) => 0.5 - 0.5 * Math.cos(Math.PI * Math.max(0, Math.min(1, t)));
+/** Pressure response. Nobody presses an Apple Pencil anywhere near its
+ * maximum, so the curve ramps fast: half pressure already gives ~88% of the
+ * effect and the top end barely adds anything.  f(p) = 1 − (1 − p)³ */
+export const easeP = (t: number) => {
+  const u = 1 - Math.max(0, Math.min(1, t));
+  return 1 - u * u * u;
+};
 
 /** Spatial Gaussian denoise along the polyline. `sigma` is in world units —
  * pass ~1.2 screen px worth (1.2 / zoom at drawing time) so quantisation
