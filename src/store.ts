@@ -64,6 +64,40 @@ function normalizeDoc(doc: Doc): Doc {
   return doc;
 }
 
+// Document bodies live in IndexedDB (localStorage's ~5MB cap is a few minutes
+// of pencil ink); only the small library index + current id stay in localStorage.
+const IDB_NAME = 'infinizine';
+const IDB_STORE = 'docs';
+let idbPromise: Promise<IDBDatabase> | null = null;
+function idb(): Promise<IDBDatabase> {
+  if (!idbPromise) {
+    idbPromise = new Promise((resolve, reject) => {
+      const req = indexedDB.open(IDB_NAME, 1);
+      req.onupgradeneeded = () => req.result.createObjectStore(IDB_STORE);
+      req.onsuccess = () => resolve(req.result);
+      req.onerror = () => reject(req.error);
+    });
+  }
+  return idbPromise;
+}
+function idbReq<T>(mode: IDBTransactionMode, fn: (s: IDBObjectStore) => IDBRequest<T>): Promise<T> {
+  return idb().then(
+    (db) =>
+      new Promise<T>((resolve, reject) => {
+        const tx = db.transaction(IDB_STORE, mode);
+        const req = fn(tx.objectStore(IDB_STORE));
+        req.onsuccess = () => resolve(req.result);
+        req.onerror = () => reject(req.error);
+      }),
+  );
+}
+const idbGet = (id: string) => idbReq<string | undefined>('readonly', (s) => s.get(id));
+const idbPut = (id: string, json: string) => idbReq('readwrite', (s) => s.put(json, id));
+const idbDel = (id: string) => idbReq('readwrite', (s) => s.delete(id));
+function toast(msg: string) {
+  window.dispatchEvent(new CustomEvent('izine-toast', { detail: msg }));
+}
+
 export class Store {
   doc: Doc;
   docId: string;
@@ -73,20 +107,33 @@ export class Store {
   onChange: () => void = () => {};
 
   private ephemeral = false; // scratch store (pressure playground): never touches localStorage
+  /** resolves once the current document has been loaded from IndexedDB */
+  ready: Promise<void>;
+  private saveFailed = false;
 
   constructor(opts?: { ephemeral?: boolean }) {
+    this.doc = emptyDoc();
+    this.docId = uid('doc');
     if (opts?.ephemeral) {
       this.ephemeral = true;
       this.docId = uid('scratch');
-      this.doc = emptyDoc();
+      this.ready = Promise.resolve();
       return;
     }
     this.migrateLegacy();
+    this.ready = this.init();
+  }
+
+  private async init() {
     const current = localStorage.getItem(CURRENT_KEY) ?? this.listDocs()[0]?.id;
-    const loaded = current ? this.loadDoc(current) : null;
-    this.docId = loaded && current ? current : uid('doc');
-    this.doc = loaded ?? emptyDoc();
-    if (!loaded) this.saveNow();
+    const loaded = current ? await this.loadDoc(current) : null;
+    if (loaded && current) {
+      this.docId = current;
+      this.doc = loaded;
+    } else {
+      this.saveNow();
+    }
+    this.onChange();
   }
 
   private migrateLegacy() {
@@ -101,9 +148,17 @@ export class Store {
     } catch { /* ignore */ }
   }
 
-  private loadDoc(id: string): Doc | null {
+  private async loadDoc(id: string): Promise<Doc | null> {
     try {
-      const raw = localStorage.getItem(DOC_PREFIX + id);
+      let raw = await idbGet(id).catch(() => undefined);
+      if (!raw) {
+        // pre-IndexedDB document: move it over and free the localStorage quota
+        raw = localStorage.getItem(DOC_PREFIX + id) ?? undefined;
+        if (raw) {
+          await idbPut(id, raw);
+          localStorage.removeItem(DOC_PREFIX + id);
+        }
+      }
       if (!raw) return null;
       const doc = JSON.parse(raw) as Doc;
       if (doc.version !== 1) return null;
@@ -124,13 +179,23 @@ export class Store {
 
   private saveNow() {
     if (this.ephemeral) return;
+    const id = this.docId;
+    // serialise synchronously (switchTo swaps the doc right after), round
+    // coordinates to 1/1000 unit — sub-micron, and a third smaller on disk
+    const json = JSON.stringify(this.doc, (_k, v) => (typeof v === 'number' ? Math.round(v * 1000) / 1000 : v));
+    idbPut(id, json).then(
+      () => { this.saveFailed = false; },
+      () => {
+        if (!this.saveFailed) toast('Could not save the zine (storage error)');
+        this.saveFailed = true;
+      },
+    );
     try {
-      localStorage.setItem(DOC_PREFIX + this.docId, JSON.stringify(this.doc));
-      const rest = this.listDocs().filter((m) => m.id !== this.docId);
-      rest.unshift({ id: this.docId, name: this.doc.name, updated: Date.now() });
+      const rest = this.listDocs().filter((m) => m.id !== id);
+      rest.unshift({ id, name: this.doc.name, updated: Date.now() });
       localStorage.setItem(INDEX_KEY, JSON.stringify(rest));
-      localStorage.setItem(CURRENT_KEY, this.docId);
-    } catch { /* storage may be unavailable; drawing still works */ }
+      localStorage.setItem(CURRENT_KEY, id);
+    } catch { /* index only; the body is safe in IndexedDB */ }
   }
 
   private scheduleSave() {
@@ -149,10 +214,11 @@ export class Store {
     this.onChange();
   }
 
-  openDoc(id: string) {
+  async openDoc(id: string) {
     if (id === this.docId) return;
-    const doc = this.loadDoc(id);
+    const doc = await this.loadDoc(id);
     if (doc) this.switchTo(id, doc);
+    else toast('Could not open that zine');
   }
 
   newDoc() {
@@ -162,13 +228,14 @@ export class Store {
   }
 
   deleteDoc(id: string) {
+    void idbDel(id).catch(() => {});
     try {
       localStorage.removeItem(DOC_PREFIX + id);
       localStorage.setItem(INDEX_KEY, JSON.stringify(this.listDocs().filter((m) => m.id !== id)));
     } catch { /* ignore */ }
     if (id === this.docId) {
       const next = this.listDocs()[0];
-      if (next) this.openDoc(next.id);
+      if (next) void this.openDoc(next.id);
       else this.newDoc();
     } else {
       this.onChange();

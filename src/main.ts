@@ -28,13 +28,13 @@ store.onChange = () => {
   uiHooks.docChanged();
 };
 
-// First run: start with one A4 page waiting (the journaler's greeting)
-if (store.doc.pages.length === 0 && store.doc.elements.length === 0) {
-  store.addPage({ w: 420, h: 594 }, { x: 0, y: 0 }); // A4
-}
-
-// Start at 100% (true physical scale), centered on the first page, zoom locked
-requestAnimationFrame(() => {
+// the document arrives from IndexedDB asynchronously
+store.ready.then(() => {
+  // First run: start with one A4 page waiting (the journaler's greeting)
+  if (store.doc.pages.length === 0 && store.doc.elements.length === 0) {
+    store.addPage({ w: 420, h: 594 }, { x: 0, y: 0 }); // A4
+  }
+  // Start at 100% (true physical scale), centered on the first page, zoom locked
   const page = store.doc.pages[0];
   camera.zoom = baseZoom();
   if (page) {
@@ -42,6 +42,7 @@ requestAnimationFrame(() => {
     camera.y = page.y + page.h / 2;
   }
   state.updateCursor();
+  renderer.clearCache();
   renderer.invalidate();
 });
 window.addEventListener('resize', () => renderer.invalidate());
