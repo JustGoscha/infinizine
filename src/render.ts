@@ -866,7 +866,7 @@ export class Renderer {
       ctx.font = '600 11px "Libre Franklin", sans-serif';
       ctx.fillStyle = 'rgba(42,36,26,0.55)';
       ctx.textAlign = 'right';
-      ctx.fillText(`${this.fps}fps · ${this.input.zoomLocked ? '🔒 ' : ''}${pct}%`, vw - 14, vh - 12);
+      ctx.fillText(`${this.fps}fps · ${pct}%${this.input.zoomLocked ? ' locked' : ''}`, vw - 14, vh - 12);
     }
   }
 

@@ -32,6 +32,8 @@ const ICON_PATHS: Record<string, string> = {
   anim: '<rect x="3.5" y="6" width="17" height="12" rx="2"/><path d="M7.5 6v12 M16.5 6v12 M3.5 12h4 M16.5 12h4"/>',
   hand: '<path d="M12 3 V21 M3 12 H21"/><path d="M12 3 L9.6 5.4 M12 3 L14.4 5.4 M12 21 L9.6 18.6 M12 21 L14.4 18.6 M3 12 L5.4 9.6 M3 12 L5.4 14.4 M21 12 L18.6 9.6 M21 12 L18.6 14.4"/>',
 };
+// pointing finger, shared by the three finger-mode glyphs (a small badge is added bottom-right)
+const FINGER_ICON = '<path d="M9 12.5 V5.5 a1.5 1.5 0 0 1 3 0 V11"/><path d="M9 12.5 L7.2 10.8 a1.4 1.4 0 0 0 -2 2 L8.5 17.5 a5 5 0 0 0 4.2 2.5 H13"/><path d="M12 11 V9.5 a1.4 1.4 0 0 1 2.8 0 V11.5"/>';
 const ICONS: Record<string, string> = Object.fromEntries(
   Object.entries(ICON_PATHS).map(([k, inner]) => [k, svg(inner)]),
 );
@@ -170,8 +172,8 @@ export function buildUI(
       <div class="wordmark">INFINI<span class="zine"><i>Z</i><i>I</i><i>N</i><i>E</i></span></div>
       <div class="top-actions">
         <button class="chip" id="docs" title="My zines">${svg('<path d="M4 7 V19 A1.5 1.5 0 0 0 5.5 20.5 H18.5 A1.5 1.5 0 0 0 20 19 V9.5 A1.5 1.5 0 0 0 18.5 8 H12 L10 5.5 H5.5 A1.5 1.5 0 0 0 4 7 Z"/>')}</button>
-        <button class="chip" id="undo" title="Undo (⌘Z)">↩</button>
-        <button class="chip" id="redo" title="Redo (⇧⌘Z)">↪</button>
+        <button class="chip" id="undo" title="Undo (⌘Z)">${svg('<path d="M9 7 L4.5 11.5 L9 16"/><path d="M4.5 11.5 H14.5 a5 5 0 0 1 0 10 H11"/>')}</button>
+        <button class="chip" id="redo" title="Redo (⇧⌘Z)">${svg('<path d="M15 7 L19.5 11.5 L15 16"/><path d="M19.5 11.5 H9.5 a5 5 0 0 0 0 10 H13"/>')}</button>
         <button class="chip" id="finger-toggle" title="Finger mode"></button>
         <button class="chip" id="eagle" title="Eagle view: fit everything, tap again to return">${svg('<path d="M4 9V4h5 M20 9V4h-5 M4 15v5h5 M20 15v5h-5"/><rect x="9.5" y="9.5" width="5" height="5"/>')}</button>
         <button class="chip" id="zoom-lock" title="Zoom lock"></button>
@@ -387,8 +389,17 @@ export function buildUI(
       dot.style.background = hue;
       let lp = 0;
       let longPressed = false;
+      const hueShades = shades(hue, preset.drama).map((c) => c.toLowerCase());
       dot.addEventListener('click', () => {
         if (longPressed) { longPressed = false; return; }
+        // tapping the hue that's already active opens/closes its shades (touch has no hover)
+        const cur = state.color.toLowerCase();
+        if (cur === hue.toLowerCase() || hueShades.includes(cur)) {
+          const wasOpen = wrap.classList.contains('open');
+          closeFlyouts();
+          wrap.classList.toggle('open', !wasOpen);
+          return;
+        }
         closeFlyouts();
         applyColor(hue);
       });
@@ -1816,8 +1827,12 @@ export function buildUI(
     layerToggle.title = state.paintBehind
       ? 'Painting behind existing ink (tap for in front)'
       : 'Painting in front (tap to paint behind)';
-    fingerToggle.textContent =
-      state.fingerMode === 'draw' ? '👆✏️' : state.fingerMode === 'pan' ? '👆✋' : '👆➰';
+    fingerToggle.innerHTML =
+      state.fingerMode === 'draw'
+        ? svg(FINGER_ICON + '<path d="M15 20.5 l4.5-4.5 M17 15 l3 3"/>') // finger + pencil stroke
+        : state.fingerMode === 'pan'
+          ? svg(FINGER_ICON + '<path d="M14.5 17.5 h6 M18 15 l2.5 2.5 -2.5 2.5"/>') // finger + move arrow
+          : svg(FINGER_ICON + '<rect x="14" y="14" width="6.5" height="6.5" stroke-dasharray="2 1.5"/>'); // finger + marquee
     fingerToggle.title =
       state.fingerMode === 'draw'
         ? 'Finger draws (tap: finger pans)'

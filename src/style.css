@@ -86,6 +86,7 @@ html, body {
 
 .top-actions { display: flex; gap: 8px; pointer-events: auto; }
 
+.pal-main, .tool-slot, .pal-shade { touch-action: manipulation; }
 .chip {
   border: var(--panel-border);
   background: var(--panel);
