@@ -93,7 +93,7 @@ const SIZES = [
   { w: 6, label: 'L' },
 ];
 
-interface Fmt { label: string; w: number; h: number } // w/h in world units (2/mm)
+interface Fmt { label: string; w: number; h: number; screen?: boolean } // w/h in world units (2/mm); screen = fit to viewport on pick
 const mm = (w: number, h: number) => ({ w: w * UNITS_PER_MM, h: h * UNITS_PER_MM });
 
 const PRIMARY_FORMATS: Fmt[] = [
@@ -118,9 +118,20 @@ const MORE_FORMATS: Fmt[] = [
   { label: 'Bookmark', ...mm(50, 175) },
   { label: 'IG portrait 4:5', ...mm(216, 270) },
   { label: 'Story 9:16', ...mm(135, 240) },
-  { label: 'Screen 16:9', ...mm(240, 135) },
-  { label: 'Screen 4:3', ...mm(240, 180) },
+  { label: 'Screen 16:9', ...mm(240, 135), screen: true },
+  { label: 'Screen 9:16', ...mm(135, 240), screen: true },
+  { label: 'Screen 4:3', ...mm(240, 180), screen: true },
+  { label: 'Screen 3:4', ...mm(180, 240), screen: true },
 ];
+
+/** Screen formats aren't about millimetres: zoom so the page nearly fills the
+ * viewport, whatever the device. */
+function fitPage(camera: Camera, page: { x: number; y: number; w: number; h: number }) {
+  const margin = 1.08;
+  camera.zoom = Math.min(window.innerWidth / (page.w * margin), window.innerHeight / (page.h * margin));
+  camera.x = page.x + page.w / 2;
+  camera.y = page.y + page.h / 2;
+}
 
 const CUSTOM_FORMATS_KEY = 'infinizine-custom-formats';
 function customFormats(): Fmt[] {
@@ -527,6 +538,7 @@ export function buildUI(
     const page = store.addPage({ w: f.w, h: f.h }, { x: camera.x, y: camera.y });
     camera.x = page.x + page.w / 2;
     camera.y = page.y + page.h / 2;
+    if (f.screen) { fitPage(camera, page); state.updateCursor(); }
   };
   addPageBtn.addEventListener('click', () => {
     palettePop.classList.add('hidden');
@@ -724,8 +736,13 @@ export function buildUI(
     }),
   );
   (root.querySelector('#pm-more-formats') as HTMLButtonElement).addEventListener('click', () => {
+    const target = menuPage;
     hidePageMenu();
-    openFormatPanel((f) => store.setPagesFormat(f));
+    openFormatPanel((f) => {
+      store.setPagesFormat(f);
+      const pg = (target && store.doc.pages.find((p) => p.id === target.id)) ?? store.doc.pages[0];
+      if (f.screen && pg) { fitPage(camera, pg); state.updateCursor(); }
+    });
   });
   document.addEventListener('pointerdown', (e) => {
     if (!(e.target as HTMLElement).closest?.('#page-menu')) hidePageMenu();
