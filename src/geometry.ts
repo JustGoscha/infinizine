@@ -57,10 +57,11 @@ export function densify(points: StrokePoint[], spacing = 2.2): StrokePoint[] {
 }
 
 /** Pressure response. Nobody presses an Apple Pencil anywhere near its
- * maximum, so the curve ramps fast: half pressure already gives ~88% of the
- * effect and the top end barely adds anything.  f(p) = 1 − (1 − p)³ */
+ * maximum, so the curve saturates early, with a soft start so feather-light
+ * touches stay light:  10% → 14%, 25% → 42%, 50% → 79%, 75% → 97%. */
 export const easeP = (t: number) => {
-  const u = 1 - Math.max(0, Math.min(1, t));
+  const g = Math.pow(Math.max(0, Math.min(1, t)), 1.3);
+  const u = 1 - g;
   return 1 - u * u * u;
 };
 
