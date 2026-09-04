@@ -160,7 +160,7 @@ export class Renderer {
         const j = i + k;
         if (j >= 0 && j < raw.length) { sum += raw[j].p; cnt++; }
       }
-      return { ...pt, p: easeP(sum / cnt) };
+      return { ...pt, p: easeP(sum / cnt, 'pencil') };
     });
     const wBase = el.baseWidth;
     // deterministic per-stamp randomness: variant, rotation, jitter — kills the
@@ -246,7 +246,7 @@ export class Renderer {
     oc.scale(camNow.zoom, camNow.zoom);
     oc.translate(-camNow.x, -camNow.y);
     const shown = live.points.length > 2
-      ? { ...live, points: denoise(live.points, pressure.smooth / camNow.zoom) }
+      ? { ...live, points: denoise(live.points, pressure[live.tool].smooth / camNow.zoom) }
       : live;
     ls!.count = this.stampStroke(oc, shown, live.opacity, ls!.count);
     // blit in screen space (we're inside the world transform here)
@@ -424,7 +424,7 @@ export class Renderer {
       // same screen-space denoise the stroke gets on commit, so the live line
       // looks like the final one and the tip never flickers on sample jitter
       const shown: Stroke = live.points.length > 2
-        ? { ...live, points: denoise(live.points, pressure.smooth / this.camera.zoom) }
+        ? { ...live, points: denoise(live.points, pressure[live.tool].smooth / this.camera.zoom) }
         : live;
       if (live.tool === 'sketch') {
         ctx.save();

@@ -204,7 +204,7 @@ export function attachInput(
   let pEma: number | null = null;
   let lastValidP: number | null = null;
   let rawPMax: number | null = null; // peak raw pressure of the stroke (taps become dots at this)
-  const P_EMA = () => pressure.pSmooth;
+  const P_EMA = () => pressure[state.live?.tool ?? 'pen'].pSmooth;
   const MIN_DIST_PX = 1.2; // screen px; drops stacked samples at slow speed
   let minDistSq = 0; // world-space square of MIN_DIST_PX, fixed at stroke start
   let strokeZoom = 1; // zoom at drawing time → denoise radius on commit
@@ -914,7 +914,7 @@ export function attachInput(
         // digitiser quantisation is ~1 screen px; smooth it away in world units
         // scaled by the zoom you drew at, so zoomed-out lines don't kink when
         // you zoom back in and zoomed-in lines keep every intended wiggle
-        s.points = denoise(s.points, pressure.smooth / strokeZoom);
+        s.points = denoise(s.points, pressure[s.tool].smooth / strokeZoom);
       }
       if (s.area) {
         // live ink: every stroke gets its own live layer with its own cycle

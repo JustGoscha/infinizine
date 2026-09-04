@@ -1304,12 +1304,9 @@ body.presenting .popover { display: none; }
 }
 .pg-tool.active { background: var(--ink); color: var(--card); }
 .pg-curve { width: 100%; height: auto; border: 1.5px solid var(--line); border-radius: 2px; background: rgba(255,255,255,0.5); }
-.pg-row { display: grid; grid-template-columns: 74px 1fr 40px; align-items: center; gap: 6px; }
-.pg-row b, .pg-w b { font-weight: 600; color: var(--ink-soft); font-variant-numeric: tabular-nums; }
-.pg-row input, .pg-w input { width: 100%; accent-color: var(--ink); margin: 0; }
-.pg-widths { display: flex; flex-direction: column; gap: 4px; border-top: 1.5px solid var(--line); padding-top: 8px; }
-.pg-w { display: grid; grid-template-columns: 62px 1fr 1fr; gap: 6px; align-items: center; }
-.pg-w-name { font-weight: 600; text-transform: capitalize; }
-.pg-w label { display: grid; grid-template-columns: 24px 1fr 34px; align-items: center; gap: 3px; color: var(--ink-soft); }
+.pg-row { display: grid; grid-template-columns: 74px 1fr 44px; align-items: center; gap: 6px; }
+.pg-row[hidden] { display: none; }
+.pg-row b { font-weight: 600; color: var(--ink-soft); font-variant-numeric: tabular-nums; }
+.pg-row input { width: 100%; accent-color: var(--ink); margin: 0; }
 .pg-actions { display: flex; gap: 6px; }
 .pg-hint { margin: 0; color: var(--ink-soft); font-size: 11px; }
