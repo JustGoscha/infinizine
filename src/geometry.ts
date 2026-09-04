@@ -326,6 +326,24 @@ export function pressureOutline(
     tx[i] = dx / l; ty[i] = dy / l;
     rad[i] = Math.max(0.02, (widthAt(tool, baseWidth, pts[i].p) * widthScale) / 2);
   }
+  // steady the ends: the last 1–2 samples (pen lifting/landing) wander, which
+  // would swing the cap — especially a chisel end. Average the direction over
+  // the last ~one radius of travel and use it for every sample in that window.
+  const steady = (from: number, dir: 1 | -1) => {
+    const r = Math.max(rad[from] * 1.2, 0.5 / detail);
+    let j = from, dist = 0;
+    while (j - dir >= 0 && j - dir < n && dist < r) {
+      dist += Math.hypot(pts[j].x - pts[j - dir].x, pts[j].y - pts[j - dir].y);
+      j -= dir;
+    }
+    if (j === from) return;
+    let dx = (pts[from].x - pts[j].x) * dir, dy = (pts[from].y - pts[j].y) * dir;
+    const l = Math.hypot(dx, dy);
+    if (l < 1e-6) return;
+    dx /= l; dy /= l;
+    for (let i = j; i !== from + dir; i += dir) { tx[i] = dx; ty[i] = dy; }
+  };
+  if (n > 2) { steady(n - 1, 1); steady(0, -1); }
   const left: number[][] = [], right: number[][] = [];
   const TURN = 0.45; // rad; sharper than this gets a fan so the outer edge stays round
   for (let i = 0; i < n; i++) {
