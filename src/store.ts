@@ -224,6 +224,10 @@ export class Store {
   newDoc() {
     const doc = emptyDoc();
     doc.name = `Zine ${this.listDocs().length + 1}`;
+    try {
+      const pal = localStorage.getItem('infinizine-last-palette');
+      if (pal) doc.palette = pal;
+    } catch { /* ignore */ }
     this.switchTo(uid('doc'), doc);
   }
 

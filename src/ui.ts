@@ -356,6 +356,7 @@ export function buildUI(
   function applyColor(c: string) {
     state.color = c;
     writePref(`infinizine-color-${store.docId}`, c);
+    writePref('infinizine-last-color', c);
     const textIds = store.doc.elements
       .filter((el) => el.kind === 'text' && state.selection.has(el.id))
       .map((el) => el.id);
@@ -472,9 +473,12 @@ export function buildUI(
     });
     palettePop.querySelectorAll('.pal-preset').forEach((b) =>
       b.addEventListener('click', () => {
-        store.setPalette((b as HTMLElement).dataset.id!);
+        const id = (b as HTMLElement).dataset.id!;
+        store.setPalette(id);
+        writePref('infinizine-last-palette', id); // new zines start with it
         buildPalRow();
         buildPalettePopover();
+        palettePop.classList.add('hidden');
       }),
     );
     (palettePop.querySelector('#custom-color') as HTMLInputElement).addEventListener('input', (e) => {
@@ -1937,7 +1941,7 @@ export function buildUI(
     { k: 'min', label: 'min width', min: 0, max: 1, step: 0.01, fmt: (v) => `${Math.round(v * 100)}%` },
     { k: 'max', label: 'max width', min: 0.5, max: 3, step: 0.05, fmt: (v) => `${v.toFixed(2)}×`, markerToo: true },
     { k: 'tilt', label: 'tilt width', min: 1, max: 40, step: 0.5, fmt: (v) => (v <= 1 ? 'off' : `${v.toFixed(1)}×`), pencilOnly: true },
-    { k: 'nib', label: 'nib angle', min: 0, max: 180, step: 1, fmt: (v) => `${Math.round(v)}°`, markerToo: true, markerOnly: true },
+    { k: 'nib', label: 'nib offset', min: -90, max: 90, step: 1, fmt: (v) => `${Math.round(v)}°`, markerToo: true, markerOnly: true },
   ];
   pg.innerHTML = `
     <button class="pg-close-big" id="pg-close-big" title="Close (Esc)">${svg('<path d="M6 6 L18 18 M18 6 L6 18"/>')}<span>Close</span></button>
@@ -1956,6 +1960,7 @@ export function buildUI(
         <div class="pg-head"><span>Pressure playground</span><button class="pg-x" id="pg-close">×</button></div>
         <div class="pg-tools">${PG_TOOLS.map((o) => `<button class="pg-tool" data-t="${o.t}">${ICONS[o.t]}<span>${o.label}</span></button>`).join('')}</div>
         ${SLIDERS.map((sl) => `<label class="pg-row" data-k="${sl.k}"><span>${sl.label}</span><input type="range" data-k="${sl.k}" min="${sl.min}" max="${sl.max}" step="${sl.step}"><b></b></label>`).join('')}
+        <div class="pg-actions" id="pg-nib-row"><button id="pg-nib-mode"></button></div>
         <div class="pg-actions">
           <button id="pg-save" class="pg-primary">Save</button>
           <button id="pg-reset">Reset to default</button>
@@ -2245,6 +2250,9 @@ export function buildUI(
       (row.querySelector('input') as HTMLInputElement).value = String(k[sl.k]);
       (row.querySelector('b') as HTMLElement).textContent = sl.fmt(k[sl.k]);
     }
+    (pg.querySelector('#pg-nib-row') as HTMLElement).hidden = pgTool !== 'marker';
+    (pg.querySelector('#pg-nib-mode') as HTMLButtonElement).textContent =
+      pressure.marker.nibMode === 'azimuth' ? 'Nib follows pen lean · tap for stroke direction' : 'Nib follows stroke direction · tap for pen lean';
     pg.querySelectorAll<HTMLElement>('.pg-tool').forEach((b) => b.classList.toggle('active', b.dataset.t === pgTool));
     // mark the preset nearest to the rig's current size
     const nearest = SIZES.reduce((a, b) => (Math.abs(b.w - rigState.baseWidth) < Math.abs(a.w - rigState.baseWidth) ? b : a)).w;
@@ -2293,6 +2301,10 @@ export function buildUI(
   });
   (pg.querySelector('#pg-reset') as HTMLButtonElement).addEventListener('click', () => {
     resetPressure(pgTool);
+    restyle();
+  });
+  (pg.querySelector('#pg-nib-mode') as HTMLButtonElement).addEventListener('click', () => {
+    pressure.marker.nibMode = pressure.marker.nibMode === 'azimuth' ? 'travel' : 'azimuth';
     restyle();
   });
   (pg.querySelector('#pg-export') as HTMLButtonElement).addEventListener('click', () => {
@@ -2367,7 +2379,7 @@ export function buildUI(
     if (store.docId === colorDocId) return;
     colorDocId = store.docId;
     let c: string | null = null;
-    try { c = localStorage.getItem(`infinizine-color-${store.docId}`); } catch { /* ignore */ }
+    try { c = localStorage.getItem(`infinizine-color-${store.docId}`) ?? localStorage.getItem('infinizine-last-color'); } catch { /* ignore */ }
     if (c) { state.color = c; refresh(); state.updateCursor(); }
   };
   restoreColor();
