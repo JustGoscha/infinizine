@@ -14,6 +14,16 @@ export const CLIP_PENDING_KEY = 'infinizine-clip-pending'; // '1' while the clip
 // always holds the last copy so same-tab (and cross-zine) paste never fails.
 let memClip: string | null = null;
 
+const PEN_KEY = 'infinizine-pen-seen';
+const FINGER_KEY = 'infinizine-finger-mode';
+function readPref(k: string): string | null {
+  try { return localStorage.getItem(k); } catch { return null; }
+}
+export function writePref(k: string, v: string) {
+  try { localStorage.setItem(k, v); } catch { /* ignore */ }
+}
+export { FINGER_KEY };
+
 function toast(msg: string) {
   window.dispatchEvent(new CustomEvent('izine-toast', { detail: msg }));
 }
@@ -83,9 +93,14 @@ export class InputState {
   lasso: { x: number; y: number }[] | null = null;
   selection = new Set<string>();
   hidden = new Set<string>();
-  penDetected = false;
-  fingerDraws = true; // legacy flag, kept in sync with fingerMode === 'draw'
-  fingerMode: 'draw' | 'pan' | 'select' = 'draw'; // switches to 'pan' once a pen is seen
+  // remembered across sessions: once a pen has been seen, fingers pan by default
+  penDetected = readPref(PEN_KEY) === '1';
+  fingerMode: 'draw' | 'pan' | 'select' = (() => {
+    const m = readPref(FINGER_KEY);
+    if (m === 'draw' || m === 'pan' || m === 'select') return m;
+    return readPref(PEN_KEY) === '1' ? 'pan' : 'draw';
+  })();
+  fingerDraws = this.fingerMode === 'draw'; // legacy flag, kept in sync with fingerMode === 'draw'
   zoomLocked = true; // Notes-style: paint with what you've got; unlock to zoom
   armedPageDrag: Page | null = null; // set by the page menu's Move action
   presenting = false; // presentation mode: render only page content
@@ -1275,6 +1290,8 @@ export function attachInput(
       state.penDetected = true;
       state.fingerMode = 'pan';
       state.fingerDraws = false;
+      writePref(PEN_KEY, '1');
+      writePref(FINGER_KEY, 'pan');
       state.onToolChange();
     }
     if (e.pointerType === 'touch') {

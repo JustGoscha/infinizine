@@ -1,6 +1,6 @@
 // Toolbar, palette popover, page menu. Plain DOM, stationery-shop styling in style.css.
 
-import { InputState, Tool, CLIP_PENDING_KEY } from './input';
+import { InputState, Tool, CLIP_PENDING_KEY, FINGER_KEY, writePref } from './input';
 import { Store } from './store';
 import { Camera, baseZoom, pxPerMm, setPxPerMm } from './camera';
 import { PALETTES, getPalette, shades } from './palettes';
@@ -1682,6 +1682,7 @@ export function buildUI(
     const order: (typeof state.fingerMode)[] = ['draw', 'pan', 'select'];
     state.fingerMode = order[(order.indexOf(state.fingerMode) + 1) % order.length];
     state.fingerDraws = state.fingerMode === 'draw';
+    writePref(FINGER_KEY, state.fingerMode);
     refresh();
   });
 
