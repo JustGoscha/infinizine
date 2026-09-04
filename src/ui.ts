@@ -1806,7 +1806,9 @@ export function buildUI(
     (selMenu.querySelector('#sm-copy') as HTMLButtonElement).hidden = !(hasSel || hasArea);
     (selMenu.querySelector('#sm-cut') as HTMLButtonElement).hidden = !(hasSel || hasArea);
     (selMenu.querySelector('#sm-del') as HTMLButtonElement).hidden = !hasSel;
-    (selMenu.querySelector('#sm-paste') as HTMLButtonElement).hidden = !hasClip;
+    const pasteBtn = selMenu.querySelector('#sm-paste') as HTMLButtonElement;
+    pasteBtn.hidden = !hasClip;
+    pasteBtn.classList.toggle('badged', hasClip);
     selMenu.classList.toggle('hidden', !(hasSel || hasArea || hasClip));
   }, 300);
 

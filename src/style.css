@@ -885,6 +885,19 @@ body.tl-docked-side .topbar { z-index: 40; }
 .sel-menu button:active { background: var(--ink); color: var(--card); }
 .sel-menu button svg { width: 20px; height: 20px; }
 #sm-del { color: #c0392b; }
+/* red bubble: something is waiting to be pasted */
+#sm-paste { position: relative; }
+#sm-paste.badged::after {
+  content: '';
+  position: absolute;
+  top: 5px;
+  right: 5px;
+  width: 9px;
+  height: 9px;
+  border-radius: 50%;
+  background: #e03131;
+  border: 1.5px solid var(--card);
+}
 
 /* ---------- presentation mode ---------- */
 body.presenting .toolbar,
