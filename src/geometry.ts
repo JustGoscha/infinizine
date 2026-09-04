@@ -69,9 +69,17 @@ export interface ToolPressure {
   min: number; // width at zero pressure as a fraction of max
   max: number; // max width as × baseWidth
   tilt: number; // pencil: how much a flat Pencil widens a light stroke (1 = ignore tilt, 3 = up to 3×)
+  tiltCurve: [number, number, number, number]; // Bézier: tilt (0 upright … 1 flat) → tilt effect 0..1
 }
 export type PressureParams = Record<ToolKind, ToolPressure>;
-const base = { curve: [0.55, 0.9, 0.5, 0.95] as [number, number, number, number], smooth: 1.2, pSmooth: 0.3, tilt: 1 };
+const base = {
+  curve: [0.55, 0.9, 0.5, 0.95] as [number, number, number, number],
+  smooth: 1.2,
+  pSmooth: 0.3,
+  tilt: 1,
+  // flat-ish angles count, near-upright barely: eases in, then ramps
+  tiltCurve: [0.6, 0.05, 0.7, 1] as [number, number, number, number],
+};
 export const DEFAULT_PRESSURE: PressureParams = {
   pen: { ...base, min: 0.22, max: 1.6 },
   fineliner: { ...base, min: 0.86, max: 1.3 },
@@ -86,7 +94,13 @@ export const pressure: PressureParams = (() => {
     const raw = localStorage.getItem(PRESSURE_KEY);
     if (raw) {
       const p = JSON.parse(raw) as Partial<PressureParams>;
-      for (const t of Object.keys(out) as ToolKind[]) if (p[t]) Object.assign(out[t], p[t], { curve: [...(p[t]!.curve ?? out[t].curve)] });
+      for (const t of Object.keys(out) as ToolKind[]) {
+        if (!p[t]) continue;
+        Object.assign(out[t], p[t], {
+          curve: [...(p[t]!.curve ?? out[t].curve)],
+          tiltCurve: [...(p[t]!.tiltCurve ?? out[t].tiltCurve)],
+        });
+      }
     }
   } catch { /* ignore */ }
   return out;
@@ -121,6 +135,8 @@ export function bezierAt(c: [number, number, number, number], x: number): number
 }
 
 export const easeP = (t: number, tool: ToolKind = 'pen') => bezierAt(pressure[tool].curve, t);
+/** tilt 0..1 → effect 0..1 through the tool's tilt curve */
+export const easeTilt = (a: number, tool: ToolKind = 'pencil') => bezierAt(pressure[tool].tiltCurve, a);
 
 /** Spatial Gaussian denoise along the polyline. `sigma` is in world units —
  * pass ~1.2 screen px worth (1.2 / zoom at drawing time) so quantisation

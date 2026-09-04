@@ -1342,6 +1342,7 @@ body.presenting .popover { display: none; }
 }
 .pg-tool svg { width: 16px; height: 16px; }
 .pg-tool.active { background: var(--ink); color: var(--card); }
+.pg-curve[hidden] { display: none; }
 .pg-curve { width: 100%; height: auto; border: 1.5px solid var(--line); border-radius: 2px; background: rgba(255,255,255,0.5); touch-action: none; cursor: crosshair; }
 .pg-row { display: grid; grid-template-columns: 74px 1fr 44px; align-items: center; gap: 6px; }
 .pg-row[hidden] { display: none; }

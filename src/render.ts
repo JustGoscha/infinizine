@@ -3,7 +3,7 @@
 
 import { Camera, baseZoom } from './camera';
 import { Element, FillShape, Page, Stroke, StrokePoint } from './types';
-import { strokeOutline, pencilOutlines, outlineToPath, elementBBox, bboxIntersects, densify, filterPressure, easeP, LiveDenoiser, pressure, BBox } from './geometry';
+import { strokeOutline, pencilOutlines, outlineToPath, elementBBox, bboxIntersects, densify, filterPressure, easeP, easeTilt, LiveDenoiser, pressure, BBox } from './geometry';
 import { layoutText, fontFor, segWidth, LINE_HEIGHT } from './text';
 import { moveHandleRect, moveAllHandleRect, deleteHandleRect, eyeHandleRect, type InputState } from './input';
 import { Store } from './store';
@@ -233,7 +233,7 @@ export class Renderer {
       // pressure, the solid core that takes over is narrower than the halo
       // a flat Pencil lays the side of the graphite down: light strokes get
       // much wider and fainter (shading); pressing hard sharpens back to a line
-      const tiltMul = 1 + (pressure.pencil.tilt - 1) * (st.a ?? 0) * (1 - st.p);
+      const tiltMul = 1 + (pressure.pencil.tilt - 1) * easeTilt(st.a ?? 0, 'pencil') * (1 - st.p);
       const r = wBase * (0.72 - st.p * 0.12) * tiltMul * (0.98 + rnd(i, 3) * 0.04);
       const jx = (rnd(i, 1) - 0.5) * r * 0.07;
       const jy = (rnd(i, 2) - 0.5) * r * 0.07;

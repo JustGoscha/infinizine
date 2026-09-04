@@ -8,7 +8,7 @@ import { Camera, baseZoom, pxPerMm, setPxPerMm } from './camera';
 import { PALETTES, getPalette, shades } from './palettes';
 import { UNITS_PER_MM, uid } from './types';
 import { layoutText, layoutHeight, FONTS } from './text';
-import { pressure, savePressure, resetPressure, loadPressure, easeP } from './geometry';
+import { pressure, savePressure, resetPressure, loadPressure, easeP, bezierAt } from './geometry';
 import { markdownToHtml, htmlToMarkdown, autoTransform, caretToEnd } from './richedit';
 
 function toast(msg: string) {
@@ -1933,6 +1933,7 @@ export function buildUI(
       <div class="pg-head"><span>Pressure playground</span><button class="pg-x" id="pg-close">×</button></div>
       <div class="pg-tools">${PG_TOOLS.map((o) => `<button class="pg-tool" data-t="${o.t}">${ICONS[o.t]}<span>${o.label}</span></button>`).join('')}</div>
       <canvas class="pg-curve" id="pg-curve" width="272" height="200" title="Drag the two handles to shape the pressure curve"></canvas>
+      <canvas class="pg-curve pg-tilt" id="pg-tilt" width="272" height="150" title="Tilt → widening (pencil): drag the handles"></canvas>
       ${SLIDERS.map((sl) => `<label class="pg-row" data-k="${sl.k}"><span>${sl.label}</span><input type="range" data-k="${sl.k}" min="${sl.min}" max="${sl.max}" step="${sl.step}"><b></b></label>`).join('')}
       <div class="pg-actions">
         <button id="pg-save" class="pg-primary">Save</button>
@@ -1958,91 +1959,115 @@ export function buildUI(
   let pgSaved = structuredClone(pressure); // what's on disk; unsaved edits revert to this on close
   const pgDirty = () => JSON.stringify(pgSaved) !== JSON.stringify(pressure);
   const pgCurve = pg.querySelector('#pg-curve') as HTMLCanvasElement;
+  // ---- Bézier curve editor (pressure → effect, tilt → widening) ----
   const PAD = 12;
-  const toPx = (x: number, y: number) => [PAD + (pgCurve.width - 2 * PAD) * x, pgCurve.height - PAD - (pgCurve.height - 2 * PAD) * y];
-  function drawCurve() {
-    const c = pgCurve.getContext('2d')!;
-    const W = pgCurve.width, H = pgCurve.height;
-    c.clearRect(0, 0, W, H);
-    c.strokeStyle = 'rgba(42,36,26,0.18)';
-    c.lineWidth = 1;
-    for (let i = 0; i <= 4; i++) {
-      const [x] = toPx(i / 4, 0), [, y] = toPx(0, i / 4);
-      c.beginPath(); c.moveTo(x, PAD); c.lineTo(x, H - PAD); c.stroke();
-      c.beginPath(); c.moveTo(PAD, y); c.lineTo(W - PAD, y); c.stroke();
+  type Curve = [number, number, number, number];
+  function curveEditor(
+    cv: HTMLCanvasElement,
+    getCurve: () => Curve,
+    labels: { x: string; y: string; readout: (fx: (t: number) => number) => string },
+    band?: () => ((t: number) => number) | null,
+  ) {
+    const toPx = (x: number, y: number): [number, number] => [PAD + (cv.width - 2 * PAD) * x, cv.height - PAD - (cv.height - 2 * PAD) * y];
+    const fx = (t: number) => bezierAt(getCurve(), t);
+    function draw() {
+      const c = cv.getContext('2d')!;
+      const W = cv.width, H = cv.height;
+      c.clearRect(0, 0, W, H);
+      c.strokeStyle = 'rgba(42,36,26,0.18)';
+      c.lineWidth = 1;
+      for (let i = 0; i <= 4; i++) {
+        const [x] = toPx(i / 4, 0), [, y] = toPx(0, i / 4);
+        c.beginPath(); c.moveTo(x, PAD); c.lineTo(x, H - PAD); c.stroke();
+        c.beginPath(); c.moveTo(PAD, y); c.lineTo(W - PAD, y); c.stroke();
+      }
+      const bandFn = band?.();
+      if (bandFn) {
+        c.fillStyle = 'rgba(42,36,26,0.08)';
+        c.beginPath();
+        for (let i = 0; i <= 100; i++) {
+          const [x, y] = toPx(i / 100, bandFn(i / 100));
+          i ? c.lineTo(x, y) : c.moveTo(x, y);
+        }
+        c.lineTo(...toPx(1, 0)); c.lineTo(...toPx(0, 0)); c.closePath(); c.fill();
+      }
+      const [x1, y1, x2, y2] = getCurve();
+      c.strokeStyle = 'rgba(224,90,40,0.7)';
+      c.lineWidth = 1.5;
+      c.beginPath(); c.moveTo(...toPx(0, 0)); c.lineTo(...toPx(x1, y1)); c.stroke();
+      c.beginPath(); c.moveTo(...toPx(1, 1)); c.lineTo(...toPx(x2, y2)); c.stroke();
+      c.strokeStyle = '#2a241a';
+      c.lineWidth = 2.5;
+      c.beginPath();
+      for (let i = 0; i <= 100; i++) {
+        const [x, y] = toPx(i / 100, fx(i / 100));
+        i ? c.lineTo(x, y) : c.moveTo(x, y);
+      }
+      c.stroke();
+      for (const [hx, hy] of [[x1, y1], [x2, y2]]) {
+        const [x, y] = toPx(hx, hy);
+        c.fillStyle = '#E05A28';
+        c.strokeStyle = '#fff';
+        c.lineWidth = 2;
+        c.beginPath(); c.arc(x, y, 7, 0, Math.PI * 2); c.fill(); c.stroke();
+      }
+      c.fillStyle = 'rgba(42,36,26,0.6)';
+      c.font = '10px Libre Franklin, sans-serif';
+      c.fillText(labels.x, PAD + 2, H - 2);
+      c.save(); c.translate(2, PAD + 44); c.rotate(-Math.PI / 2); c.fillText(labels.y, 0, 8); c.restore();
+      const ro = labels.readout(fx);
+      c.fillText(ro, W - PAD - c.measureText(ro).width, PAD + 12);
     }
-    const k = pressure[pgTool];
-    // width band: how thick the line actually gets (min..max) over pressure
-    c.fillStyle = 'rgba(42,36,26,0.08)';
-    c.beginPath();
-    for (let i = 0; i <= 100; i++) {
-      const t = i / 100;
-      const w = pgTool === 'marker' ? 1 : k.min + (1 - k.min) * easeP(t, pgTool);
-      const [x, y] = toPx(t, w);
-      i ? c.lineTo(x, y) : c.moveTo(x, y);
-    }
-    c.lineTo(...(toPx(1, 0) as [number, number])); c.lineTo(...(toPx(0, 0) as [number, number])); c.closePath(); c.fill();
-    // handle arms
-    const [x1, y1, x2, y2] = k.curve;
-    c.strokeStyle = 'rgba(224,90,40,0.7)';
-    c.lineWidth = 1.5;
-    c.beginPath(); c.moveTo(...(toPx(0, 0) as [number, number])); c.lineTo(...(toPx(x1, y1) as [number, number])); c.stroke();
-    c.beginPath(); c.moveTo(...(toPx(1, 1) as [number, number])); c.lineTo(...(toPx(x2, y2) as [number, number])); c.stroke();
-    // curve
-    c.strokeStyle = '#2a241a';
-    c.lineWidth = 2.5;
-    c.beginPath();
-    for (let i = 0; i <= 100; i++) {
-      const t = i / 100;
-      const [x, y] = toPx(t, easeP(t, pgTool));
-      i ? c.lineTo(x, y) : c.moveTo(x, y);
-    }
-    c.stroke();
-    // handles
-    for (const [hx, hy] of [[x1, y1], [x2, y2]]) {
-      const [x, y] = toPx(hx, hy);
-      c.fillStyle = '#E05A28';
-      c.strokeStyle = '#fff';
-      c.lineWidth = 2;
-      c.beginPath(); c.arc(x, y, 7, 0, Math.PI * 2); c.fill(); c.stroke();
-    }
-    c.fillStyle = 'rgba(42,36,26,0.6)';
-    c.font = '10px Libre Franklin, sans-serif';
-    c.fillText('pressure →', PAD + 2, H - 2);
-    c.save(); c.translate(2, PAD + 44); c.rotate(-Math.PI / 2); c.fillText('effect →', 0, 8); c.restore();
-    c.fillText(`${pgTool} · 50% → ${Math.round(easeP(0.5, pgTool) * 100)}%`, W - 112, PAD + 12);
-  }
-  // drag the Bézier handles directly in the graph
-  let dragHandle: 0 | 1 | null = null;
-  const curvePos = (e: PointerEvent) => {
-    const r = pgCurve.getBoundingClientRect();
-    const sx = pgCurve.width / r.width, sy = pgCurve.height / r.height;
-    const px = (e.clientX - r.left) * sx, py = (e.clientY - r.top) * sy;
-    return {
-      x: Math.max(0, Math.min(1, (px - PAD) / (pgCurve.width - 2 * PAD))),
-      y: Math.max(0, Math.min(1, (pgCurve.height - PAD - py) / (pgCurve.height - 2 * PAD))),
-      px, py,
+    let drag: 0 | 1 | null = null;
+    const pos = (e: PointerEvent) => {
+      const r = cv.getBoundingClientRect();
+      const px = (e.clientX - r.left) * (cv.width / r.width), py = (e.clientY - r.top) * (cv.height / r.height);
+      return {
+        x: Math.max(0, Math.min(1, (px - PAD) / (cv.width - 2 * PAD))),
+        y: Math.max(0, Math.min(1, (cv.height - PAD - py) / (cv.height - 2 * PAD))),
+        px, py,
+      };
     };
-  };
-  pgCurve.addEventListener('pointerdown', (e) => {
-    if (pgTool === 'marker') return;
-    const { px, py } = curvePos(e);
-    const [x1, y1, x2, y2] = pressure[pgTool].curve;
-    const d = (hx: number, hy: number) => { const [x, y] = toPx(hx, hy); return Math.hypot(px - x, py - y); };
-    const d1 = d(x1, y1), d2 = d(x2, y2);
-    dragHandle = Math.min(d1, d2) < 40 ? (d1 <= d2 ? 0 : 1) : null;
-    if (dragHandle !== null) { pgCurve.setPointerCapture(e.pointerId); e.preventDefault(); }
-  });
-  pgCurve.addEventListener('pointermove', (e) => {
-    if (dragHandle === null) return;
-    const { x, y } = curvePos(e);
-    const cv = pressure[pgTool].curve;
-    if (dragHandle === 0) { cv[0] = x; cv[1] = y; } else { cv[2] = x; cv[3] = y; }
-    restyle();
-  });
-  const endDrag = () => { dragHandle = null; };
-  pgCurve.addEventListener('pointerup', endDrag);
-  pgCurve.addEventListener('pointercancel', endDrag);
+    cv.addEventListener('pointerdown', (e) => {
+      const { px, py } = pos(e);
+      const [x1, y1, x2, y2] = getCurve();
+      const d = (hx: number, hy: number) => { const [x, y] = toPx(hx, hy); return Math.hypot(px - x, py - y); };
+      const d1 = d(x1, y1), d2 = d(x2, y2);
+      drag = Math.min(d1, d2) < 40 ? (d1 <= d2 ? 0 : 1) : null;
+      if (drag !== null) { cv.setPointerCapture(e.pointerId); e.preventDefault(); }
+    });
+    cv.addEventListener('pointermove', (e) => {
+      if (drag === null) return;
+      const { x, y } = pos(e);
+      const c = getCurve();
+      if (drag === 0) { c[0] = x; c[1] = y; } else { c[2] = x; c[3] = y; }
+      restyle();
+    });
+    const end = () => { drag = null; };
+    cv.addEventListener('pointerup', end);
+    cv.addEventListener('pointercancel', end);
+    return { draw };
+  }
+  const pressureEditor = curveEditor(
+    pgCurve,
+    () => pressure[pgTool].curve,
+    { x: 'pressure →', y: 'effect →', readout: (fx) => `${pgTool} · 50% → ${Math.round(fx(0.5) * 100)}%` },
+    () => {
+      const k = pressure[pgTool];
+      return pgTool === 'marker' ? null : (t: number) => k.min + (1 - k.min) * easeP(t, pgTool);
+    },
+  );
+  const pgTiltCv = pg.querySelector('#pg-tilt') as HTMLCanvasElement;
+  const tiltEditor = curveEditor(
+    pgTiltCv,
+    () => pressure[pgTool].tiltCurve,
+    { x: 'tilt (upright → flat) →', y: 'widening →', readout: (fx) => `45° → ${Math.round(fx(0.5) * 100)}%` },
+  );
+  function drawCurve() {
+    pressureEditor.draw();
+    pgTiltCv.hidden = pgTool !== 'pencil';
+    if (!pgTiltCv.hidden) tiltEditor.draw();
+  }
 
   function syncPg() {
     const k = pressure[pgTool];
