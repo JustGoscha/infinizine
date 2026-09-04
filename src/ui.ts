@@ -176,7 +176,7 @@ export function buildUI(
         <button class="chip" id="eagle" title="Eagle view: fit everything, tap again to return">${svg('<path d="M4 9V4h5 M20 9V4h-5 M4 15v5h5 M20 15v5h-5"/><rect x="9.5" y="9.5" width="5" height="5"/>')}</button>
         <button class="chip" id="zoom-lock" title="Zoom lock"></button>
         <button class="chip chip-text" id="zoom-100" title="Back to 100% (⌘0)">1:1</button>
-        <button class="chip" id="playground" title="Pressure playground">${svg('<circle cx="12" cy="12" r="3"/><path d="M12 3v2.5M12 18.5V21M3 12h2.5M18.5 12H21M5.6 5.6l1.8 1.8M16.6 16.6l1.8 1.8M5.6 18.4l1.8-1.8M16.6 7.4l1.8-1.8"/>')}</button>
+        <button class="chip" id="playground" title="Pressure playground">${svg('<path d="M21.42 10.13 L21.42 13.87 L19.26 13.44 L18.15 16.11 L19.98 17.33 L17.33 19.98 L16.11 18.15 L13.44 19.26 L13.87 21.42 L10.13 21.42 L10.56 19.26 L7.89 18.15 L6.67 19.98 L4.02 17.33 L5.85 16.11 L4.74 13.44 L2.58 13.87 L2.58 10.13 L4.74 10.56 L5.85 7.89 L4.02 6.67 L6.67 4.02 L7.89 5.85 L10.56 4.74 L10.13 2.58 L13.87 2.58 L13.44 4.74 L16.11 5.85 L17.33 4.02 L19.98 6.67 L18.15 7.89 L19.26 10.56 Z"/><circle cx="12" cy="12" r="3.2"/>')}</button>
         <button class="chip" id="present" title="Present">${svg('<path d="M8 5.5 L18 12 L8 18.5 Z"/>')}</button>
       </div>
     </header>
@@ -1938,7 +1938,6 @@ export function buildUI(
         <button id="pg-save" class="pg-primary">Save</button>
         <button id="pg-reset">Reset to default</button>
       </div>
-      <p class="pg-hint">Per tool. Edits preview live on the scratch canvas (and your zine) but are only kept when you Save; closing reverts unsaved changes.</p>
     </div>
   `;
   document.body.appendChild(pg);
