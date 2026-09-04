@@ -200,7 +200,7 @@ export class Renderer {
     // graphite: pressure barely widens the line — it packs more, darker
     // stamps into the same width (spacing shrinks ~3× from light to hard)
     const spacingAt = (p: number) => Math.max(0.2, wBase * 0.3 * (1.35 - p * 0.9));
-    const stamps: { x: number; y: number; p: number }[] = [];
+    const stamps: { x: number; y: number; p: number; a?: number }[] = [];
     if (pts.length === 1) {
       // a tap: a dense disc of stamps at the tap pressure
       const c = pts[0];
@@ -209,7 +209,7 @@ export class Renderer {
       for (let i = 0; i < n; i++) {
         const a = rnd(i, 7) * Math.PI * 2;
         const d = Math.sqrt(rnd(i, 8)) * R;
-        stamps.push({ x: c.x + Math.cos(a) * d, y: c.y + Math.sin(a) * d, p: c.p });
+        stamps.push({ x: c.x + Math.cos(a) * d, y: c.y + Math.sin(a) * d, p: c.p, a: c.a });
       }
     }
     let carry = 0;
@@ -221,7 +221,8 @@ export class Renderer {
       while (d < len) {
         const t = d / len;
         const p = a.p + (b.p - a.p) * t;
-        stamps.push({ x: a.x + (b.x - a.x) * t, y: a.y + (b.y - a.y) * t, p });
+        const tl = a.a !== undefined && b.a !== undefined ? a.a + (b.a - a.a) * t : a.a ?? b.a;
+        stamps.push({ x: a.x + (b.x - a.x) * t, y: a.y + (b.y - a.y) * t, p, a: tl });
         d += spacingAt(p);
       }
       carry = d - len;
@@ -230,7 +231,10 @@ export class Renderer {
       const st = stamps[i];
       // graphite sharpens as you press: the faint halo is widest at light
       // pressure, the solid core that takes over is narrower than the halo
-      const r = wBase * (0.72 - st.p * 0.12) * (0.98 + rnd(i, 3) * 0.04);
+      // a flat Pencil lays the side of the graphite down: light strokes get
+      // much wider and fainter (shading); pressing hard sharpens back to a line
+      const tiltMul = 1 + (pressure.pencil.tilt - 1) * (st.a ?? 0) * (1 - st.p);
+      const r = wBase * (0.72 - st.p * 0.12) * tiltMul * (0.98 + rnd(i, 3) * 0.04);
       const jx = (rnd(i, 1) - 0.5) * r * 0.07;
       const jy = (rnd(i, 2) - 0.5) * r * 0.07;
       const wobble = 0.9 + rnd(i, 4) * 0.2;
@@ -238,7 +242,7 @@ export class Renderer {
       target.translate(st.x + jx, st.y + jy);
       target.rotate(rnd(i, 5) * Math.PI * 2);
       // grain: present from the lightest touch, fades back as the core takes over
-      const grainA = (0.16 + st.p * 0.3) * (1 - Math.max(0, st.p - 0.55) * 0.9);
+      const grainA = (0.16 + st.p * 0.3) * (1 - Math.max(0, st.p - 0.55) * 0.9) / Math.sqrt(tiltMul);
       target.globalAlpha = alphaScale * grainA * wobble;
       target.drawImage(nib.grain[Math.floor(rnd(i, 6) * 8)], -r, -r, r * 2, r * 2);
       // dense core: kicks in past mid pressure, near-solid at full

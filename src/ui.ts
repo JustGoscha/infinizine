@@ -1914,12 +1914,13 @@ export function buildUI(
   ];
   const isPTool = (t: Tool): t is PTool => PG_TOOLS.some((o) => o.t === t);
   let pgTool: PTool = isPTool(state.tool) ? state.tool : 'pen';
-  type NumKey = 'smooth' | 'pSmooth' | 'min' | 'max';
-  const SLIDERS: { k: NumKey; label: string; min: number; max: number; step: number; fmt: (v: number) => string; markerToo?: boolean }[] = [
+  type NumKey = 'smooth' | 'pSmooth' | 'min' | 'max' | 'tilt';
+  const SLIDERS: { k: NumKey; label: string; min: number; max: number; step: number; fmt: (v: number) => string; markerToo?: boolean; pencilOnly?: boolean }[] = [
     { k: 'smooth', label: 'smoothing', min: 0, max: 6, step: 0.1, fmt: (v) => `${v.toFixed(1)}px`, markerToo: true },
     { k: 'pSmooth', label: 'pressure lp', min: 0.05, max: 1, step: 0.05, fmt: (v) => v.toFixed(2) },
     { k: 'min', label: 'min width', min: 0, max: 1, step: 0.01, fmt: (v) => `${Math.round(v * 100)}%` },
     { k: 'max', label: 'max width', min: 0.5, max: 3, step: 0.05, fmt: (v) => `${v.toFixed(2)}×`, markerToo: true },
+    { k: 'tilt', label: 'tilt width', min: 1, max: 4, step: 0.1, fmt: (v) => (v <= 1 ? 'off' : `${v.toFixed(1)}×`), pencilOnly: true },
   ];
   pg.innerHTML = `
     <div class="pg-stage"><canvas id="pg-canvas"></canvas>
@@ -2049,7 +2050,7 @@ export function buildUI(
     pgCurve.style.opacity = pgTool === 'marker' ? '0.35' : '1';
     for (const sl of SLIDERS) {
       const row = pg.querySelector(`.pg-row[data-k="${sl.k}"]`) as HTMLElement;
-      row.hidden = pgTool === 'marker' && !sl.markerToo;
+      row.hidden = (pgTool === 'marker' && !sl.markerToo) || (!!sl.pencilOnly && pgTool !== 'pencil');
       (row.querySelector('input') as HTMLInputElement).value = String(k[sl.k]);
       (row.querySelector('b') as HTMLElement).textContent = sl.fmt(k[sl.k]);
     }

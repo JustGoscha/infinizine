@@ -24,6 +24,15 @@ export function writePref(k: string, v: string) {
 }
 export { FINGER_KEY };
 
+/** Pencil tilt 0 (upright) … 1 (flat). Safari gives altitudeAngle; others tiltX/Y. */
+function tiltOf(e: PointerEvent): number | undefined {
+  if (e.pointerType !== 'pen') return undefined;
+  const alt = (e as PointerEvent & { altitudeAngle?: number }).altitudeAngle;
+  if (typeof alt === 'number') return Math.max(0, Math.min(1, 1 - alt / (Math.PI / 2)));
+  if (typeof e.tiltX === 'number' && (e.tiltX || e.tiltY)) return Math.min(1, Math.hypot(e.tiltX, e.tiltY) / 90);
+  return undefined;
+}
+
 function toast(msg: string) {
   window.dispatchEvent(new CustomEvent('izine-toast', { detail: msg }));
 }
@@ -530,7 +539,7 @@ export function attachInput(
           opacity: activeTool === 'marker' ? 0.45 : 1,
           layer: state.paintBehind ? 'back' : 'front',
           ...anim,
-          points: [{ x: w.x, y: w.y, p: 0.5, t: 0 }],
+          points: [{ x: w.x, y: w.y, p: 0.5, t: 0, a: tiltOf(e) }],
           startTime: Date.now() / 1000,
         };
         conditionPressure(e);
@@ -694,13 +703,16 @@ export function attachInput(
         const last = state.live.points[state.live.points.length - 1];
         const dx = cw.x - last.x, dy = cw.y - last.y;
         const p = conditionPressure(ce as PointerEvent);
+        const a = tiltOf(ce as PointerEvent);
         if (dx * dx + dy * dy < minDistSq) {
           last.p = p; // keep the freshest pressure, no new vertex
+          if (a !== undefined) last.a = a;
           continue;
         }
         state.live.points.push({
           x: cw.x, y: cw.y, p,
           t: performance.now() / 1000 - strokeStart,
+          a,
         });
       }
       return; // renderer redraws while live is set
@@ -916,7 +928,7 @@ export function attachInput(
         const n = s.points.length;
         const cx = s.points.reduce((a, p) => a + p.x, 0) / n;
         const cy = s.points.reduce((a, p) => a + p.y, 0) / n;
-        s.points = [{ x: cx, y: cy, p: rawPMax ?? s.points[0].p, t: 0 }];
+        s.points = [{ x: cx, y: cy, p: rawPMax ?? s.points[0].p, t: 0, a: s.points[0].a }];
       } else {
         // digitiser quantisation is ~1 screen px; smooth it away in world units
         // scaled by the zoom you drew at, so zoomed-out lines don't kink when

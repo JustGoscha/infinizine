@@ -50,6 +50,7 @@ export function densify(points: StrokePoint[], spacing = 2.2): StrokePoint[] {
         y: cr(p0.y, p1.y, p2.y, p3.y, t),
         p: p1.p + (p2.p - p1.p) * t,
         t: p1.t + (p2.t - p1.t) * t,
+        a: p1.a !== undefined && p2.a !== undefined ? p1.a + (p2.a - p1.a) * t : p1.a ?? p2.a,
       });
     }
     out.push(p2);
@@ -67,13 +68,14 @@ export interface ToolPressure {
   pSmooth: number; // pressure low-pass factor 0..1 (1 = raw)
   min: number; // width at zero pressure as a fraction of max
   max: number; // max width as × baseWidth
+  tilt: number; // pencil: how much a flat Pencil widens a light stroke (1 = ignore tilt, 3 = up to 3×)
 }
 export type PressureParams = Record<ToolKind, ToolPressure>;
-const base = { curve: [0.55, 0.9, 0.5, 0.95] as [number, number, number, number], smooth: 1.2, pSmooth: 0.3 };
+const base = { curve: [0.55, 0.9, 0.5, 0.95] as [number, number, number, number], smooth: 1.2, pSmooth: 0.3, tilt: 1 };
 export const DEFAULT_PRESSURE: PressureParams = {
   pen: { ...base, min: 0.22, max: 1.6 },
   fineliner: { ...base, min: 0.86, max: 1.3 },
-  pencil: { ...base, min: 0.6, max: 1.3 },
+  pencil: { ...base, min: 0.6, max: 1.3, tilt: 2.4 },
   sketch: { ...base, min: 0.45, max: 1.4 },
   marker: { ...base, min: 1, max: 2.4 },
 };
