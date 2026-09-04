@@ -217,6 +217,7 @@ export function attachInput(
   }
   let erased: Element[] = [];
   let panLast: { x: number; y: number } | null = null;
+  let panStart: { x: number; y: number; t: number } | null = null; // one-finger pan origin (tap detection)
   let pinchDist = 0;
   let pinchMid: { x: number; y: number } | null = null;
 
@@ -1309,6 +1310,7 @@ export function attachInput(
           return;
         }
         panLast = { x: e.clientX, y: e.clientY };
+        panStart = { x: e.clientX, y: e.clientY, t: performance.now() };
         return;
       }
     }
@@ -1498,6 +1500,18 @@ export function attachInput(
         invalidate();
       }
     }
+    // a motionless one-finger tap in pan mode still selects what's under it
+    if (e.pointerType === 'touch' && panLast && panStart && !state.presenting) {
+      const moved = Math.hypot(e.clientX - panStart.x, e.clientY - panStart.y);
+      if (moved < 10 && performance.now() - panStart.t < 300) {
+        const w = toWorld(e);
+        const editable = store.doc.elements.filter((el) => frameEditable(el, state));
+        const hit = [...editable].reverse().find((el) => hitElement(el, w.x, w.y, 8 / camera.zoom));
+        state.selection = hit ? new Set([hit.id]) : new Set();
+        invalidate();
+      }
+    }
+    panStart = null;
     if (drawingPointer === e.pointerId || dragPage || dragArea || dragSelection || panLast || resizeArea || resizeImg) {
       drawingPointer = null;
       endAction(e);
