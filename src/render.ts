@@ -123,11 +123,15 @@ export class Renderer {
   // overlap and build up like graphite. Strokes are rasterized once per zoom
   // bucket and cached; the vector data stays the source of truth.
   // several nib variants per color — reusing one tile creates visible repeats
-  private nibCache = new Map<string, HTMLCanvasElement[]>();
-  private nibs(color: string): HTMLCanvasElement[] {
+  private nibCache = new Map<string, { grain: HTMLCanvasElement[]; dense: HTMLCanvasElement[] }>();
+  /** Two nib families per color: `grain` = toothy speckle for light pressure,
+   * `dense` = soft solid disc with a little tooth for hard pressure. Stamps
+   * cross-fade between them with pressure, so a hard line reads as an
+   * almost solid graphite stroke instead of a darker cloud of dots. */
+  private nibs(color: string) {
     let set = this.nibCache.get(color);
     if (!set) {
-      set = [];
+      set = { grain: [], dense: [] };
       for (let v = 0; v < 8; v++) {
         const n = document.createElement('canvas');
         n.width = n.height = 64;
@@ -141,7 +145,29 @@ export class Renderer {
           c.globalAlpha = fall * (0.25 + Math.random() * 0.75);
           c.fillRect(32 + Math.cos(ang) * r, 32 + Math.sin(ang) * r, 1.3, 1.3);
         }
-        set.push(n);
+        set.grain.push(n);
+
+        const d = document.createElement('canvas');
+        d.width = d.height = 64;
+        const dc = d.getContext('2d')!;
+        dc.fillStyle = color;
+        // stacked soft rings → solid core, feathered rim
+        for (let k = 0; k < 14; k++) {
+          const rr = 30 * (1 - k / 14);
+          dc.globalAlpha = 0.16;
+          dc.beginPath();
+          dc.arc(32 + (Math.random() - 0.5) * 1.2, 32 + (Math.random() - 0.5) * 1.2, rr, 0, Math.PI * 2);
+          dc.fill();
+        }
+        // a little tooth so it still reads as graphite, not marker
+        dc.globalCompositeOperation = 'destination-out';
+        for (let i = 0; i < 260; i++) {
+          const r = Math.sqrt(Math.random()) * 30;
+          const ang = Math.random() * Math.PI * 2;
+          dc.globalAlpha = 0.25 + Math.random() * 0.5;
+          dc.fillRect(32 + Math.cos(ang) * r, 32 + Math.sin(ang) * r, 1.2, 1.2);
+        }
+        set.dense.push(d);
       }
       this.nibCache.set(color, set);
     }
@@ -203,11 +229,21 @@ export class Renderer {
       const r = wBase * (0.6 + st.p * 0.2) * (0.98 + rnd(i, 3) * 0.04);
       const jx = (rnd(i, 1) - 0.5) * r * 0.07;
       const jy = (rnd(i, 2) - 0.5) * r * 0.07;
-      target.globalAlpha = alphaScale * (0.07 + st.p * 0.4) * (0.9 + rnd(i, 4) * 0.2);
+      const wobble = 0.9 + rnd(i, 4) * 0.2;
       target.save();
       target.translate(st.x + jx, st.y + jy);
       target.rotate(rnd(i, 5) * Math.PI * 2);
-      target.drawImage(nib[Math.floor(rnd(i, 6) * nib.length)], -r, -r, r * 2, r * 2);
+      // grain: present from the lightest touch, fades back as the core takes over
+      const grainA = (0.16 + st.p * 0.3) * (1 - Math.max(0, st.p - 0.55) * 0.9);
+      target.globalAlpha = alphaScale * grainA * wobble;
+      target.drawImage(nib.grain[Math.floor(rnd(i, 6) * 8)], -r, -r, r * 2, r * 2);
+      // dense core: kicks in past mid pressure, near-solid at full
+      const core = Math.max(0, (st.p - 0.4) / 0.6);
+      if (core > 0) {
+        const rc = r * 0.92;
+        target.globalAlpha = alphaScale * Math.pow(core, 1.3) * 0.9 * wobble;
+        target.drawImage(nib.dense[Math.floor(rnd(i, 9) * 8)], -rc, -rc, rc * 2, rc * 2);
+      }
       target.restore();
     }
     target.globalAlpha = 1;
