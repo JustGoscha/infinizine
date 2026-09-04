@@ -9,6 +9,10 @@ import { hitElement, elementsInLasso } from './geometry';
 import { layoutText, layoutHeight } from './text';
 
 const CLIP_KEY = 'infinizine-clipboard';
+export const CLIP_PENDING_KEY = 'infinizine-clip-pending'; // '1' while the clip hasn't been pasted yet
+// Big selections blow the ~5MB localStorage quota; the in-memory clipboard
+// always holds the last copy so same-tab (and cross-zine) paste never fails.
+let memClip: string | null = null;
 
 function toast(msg: string) {
   window.dispatchEvent(new CustomEvent('izine-toast', { detail: msg }));
@@ -951,11 +955,14 @@ export function attachInput(
       return false;
     }
     const json = JSON.stringify(payload);
+    memClip = json;
     try {
       localStorage.setItem(CLIP_KEY, json);
     } catch {
-      return false;
+      // too big for localStorage — drop the stale entry so other tabs don't paste old content
+      try { localStorage.removeItem(CLIP_KEY); } catch { /* ignore */ }
     }
+    try { localStorage.setItem(CLIP_PENDING_KEY, '1'); } catch { /* ignore */ }
     navigator.clipboard?.writeText(json).catch(() => {});
     const p = payload as { kind: string; elements: Element[] };
     toast(p.kind === 'area' ? 'Copied animation area' : `Copied ${p.elements.length} element${p.elements.length === 1 ? '' : 's'}`);
@@ -1000,6 +1007,8 @@ export function attachInput(
       };
       store.addElement(el);
       state.selection = new Set([el.id]);
+      state.tool = 'cursor';
+      state.onToolChange();
       toast('Pasted image');
       invalidate();
     };
@@ -1025,6 +1034,8 @@ export function attachInput(
     };
     store.addElement(el);
     state.selection = new Set([el.id]);
+    state.tool = 'cursor';
+    state.onToolChange();
     toast('Pasted text');
     invalidate();
   }
@@ -1052,6 +1063,7 @@ export function attachInput(
         try {
           const p = JSON.parse(txt);
           if (p && p.app === 'infinizine-clip') {
+            memClip = txt;
             try { localStorage.setItem(CLIP_KEY, txt); } catch { /* ignore */ }
             pasteClipboard();
             toast('Pasted');
@@ -1062,7 +1074,8 @@ export function attachInput(
         return;
       }
     } catch { /* clipboard unreadable (permissions) — fall back */ }
-    const had = (() => { try { return !!localStorage.getItem(CLIP_KEY); } catch { return false; } })();
+    const had = memClip !== null ||
+      (() => { try { return !!localStorage.getItem(CLIP_KEY); } catch { return false; } })();
     if (had) {
       pasteClipboard();
       toast('Pasted');
@@ -1072,10 +1085,12 @@ export function attachInput(
   }
 
   function pasteClipboard() {
-    let raw: string | null = null;
-    try {
-      raw = localStorage.getItem(CLIP_KEY);
-    } catch { /* ignore */ }
+    let raw: string | null = memClip;
+    if (!raw) {
+      try {
+        raw = localStorage.getItem(CLIP_KEY);
+      } catch { /* ignore */ }
+    }
     if (!raw) return;
     let payload: {
       app?: string;
@@ -1138,6 +1153,7 @@ export function attachInput(
       });
       store.addAreaWithContent(area, els);
       state.selection.clear();
+      state.onAnimOpen(area); // activate the pasted area so it can be moved right away
     } else {
       const els = payload.elements.map((el) => {
         const c = structuredClone(el) as Element;
@@ -1156,7 +1172,11 @@ export function attachInput(
       });
       store.addElements(els);
       state.selection = new Set(els.map((el) => el.id));
+      // land in the cursor tool so the pasted elements can be moved immediately
+      state.tool = 'cursor';
+      state.onToolChange();
     }
+    try { localStorage.setItem(CLIP_PENDING_KEY, '0'); } catch { /* ignore */ }
     invalidate();
   }
 

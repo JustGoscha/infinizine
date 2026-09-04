@@ -1,6 +1,6 @@
 // Toolbar, palette popover, page menu. Plain DOM, stationery-shop styling in style.css.
 
-import { InputState, Tool } from './input';
+import { InputState, Tool, CLIP_PENDING_KEY } from './input';
 import { Store } from './store';
 import { Camera } from './camera';
 import { PALETTES, getPalette, shades } from './palettes';
@@ -1811,8 +1811,10 @@ export function buildUI(
     }
     const hasSel = state.selection.size > 0;
     const hasArea = !!state.activeAreaId;
+    // paste offer only while the clip hasn't been pasted yet — keeps the menu
+    // out of the way once the clipboard content has landed somewhere
     let hasClip = false;
-    try { hasClip = !!localStorage.getItem('infinizine-clipboard'); } catch { /* ignore */ }
+    try { hasClip = localStorage.getItem(CLIP_PENDING_KEY) === '1'; } catch { /* ignore */ }
     (selMenu.querySelector('#sm-copy') as HTMLButtonElement).hidden = !(hasSel || hasArea);
     (selMenu.querySelector('#sm-cut') as HTMLButtonElement).hidden = !(hasSel || hasArea);
     (selMenu.querySelector('#sm-del') as HTMLButtonElement).hidden = !hasSel;
