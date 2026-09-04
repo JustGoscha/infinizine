@@ -230,7 +230,7 @@ export const DEFAULT_PRESSURE: PressureParams = {
     tilt: 1,
     min: 1,
     max: 2.4,
-    nib: 45, // chisel edge ~45° to the lean, the classic broad-nib hold
+    nib: 0,
     nibMode: 'azimuth',
   },
 };
@@ -247,8 +247,8 @@ export const pressure: PressureParams = (() => {
           curve: normalizeCurve(p[t]!.curve, out[t].curve),
           tiltCurve: normalizeCurve(p[t]!.tiltCurve, out[t].tiltCurve),
         });
-        // settings saved before the nib offset existed carry a 0: adopt the new default
-        if (t === 'marker' && (p[t] as { nib?: number }).nib === 0) out[t].nib = DEFAULT_PRESSURE.marker.nib;
+        // a briefly-shipped default of 45° compensated a formula bug; the formula is fixed
+        if (t === 'marker' && (p[t] as { nib?: number }).nib === 45) out[t].nib = 0;
       }
     }
   } catch { /* ignore */ }
@@ -721,7 +721,7 @@ export function markerPaths(points: StrokePoint[], baseWidth: number, detail: nu
   const nxs = new Float64Array(n), nys = new Float64Array(n);
   for (let i = 0; i < n; i++) {
     const ang = useAz && pts[i].r !== undefined
-      ? pts[i].r! + Math.PI / 2 + offset // chisel edge sits across the lean
+      ? pts[i].r! + offset // chisel edge lies along the lean direction
       : Math.atan2(ty[i], tx[i]) + Math.PI / 2 + offset; // across the travel direction
     nxs[i] = Math.cos(ang) * half; nys[i] = Math.sin(ang) * half;
   }
