@@ -493,7 +493,11 @@ export function elementBBox(el: Element): BBox {
     if (p.x > maxX) maxX = p.x;
     if (p.y > maxY) maxY = p.y;
   }
-  const pad = el.kind === 'stroke' ? el.baseWidth * 2.5 : 2;
+  // pencil strokes can fan out far beyond the base width when tilted
+  const pad =
+    el.kind === 'stroke'
+      ? el.baseWidth * (el.tool === 'pencil' ? Math.max(2.5, 0.8 * pressure.pencil.tilt + 1) : 2.5)
+      : 2;
   return { minX: minX - pad, minY: minY - pad, maxX: maxX + pad, maxY: maxY + pad };
 }
 

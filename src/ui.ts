@@ -1920,7 +1920,7 @@ export function buildUI(
     { k: 'pSmooth', label: 'pressure lp', min: 0.05, max: 1, step: 0.05, fmt: (v) => v.toFixed(2) },
     { k: 'min', label: 'min width', min: 0, max: 1, step: 0.01, fmt: (v) => `${Math.round(v * 100)}%` },
     { k: 'max', label: 'max width', min: 0.5, max: 3, step: 0.05, fmt: (v) => `${v.toFixed(2)}×`, markerToo: true },
-    { k: 'tilt', label: 'tilt width', min: 1, max: 4, step: 0.1, fmt: (v) => (v <= 1 ? 'off' : `${v.toFixed(1)}×`), pencilOnly: true },
+    { k: 'tilt', label: 'tilt width', min: 1, max: 20, step: 0.25, fmt: (v) => (v <= 1 ? 'off' : `${v.toFixed(1)}×`), pencilOnly: true },
   ];
   pg.innerHTML = `
     <div class="pg-stage"><canvas id="pg-canvas"></canvas>
