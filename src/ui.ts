@@ -2079,7 +2079,7 @@ export function buildUI(
         c.lineWidth = 2;
         c.beginPath();
         if (inner && !n.s) c.rect(ax - 5.5, ay - 5.5, 11, 11); // corner = square
-        else c.arc(ax, ay, inner ? 6 : 5, 0, Math.PI * 2);
+        else c.arc(ax, ay, 6, 0, Math.PI * 2);
         c.fill(); c.stroke();
       });
       c.fillStyle = 'rgba(42,36,26,0.7)';
@@ -2166,10 +2166,14 @@ export function buildUI(
       const { x, y } = pos(e);
       if (drag.kind === 'anchor') {
         const k = drag.k;
-        if (k === 0 || k === curve.length - 1) return; // endpoints are fixed
         const n = curve[k];
-        n.x = Math.max(curve[k - 1].x + 0.01, Math.min(curve[k + 1].x - 0.01, x));
-        n.y = clamp01(y);
+        if (k === 0 || k === curve.length - 1) {
+          // endpoints stay on their edge (x = 0 / 1) but slide freely in y
+          n.y = clamp01(y);
+        } else {
+          n.x = Math.max(curve[k - 1].x + 0.01, Math.min(curve[k + 1].x - 0.01, x));
+          n.y = clamp01(y);
+        }
       } else {
         const n = curve[drag.k];
         // handles roam the whole visible domain (the curve may fold back; curveAt copes)
