@@ -340,6 +340,17 @@ export function denoise(points: StrokePoint[], sigma: number): StrokePoint[] {
   return out;
 }
 
+/** denoise() for a closed loop (lasso fill): wrap-pads both ends so the seam
+ * between last and first point is smoothed like everywhere else. */
+export function denoiseClosed(points: { x: number; y: number }[], sigma: number): { x: number; y: number }[] {
+  const n = points.length;
+  if (n < 4 || sigma <= 0) return points;
+  const m = Math.min(n, 24);
+  const asPts = (arr: { x: number; y: number }[]) => arr.map((q) => ({ x: q.x, y: q.y, p: 0.5, t: 0 }));
+  const padded = asPts([...points.slice(n - m), ...points, ...points.slice(0, m)]);
+  return denoise(padded, sigma).slice(m, m + n).map((q) => ({ x: q.x, y: q.y }));
+}
+
 /** Incremental denoise for the stroke being drawn: points further than the
  * Gaussian reach behind the tip can never change again, so they're kept;
  * each frame only the tail is recomputed. Same result as denoise() on commit. */

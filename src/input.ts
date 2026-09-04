@@ -5,7 +5,7 @@
 import { Camera, baseZoom } from './camera';
 import { Store } from './store';
 import { AnimArea, Stroke, FillShape, Element, ImageBox, Page, TextBox, uid } from './types';
-import { hitElement, elementsInLasso, denoise, pressure } from './geometry';
+import { hitElement, elementsInLasso, denoise, denoiseClosed, pressure } from './geometry';
 import { layoutText, layoutHeight } from './text';
 
 const CLIP_KEY = 'infinizine-clipboard';
@@ -1045,7 +1045,8 @@ export function attachInput(
           layer: state.paintBehind ? 'back' : 'front',
           frame: state.activeFrameId ?? undefined,
           alayer: state.activeLayerId ?? undefined,
-          points: lasso.map((p) => ({ x: p.x, y: p.y })),
+          // same screen-space smoothing as the brushes (3px at drawing zoom)
+          points: denoiseClosed(lasso.map((p) => ({ x: p.x, y: p.y })), 3 / camera.zoom),
         };
         store.addElement(fill);
       }

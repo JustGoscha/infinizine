@@ -3,7 +3,7 @@
 
 import { Camera, baseZoom } from './camera';
 import { Element, FillShape, Page, Stroke, StrokePoint } from './types';
-import { strokeOutline, pencilOutlines, markerPaths, outlineToPath, elementBBox, bboxIntersects, densify, filterPressure, easeP, easeTilt, LiveDenoiser, pressure, BBox } from './geometry';
+import { strokeOutline, pencilOutlines, markerPaths, outlineToPath, elementBBox, bboxIntersects, densify, filterPressure, easeP, easeTilt, LiveDenoiser, denoiseClosed, pressure, BBox } from './geometry';
 import { layoutText, fontFor, segWidth, LINE_HEIGHT } from './text';
 import { moveHandleRect, moveAllHandleRect, deleteHandleRect, eyeHandleRect, type InputState } from './input';
 import { Store } from './store';
@@ -833,8 +833,12 @@ export class Renderer {
     }
 
     // Lasso in progress
-    const lasso = this.input.lasso;
-    if (lasso && lasso.length > 1) {
+    const lassoRaw = this.input.lasso;
+    if (lassoRaw && lassoRaw.length > 1) {
+      // preview with the same smoothing the fill gets on commit
+      const lasso = this.input.tool === 'lasso-fill' && lassoRaw.length > 3
+        ? denoiseClosed(lassoRaw, 3 / camera.zoom)
+        : lassoRaw;
       ctx.beginPath();
       ctx.moveTo(lasso[0].x, lasso[0].y);
       for (const p of lasso) ctx.lineTo(p.x, p.y);
