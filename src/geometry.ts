@@ -333,13 +333,19 @@ export function pressureOutline(
     right.push([pts[i].x - nx * r, pts[i].y - ny * r]);
   }
   // assemble: left forward, end cap, right backward, start cap
+  // (marker = chisel tip: flat ends, the sides simply close)
+  const flat = tool === 'marker';
   const out: number[][] = [...left];
   const e = n - 1;
-  const aEnd = Math.atan2(tx[e], -ty[e]); // angle of the left normal at the end
-  arc(out, pts[e].x, pts[e].y, rad[e], aEnd, aEnd - Math.PI, detail);
+  if (!flat) {
+    const aEnd = Math.atan2(tx[e], -ty[e]); // angle of the left normal at the end
+    arc(out, pts[e].x, pts[e].y, rad[e], aEnd, aEnd - Math.PI, detail);
+  }
   for (let i = right.length - 1; i >= 0; i--) out.push(right[i]);
-  const aStart = Math.atan2(tx[0], -ty[0]);
-  arc(out, pts[0].x, pts[0].y, rad[0], aStart + Math.PI, aStart, detail);
+  if (!flat) {
+    const aStart = Math.atan2(tx[0], -ty[0]);
+    arc(out, pts[0].x, pts[0].y, rad[0], aStart + Math.PI, aStart, detail);
+  }
   return out;
 }
 
@@ -394,6 +400,10 @@ function dotOutline(stroke: Stroke, detail: number, radiusScale = 1, dx = 0, dy 
   const c = stroke.points[0];
   const r = dotRadius(stroke) * radiusScale;
   const out: number[][] = [];
+  if (stroke.tool === 'marker') {
+    // chisel tip touched down: a flat square dab
+    return [[c.x - r, c.y - r * 0.6], [c.x + r, c.y - r * 0.6], [c.x + r, c.y + r * 0.6], [c.x - r, c.y + r * 0.6]];
+  }
   arc(out, c.x + dx, c.y + dy, r, 0, Math.PI * 2, detail);
   return out;
 }
