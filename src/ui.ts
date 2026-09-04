@@ -24,7 +24,8 @@ const ICON_PATHS: Record<string, string> = {
   pencil: '<g transform="scale(0.09375)" fill="currentColor" stroke="none"><path d="M227.31,73.37,182.63,28.68a16,16,0,0,0-22.63,0L36.69,152A15.86,15.86,0,0,0,32,163.31V208a16,16,0,0,0,16,16H92.69A15.86,15.86,0,0,0,104,219.31L227.31,96a16,16,0,0,0,0-22.63ZM51.31,160,136,75.31,152.69,92,68,176.68ZM48,179.31,76.69,208H48Zm48,25.38L79.31,188,164,103.31,180.69,120Zm96-96L147.31,64l24-24L216,84.68Z"/></g>',
   fineliner: '<g transform="scale(0.09375)" fill="currentColor" stroke="none"><path d="M227.32,73.37,182.63,28.69a16,16,0,0,0-22.63,0L36.69,152A15.86,15.86,0,0,0,32,163.31V208a16,16,0,0,0,16,16H92.69A15.86,15.86,0,0,0,104,219.31l83.67-83.66,3.48,13.9-36.8,36.79a8,8,0,0,0,11.31,11.32l40-40a8,8,0,0,0,2.11-7.6l-6.9-27.61L227.32,96A16,16,0,0,0,227.32,73.37ZM48,179.31,76.69,208H48Zm48,25.38L51.31,160,136,75.31,180.69,120Zm96-96L147.32,64l24-24L216,84.69Z"/></g>',
   marker: '<g transform="scale(0.09375)" fill="currentColor" stroke="none"><path d="M253.66,106.34a8,8,0,0,0-11.32,0L192,156.69,107.31,72l50.35-50.34a8,8,0,1,0-11.32-11.32L96,60.69A16,16,0,0,0,93.18,79.5L72,100.69a16,16,0,0,0,0,22.62L76.69,128,18.34,186.34a8,8,0,0,0,3.13,13.25l72,24A7.88,7.88,0,0,0,96,224a8,8,0,0,0,5.66-2.34L136,187.31l4.69,4.69a16,16,0,0,0,22.62,0l21.19-21.18A16,16,0,0,0,203.31,168l50.35-50.34A8,8,0,0,0,253.66,106.34ZM93.84,206.85l-55-18.35L88,139.31,124.69,176ZM152,180.69,83.31,112,104,91.31,172.69,160Z"/></g>',
-  'lasso-fill': '<g transform="scale(0.09375)" fill="currentColor" stroke="none"><path d="M234.53,139.07a8,8,0,0,0,3.13-13.24L122.17,10.34a8,8,0,0,0-11.31,0L70.25,51,45.65,26.34A8,8,0,0,0,34.34,37.66l24.6,24.6L15,106.17a24,24,0,0,0,0,33.94L99.89,225a24,24,0,0,0,33.94,0l78.49-78.49Zm-32.19-5.24-79.83,79.83a8,8,0,0,1-11.31,0L26.34,128.8a8,8,0,0,1,0-11.31L70.25,73.57l29.12,29.12a28,28,0,1,0,11.31-11.32L81.57,62.26l35-34.95L217.19,128l-11.72,3.9A8.09,8.09,0,0,0,202.34,133.83Zm-86.83-26.31,0,0a13.26,13.26,0,1,1-.05.06S115.51,107.53,115.51,107.52Zm123.15,56a8,8,0,0,0-13.32,0C223.57,166.23,208,190.09,208,208a24,24,0,0,0,48,0C256,190.09,240.43,166.23,238.66,163.56ZM232,216a8,8,0,0,1-8-8c0-6.8,4-16.32,8-24.08,4,7.76,8,17.34,8,24.08A8,8,0,0,1,232,216Z"/></g>',
+  // lasso fill: the same rope loop as lasso select, but solid — the loop is filled in
+  'lasso-fill': '<path d="M4.5 10.5 C4.5 7.2 8 5 12 5 C16 5 19.5 7.2 19.5 10.5 C19.5 13.8 16 16 12 16 C8 16 4.5 13.8 4.5 10.5 Z" fill="currentColor" fill-opacity="0.85"/><path d="M8.5 15.5 C6.5 17.5 10 19 8 21"/>',
   eraser: '<path d="M9.5 18.5 L4.5 13.5 L13 5 L18.5 10.5 L10.5 18.5 Z"/><path d="M8 20 H20"/>',
   'lasso-select': '<ellipse cx="12" cy="10.5" rx="7.5" ry="5.5" stroke-dasharray="3.4 2.6"/><path d="M8.5 15.5 C6.5 17.5 10 19 8 21"/>',
   cursor: '<path d="M6.5 3.5 L18 13 L12.8 13.8 L15.6 19.6 L13 20.8 L10.3 14.9 L6.5 17.8 Z"/>',
@@ -108,33 +109,56 @@ const ADAPTIVE_KEY = 'infinizine-adaptive-size';
 interface Fmt { label: string; w: number; h: number; screen?: boolean } // w/h in world units (2/mm); screen = fit to viewport on pick
 const mm = (w: number, h: number) => ({ w: w * UNITS_PER_MM, h: h * UNITS_PER_MM });
 
+// Quick picks in the page menu
 const PRIMARY_FORMATS: Fmt[] = [
+  { label: '16:9', ...mm(240, 135), screen: true },
+  { label: 'Story 9:16', ...mm(135, 240), screen: true },
   { label: 'A4', ...mm(210, 297) },
-  { label: 'A4 wide', ...mm(297, 210) },
   { label: 'A5', ...mm(148, 210) },
-  { label: 'Square', ...mm(240, 240) },
 ];
 
-const MORE_FORMATS: Fmt[] = [
-  { label: 'A3', ...mm(297, 420) },
-  { label: 'A6', ...mm(105, 148) },
-  { label: 'B5', ...mm(176, 250) },
-  { label: 'Letter', ...mm(216, 279) },
-  { label: 'Legal', ...mm(216, 356) },
-  { label: 'Tabloid', ...mm(279, 432) },
-  { label: 'Half letter', ...mm(140, 216) },
-  { label: 'US comic', ...mm(168, 260) },
-  { label: 'Manga B6', ...mm(128, 182) },
-  { label: 'Zine pocket', ...mm(110, 178) },
-  { label: 'Postcard', ...mm(148, 105) },
-  { label: 'Bookmark', ...mm(50, 175) },
-  { label: 'IG portrait 4:5', ...mm(216, 270) },
-  { label: 'Story 9:16', ...mm(135, 240) },
-  { label: 'Screen 16:9', ...mm(240, 135), screen: true },
-  { label: 'Screen 9:16', ...mm(135, 240), screen: true },
-  { label: 'Screen 4:3', ...mm(240, 180), screen: true },
-  { label: 'Screen 3:4', ...mm(180, 240), screen: true },
+// Full picker, grouped: screens & social first, then paper, then print/zine
+const FORMAT_GROUPS: { label: string; items: Fmt[] }[] = [
+  {
+    label: 'Screen & social',
+    items: [
+      { label: 'Screen 16:9', ...mm(240, 135), screen: true },
+      { label: 'Story · Phone 9:16', ...mm(135, 240), screen: true },
+      { label: 'Post 1:1', ...mm(200, 200), screen: true },
+      { label: 'Post 4:5', ...mm(192, 240), screen: true },
+      { label: 'Screen 4:3', ...mm(240, 180), screen: true },
+      { label: 'Screen 3:4', ...mm(180, 240), screen: true },
+      { label: 'Wide 21:9', ...mm(280, 120), screen: true },
+    ],
+  },
+  {
+    label: 'Paper',
+    items: [
+      { label: 'A3', ...mm(297, 420) },
+      { label: 'A4', ...mm(210, 297) },
+      { label: 'A4 wide', ...mm(297, 210) },
+      { label: 'A5', ...mm(148, 210) },
+      { label: 'A6', ...mm(105, 148) },
+      { label: 'B5', ...mm(176, 250) },
+      { label: 'Letter', ...mm(216, 279) },
+      { label: 'Legal', ...mm(216, 356) },
+      { label: 'Tabloid', ...mm(279, 432) },
+      { label: 'Half letter', ...mm(140, 216) },
+      { label: 'Square', ...mm(240, 240) },
+    ],
+  },
+  {
+    label: 'Print & zine',
+    items: [
+      { label: 'US comic', ...mm(168, 260) },
+      { label: 'Manga B6', ...mm(128, 182) },
+      { label: 'Zine pocket', ...mm(110, 178) },
+      { label: 'Postcard', ...mm(148, 105) },
+      { label: 'Bookmark', ...mm(50, 175) },
+    ],
+  },
 ];
+const MORE_FORMATS: Fmt[] = FORMAT_GROUPS.flatMap((g) => g.items);
 
 /** Screen formats aren't about millimetres: zoom so the page nearly fills the
  * viewport, whatever the device. */
@@ -503,14 +527,27 @@ export function buildUI(
   // primary + extended presets + saved custom formats + a custom W×H creator.
   let onPickFormat: (f: Fmt) => void = () => {};
   function buildFormatPanel() {
-    const all = [...PRIMARY_FORMATS, ...MORE_FORMATS, ...customFormats()];
+    const groups = [...FORMAT_GROUPS, { label: 'Custom', items: customFormats() }].filter((g) => g.items.length);
+    const all = groups.flatMap((g) => g.items);
+    let idx = 0;
+    const ratio = (f: Fmt) => {
+      const g = (a: number, b: number): number => (b ? g(b, a % b) : a);
+      const wmm = Math.round(f.w / UNITS_PER_MM), hmm = Math.round(f.h / UNITS_PER_MM);
+      return f.screen ? `${wmm / g(wmm, hmm)}:${hmm / g(wmm, hmm)}` : `${wmm}×${hmm}mm`;
+    };
     pagePop.innerHTML = `
-      <div class="fmt-grid">${all
+      <div class="fmt-scroll">${groups
         .map(
-          (f, i) => `<button class="fmt" data-i="${i}">
-            <span class="fmt-label">${f.label}</span>
-            <span class="fmt-dims">${Math.round(f.w / UNITS_PER_MM)}×${Math.round(f.h / UNITS_PER_MM)}mm</span>
-          </button>`,
+          (grp) => `<div class="fmt-group-label">${grp.label}</div>
+          <div class="fmt-grid">${grp.items
+            .map(
+              (f) => `<button class="fmt" data-i="${idx++}">
+                <i class="fmt-thumb" style="aspect-ratio:${f.w}/${f.h}"></i>
+                <span class="fmt-label">${f.label}</span>
+                <span class="fmt-dims">${ratio(f)}</span>
+              </button>`,
+            )
+            .join('')}</div>`,
         )
         .join('')}</div>
       <div class="fmt-custom">

@@ -1157,18 +1157,36 @@ body.presenting .popover { display: none; }
 }
 
 #page-popover { display: block; max-width: 440px; }
+.fmt-scroll { max-height: 55vh; overflow-y: auto; padding-right: 2px; }
+.fmt-group-label {
+  font-size: 11px;
+  font-weight: 700;
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+  color: var(--ink-soft);
+  margin: 10px 0 6px;
+}
+.fmt-group-label:first-child { margin-top: 0; }
 .fmt-grid {
   display: grid;
   grid-template-columns: repeat(4, 1fr);
   gap: 6px;
-  max-height: 45vh;
-  overflow-y: auto;
+}
+.fmt-thumb {
+  display: block;
+  height: 26px;
+  max-width: 100%;
+  margin: 0 auto 4px;
+  border: 1.5px solid var(--ink);
+  border-radius: 1px;
+  background: rgba(255,255,255,0.6);
 }
 .fmt {
   display: flex;
   flex-direction: column;
   gap: 2px;
-  align-items: flex-start;
+  align-items: center;
+  text-align: center;
   border: 1.5px solid var(--line);
   background: transparent;
   border-radius: 2px;
