@@ -9,6 +9,7 @@ export interface StrokePoint {
   p: number; // pressure 0..1 (0.5 if the device reported none)
   t: number; // seconds since stroke start
   a?: number; // tilt 0..1 (0 = upright, 1 = flat on the glass); undefined = unknown
+  r?: number; // azimuth (lean direction) in radians, screen plane; undefined = unknown
 }
 
 export type ToolKind = 'pen' | 'pencil' | 'sketch' | 'fineliner' | 'marker';
