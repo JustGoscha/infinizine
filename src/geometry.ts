@@ -111,9 +111,9 @@ export const easeP = (t: number, tool: ToolKind = 'pen') => {
 
 /** Spatial Gaussian denoise along the polyline. `sigma` is in world units —
  * pass ~1.2 screen px worth (1.2 / zoom at drawing time) so quantisation
- * jitter from the digitiser is removed identically at every zoom level:
- * zoomed out, the screen-pixel steps are huge in world space and get
- * averaged away; zoomed in, sigma is tiny and the line is left untouched. */
+ * jitter from the digitiser is removed identically at every zoom level.
+ * The line is mirrored across both endpoints so the window stays symmetric
+ * all the way to the ends: no backward pull at the tip, endpoints exact. */
 export function denoise(points: StrokePoint[], sigma: number): StrokePoint[] {
   const n = points.length;
   if (n < 3 || sigma <= 0) return points;
@@ -121,23 +121,66 @@ export function denoise(points: StrokePoint[], sigma: number): StrokePoint[] {
   for (let i = 1; i < n; i++) {
     arc[i] = arc[i - 1] + Math.hypot(points[i].x - points[i - 1].x, points[i].y - points[i - 1].y);
   }
+  const last = n - 1;
+  const total = arc[last];
+  // mirrored access: j < 0 reflects around the start, j > last around the end
+  const px = (j: number) => (j < 0 ? 2 * points[0].x - points[-j].x : j > last ? 2 * points[last].x - points[2 * last - j].x : points[j].x);
+  const py = (j: number) => (j < 0 ? 2 * points[0].y - points[-j].y : j > last ? 2 * points[last].y - points[2 * last - j].y : points[j].y);
+  const pa = (j: number) => (j < 0 ? -arc[-j] : j > last ? 2 * total - arc[2 * last - j] : arc[j]);
   const reach = sigma * 3;
   const inv = 1 / (2 * sigma * sigma);
   const out: StrokePoint[] = new Array(n);
   out[0] = points[0];
-  out[n - 1] = points[n - 1];
+  out[last] = points[last];
   let lo = 0;
-  for (let i = 1; i < n - 1; i++) {
-    while (arc[i] - arc[lo] > reach) lo++;
+  for (let i = 1; i < last; i++) {
+    while (lo < i && arc[i] - arc[lo] > reach) lo++;
+    // near the start the window reaches into the mirrored region (j < 0)
+    let jStart = lo;
+    if (lo === 0 && arc[i] < reach) {
+      let m = 0;
+      while (m < last && arc[m + 1] <= reach - arc[i]) m++;
+      jStart = -m;
+    }
     let sx = 0, sy = 0, sw = 0;
-    for (let j = lo; j < n && arc[j] - arc[i] <= reach; j++) {
-      const d = arc[j] - arc[i];
+    for (let j = jStart; j <= 2 * last; j++) {
+      const d = pa(j) - arc[i];
+      if (d > reach) break;
       const w = Math.exp(-d * d * inv);
-      sx += points[j].x * w; sy += points[j].y * w; sw += w;
+      sx += px(j) * w; sy += py(j) * w; sw += w;
     }
     out[i] = { ...points[i], x: sx / sw, y: sy / sw };
   }
   return out;
+}
+
+/** Incremental denoise for the stroke being drawn: points further than the
+ * Gaussian reach behind the tip can never change again, so they're kept;
+ * each frame only the tail is recomputed. Same result as denoise() on commit. */
+export class LiveDenoiser {
+  private id = '';
+  private final: StrokePoint[] = [];
+  private arc: number[] = [];
+  update(id: string, points: StrokePoint[], sigma: number): StrokePoint[] {
+    const n = points.length;
+    if (id !== this.id || this.arc.length > n) { this.id = id; this.final = []; this.arc = []; }
+    if (n < 3 || sigma <= 0) return points;
+    for (let i = this.arc.length; i < n; i++) {
+      this.arc[i] = i ? this.arc[i - 1] + Math.hypot(points[i].x - points[i - 1].x, points[i].y - points[i - 1].y) : 0;
+    }
+    const arc = this.arc;
+    const reach = sigma * 3;
+    const f = this.final.length;
+    let s = f;
+    while (s > 0 && arc[f] - arc[s] < reach) s--;
+    const out = denoise(points.slice(s), sigma);
+    const result = f ? this.final.concat(out.slice(f - s)) : out;
+    // settle everything at least `reach` behind the tip (its window is complete)
+    let nf = f;
+    while (nf < n && arc[n - 1] - arc[nf] >= reach) nf++;
+    for (let i = f; i < nf; i++) this.final.push(result[i]);
+    return result;
+  }
 }
 
 const TOOL_OPTIONS = {

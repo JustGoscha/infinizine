@@ -2004,7 +2004,9 @@ export function buildUI(
       (row.querySelector('b') as HTMLElement).textContent = sl.fmt(k[sl.k]);
     }
     pg.querySelectorAll<HTMLElement>('.pg-tool').forEach((b) => b.classList.toggle('active', b.dataset.t === pgTool));
-    pg.querySelectorAll<HTMLElement>('.pg-size').forEach((b) => b.classList.toggle('active', Number(b.dataset.w) === rigState.baseWidth));
+    // mark the preset nearest to the rig's current size
+    const nearest = SIZES.reduce((a, b) => (Math.abs(b.w - rigState.baseWidth) < Math.abs(a.w - rigState.baseWidth) ? b : a)).w;
+    pg.querySelectorAll<HTMLElement>('.pg-size').forEach((b) => b.classList.toggle('active', Number(b.dataset.w) === nearest));
     const dirty = pgDirty();
     (pg.querySelector('#pg-save') as HTMLButtonElement).disabled = !dirty;
     (pg.querySelector('.pg-head span') as HTMLElement).textContent = dirty ? 'Pressure playground · unsaved' : 'Pressure playground';

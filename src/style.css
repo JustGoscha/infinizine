@@ -1307,7 +1307,8 @@ body.presenting .popover { display: none; }
 .pg-sizes { display: flex; align-items: center; gap: 2px; }
 .pg-size { width: 30px; height: 30px; border: 1.5px solid transparent; border-radius: 2px; background: transparent; display: grid; place-items: center; cursor: pointer; }
 .pg-size i { display: block; border-radius: 50%; background: var(--ink); }
-.pg-size.active { border-color: var(--ink); }
+.pg-size.active { border-color: var(--ink); background: var(--ink); }
+.pg-size.active i { background: var(--card); }
 .pg-side {
   width: 300px;
   flex: none;
