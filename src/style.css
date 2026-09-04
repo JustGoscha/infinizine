@@ -1308,5 +1308,7 @@ body.presenting .popover { display: none; }
 .pg-row[hidden] { display: none; }
 .pg-row b { font-weight: 600; color: var(--ink-soft); font-variant-numeric: tabular-nums; }
 .pg-row input { width: 100%; accent-color: var(--ink); margin: 0; }
-.pg-actions { display: flex; gap: 6px; }
+.pg-actions { display: flex; gap: 6px; flex-wrap: wrap; }
+.pg-actions .pg-primary { background: var(--ink); color: var(--card); }
+.pg-actions button:disabled { opacity: 0.4; cursor: default; }
 .pg-hint { margin: 0; color: var(--ink-soft); font-size: 11px; }

@@ -6,8 +6,12 @@ import { Camera, baseZoom, pxPerMm, setPxPerMm } from './camera';
 import { PALETTES, getPalette, shades } from './palettes';
 import { UNITS_PER_MM, uid } from './types';
 import { layoutText, layoutHeight, FONTS } from './text';
-import { pressure, savePressure, resetPressure, easeP } from './geometry';
+import { pressure, savePressure, resetPressure, loadPressure, easeP } from './geometry';
 import { markdownToHtml, htmlToMarkdown, autoTransform, caretToEnd } from './richedit';
+
+function toast(msg: string) {
+  window.dispatchEvent(new CustomEvent('izine-toast', { detail: msg }));
+}
 
 const svg = (inner: string) =>
   `<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round">${inner}</svg>`;
@@ -1922,13 +1926,16 @@ export function buildUI(
     <canvas class="pg-curve" id="pg-curve" width="272" height="150"></canvas>
     ${SLIDERS.map((sl) => `<label class="pg-row" data-k="${sl.k}"><span>${sl.label}</span><input type="range" data-k="${sl.k}" min="${sl.min}" max="${sl.max}" step="${sl.step}"><b></b></label>`).join('')}
     <div class="pg-actions">
+      <button id="pg-save" class="pg-primary">Save</button>
+      <button id="pg-reset">Reset to default</button>
       <button id="pg-clear">Clear test strokes</button>
-      <button id="pg-reset">Reset this tool</button>
     </div>
-    <p class="pg-hint">Settings are per tool and saved. Draw on the canvas while this is open; curve and width changes re-render every existing stroke, smoothing applies to new ones.</p>
+    <p class="pg-hint">Per tool. Edits preview live but are only kept when you Save; closing the panel reverts unsaved changes. Curve and width changes re-render every existing stroke, smoothing applies to new ones.</p>
   `;
   document.body.appendChild(pg);
   let pgBaseline = new Set<string>();
+  let pgSaved = structuredClone(pressure); // what's on disk; unsaved edits revert to this on close
+  const pgDirty = () => JSON.stringify(pgSaved) !== JSON.stringify(pressure);
   const pgCurve = pg.querySelector('#pg-curve') as HTMLCanvasElement;
   function drawCurve() {
     const c = pgCurve.getContext('2d')!;
@@ -1976,13 +1983,21 @@ export function buildUI(
       (row.querySelector('b') as HTMLElement).textContent = sl.fmt(k[sl.k]);
     }
     pg.querySelectorAll<HTMLElement>('.pg-tool').forEach((b) => b.classList.toggle('active', b.dataset.t === pgTool));
+    const dirty = pgDirty();
+    (pg.querySelector('#pg-save') as HTMLButtonElement).disabled = !dirty;
+    (pg.querySelector('.pg-head span') as HTMLElement).textContent = dirty ? 'Pressure playground · unsaved' : 'Pressure playground';
     drawCurve();
   }
   const restyle = () => {
-    savePressure();
     syncPg();
     window.dispatchEvent(new Event('izine-restyle'));
   };
+  (pg.querySelector('#pg-save') as HTMLButtonElement).addEventListener('click', () => {
+    savePressure();
+    pgSaved = structuredClone(pressure);
+    syncPg();
+    toast('Pressure settings saved');
+  });
   pg.querySelectorAll<HTMLInputElement>('.pg-row input').forEach((inp) =>
     inp.addEventListener('input', () => {
       pressure[pgTool][inp.dataset.k as keyof typeof pressure.pen] = Number(inp.value);
@@ -2008,10 +2023,16 @@ export function buildUI(
   });
   const pgBtn = root.querySelector('#playground') as HTMLButtonElement;
   const togglePg = (open: boolean) => {
+    if (!open && pgDirty()) {
+      loadPressure(pgSaved); // unsaved edits are dropped
+      window.dispatchEvent(new Event('izine-restyle'));
+      toast('Unsaved pressure changes reverted');
+    }
     pg.classList.toggle('hidden', !open);
     pgBtn.classList.toggle('on', open);
     if (open) {
       pgBaseline = new Set(store.doc.elements.map((el) => el.id));
+      pgSaved = structuredClone(pressure);
       if (isPTool(state.tool)) pgTool = state.tool;
       syncPg();
     }

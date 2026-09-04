@@ -93,10 +93,14 @@ export const pressure: PressureParams = (() => {
 export function savePressure() {
   try { localStorage.setItem(PRESSURE_KEY, JSON.stringify(pressure)); } catch { /* ignore */ }
 }
+/** Back to defaults in memory only — the playground's Save persists it. */
 export function resetPressure(tool?: ToolKind) {
   const tools = tool ? [tool] : (Object.keys(pressure) as ToolKind[]);
   for (const t of tools) Object.assign(pressure[t], structuredClone(DEFAULT_PRESSURE[t]));
-  savePressure();
+}
+/** Replace the in-memory params wholesale (used to revert unsaved edits). */
+export function loadPressure(from: PressureParams) {
+  for (const t of Object.keys(pressure) as ToolKind[]) Object.assign(pressure[t], from[t]);
 }
 
 export const easeP = (t: number, tool: ToolKind = 'pen') => {
