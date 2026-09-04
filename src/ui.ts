@@ -1,6 +1,8 @@
 // Toolbar, palette popover, page menu. Plain DOM, stationery-shop styling in style.css.
 
-import { InputState, Tool, CLIP_PENDING_KEY, FINGER_KEY, writePref } from './input';
+import { InputState, Tool, CLIP_PENDING_KEY, FINGER_KEY, writePref, attachInput, setModalOpen } from './input';
+import { Renderer } from './render';
+import { baseZoom as baseZoomFn } from './camera';
 import { Store } from './store';
 import { Camera, baseZoom, pxPerMm, setPxPerMm } from './camera';
 import { PALETTES, getPalette, shades } from './palettes';
@@ -1902,16 +1904,16 @@ export function buildUI(
     selMenu.classList.toggle('hidden', !(hasSel || hasArea || hasClip));
   }, 300);
 
-  // ---------- pressure playground: draw on the canvas, tune each tool's curves live ----------
+  // ---------- pressure playground: a modal with its own scratch canvas ----------
   const pg = document.createElement('div');
-  pg.className = 'playground hidden';
+  pg.className = 'pg-modal hidden';
   type PTool = 'pen' | 'pencil' | 'sketch' | 'fineliner' | 'marker';
   const PG_TOOLS: { t: PTool; label: string }[] = [
     { t: 'pen', label: 'Pen' }, { t: 'pencil', label: 'Pencil' },
     { t: 'fineliner', label: 'Fineliner' }, { t: 'marker', label: 'Marker' },
   ];
   const isPTool = (t: Tool): t is PTool => PG_TOOLS.some((o) => o.t === t);
-  let pgTool: PTool = isPTool(state.tool) && state.tool !== 'sketch' ? state.tool : 'pen';
+  let pgTool: PTool = isPTool(state.tool) ? state.tool : 'pen';
   const SLIDERS: { k: keyof typeof pressure.pen; label: string; min: number; max: number; step: number; fmt: (v: number) => string; markerToo?: boolean }[] = [
     { k: 'soft', label: 'soft start', min: 0.5, max: 3, step: 0.05, fmt: (v) => v.toFixed(2) },
     { k: 'sat', label: 'saturation', min: 1, max: 6, step: 0.1, fmt: (v) => v.toFixed(1) },
@@ -1921,19 +1923,39 @@ export function buildUI(
     { k: 'max', label: 'max width', min: 0.5, max: 3, step: 0.05, fmt: (v) => `${v.toFixed(2)}×`, markerToo: true },
   ];
   pg.innerHTML = `
-    <div class="pg-head"><span>Pressure playground</span><button class="pg-x" id="pg-close">×</button></div>
-    <div class="pg-tools">${PG_TOOLS.map((o) => `<button class="pg-tool" data-t="${o.t}">${o.label}</button>`).join('')}</div>
-    <canvas class="pg-curve" id="pg-curve" width="272" height="150"></canvas>
-    ${SLIDERS.map((sl) => `<label class="pg-row" data-k="${sl.k}"><span>${sl.label}</span><input type="range" data-k="${sl.k}" min="${sl.min}" max="${sl.max}" step="${sl.step}"><b></b></label>`).join('')}
-    <div class="pg-actions">
-      <button id="pg-save" class="pg-primary">Save</button>
-      <button id="pg-reset">Reset to default</button>
-      <button id="pg-clear">Clear test strokes</button>
+    <div class="pg-stage"><canvas id="pg-canvas"></canvas>
+      <div class="pg-stage-bar">
+        <div class="pg-sizes">${SIZES.map((sz) => `<button class="pg-size" data-w="${sz.w}" title="${sz.label}"><i style="width:${3 + sz.w * 3}px;height:${3 + sz.w * 3}px"></i></button>`).join('')}</div>
+        <button id="pg-clear">Clear</button>
+      </div>
     </div>
-    <p class="pg-hint">Per tool. Edits preview live but are only kept when you Save; closing the panel reverts unsaved changes. Curve and width changes re-render every existing stroke, smoothing applies to new ones.</p>
+    <div class="pg-side">
+      <div class="pg-head"><span>Pressure playground</span><button class="pg-x" id="pg-close">×</button></div>
+      <div class="pg-tools">${PG_TOOLS.map((o) => `<button class="pg-tool" data-t="${o.t}">${ICONS[o.t]}<span>${o.label}</span></button>`).join('')}</div>
+      <canvas class="pg-curve" id="pg-curve" width="272" height="150"></canvas>
+      ${SLIDERS.map((sl) => `<label class="pg-row" data-k="${sl.k}"><span>${sl.label}</span><input type="range" data-k="${sl.k}" min="${sl.min}" max="${sl.max}" step="${sl.step}"><b></b></label>`).join('')}
+      <div class="pg-actions">
+        <button id="pg-save" class="pg-primary">Save</button>
+        <button id="pg-reset">Reset to default</button>
+      </div>
+      <p class="pg-hint">Per tool. Edits preview live on the scratch canvas (and your zine) but are only kept when you Save; closing reverts unsaved changes.</p>
+    </div>
   `;
   document.body.appendChild(pg);
-  let pgBaseline = new Set<string>();
+
+  // the scratch rig: its own store (never persisted), camera, input state, renderer
+  const rigCanvas = pg.querySelector('#pg-canvas') as HTMLCanvasElement;
+  const rigStore = new Store({ ephemeral: true });
+  const rigCamera = new Camera();
+  const rigState = new InputState();
+  rigState.zoomLocked = true;
+  const rigRenderer = new Renderer(rigCanvas, rigStore, rigCamera, rigState);
+  const rigInput = attachInput(rigCanvas, rigCamera, rigStore, rigState, () => rigRenderer.invalidate(), 'modal');
+  rigInput.setDropCache((id) => rigRenderer.dropFromCache(id));
+  rigStore.onChange = () => { rigRenderer.clearCache(); rigRenderer.invalidate(); };
+  rigState.updateCursor = () => { rigCanvas.style.cursor = cursorFor(rigState.tool, rigCamera.zoom, rigState.effectiveWidth(rigCamera.zoom)); };
+  window.addEventListener('izine-restyle', () => { rigRenderer.clearCache(); rigRenderer.invalidate(); });
+
   let pgSaved = structuredClone(pressure); // what's on disk; unsaved edits revert to this on close
   const pgDirty = () => JSON.stringify(pgSaved) !== JSON.stringify(pressure);
   const pgCurve = pg.querySelector('#pg-curve') as HTMLCanvasElement;
@@ -1948,7 +1970,6 @@ export function buildUI(
       c.beginPath(); c.moveTo(x, pad); c.lineTo(x, H - pad); c.stroke();
       c.beginPath(); c.moveTo(pad, y); c.lineTo(W - pad, y); c.stroke();
     }
-    // width band: how thick the line actually gets (min..max) over pressure
     const k = pressure[pgTool];
     c.fillStyle = 'rgba(42,36,26,0.08)';
     c.beginPath();
@@ -1983,6 +2004,7 @@ export function buildUI(
       (row.querySelector('b') as HTMLElement).textContent = sl.fmt(k[sl.k]);
     }
     pg.querySelectorAll<HTMLElement>('.pg-tool').forEach((b) => b.classList.toggle('active', b.dataset.t === pgTool));
+    pg.querySelectorAll<HTMLElement>('.pg-size').forEach((b) => b.classList.toggle('active', Number(b.dataset.w) === rigState.baseWidth));
     const dirty = pgDirty();
     (pg.querySelector('#pg-save') as HTMLButtonElement).disabled = !dirty;
     (pg.querySelector('.pg-head span') as HTMLElement).textContent = dirty ? 'Pressure playground · unsaved' : 'Pressure playground';
@@ -2007,15 +2029,22 @@ export function buildUI(
   pg.querySelectorAll<HTMLElement>('.pg-tool').forEach((b) =>
     b.addEventListener('click', () => {
       pgTool = b.dataset.t as PTool;
-      state.tool = pgTool;
-      state.lastDrawTool = state.tool;
-      state.onToolChange();
+      rigState.tool = pgTool;
+      rigState.lastDrawTool = pgTool;
+      rigState.updateCursor();
+      syncPg();
+    }),
+  );
+  pg.querySelectorAll<HTMLElement>('.pg-size').forEach((b) =>
+    b.addEventListener('click', () => {
+      rigState.baseWidth = Number(b.dataset.w);
+      rigState.updateCursor();
       syncPg();
     }),
   );
   (pg.querySelector('#pg-clear') as HTMLButtonElement).addEventListener('click', () => {
-    const test = store.doc.elements.filter((el) => !pgBaseline.has(el.id));
-    if (test.length) { state.selection.clear(); store.deleteElements(test); invalidate(); }
+    rigState.selection.clear();
+    rigStore.deleteElements([...rigStore.doc.elements]);
   });
   (pg.querySelector('#pg-reset') as HTMLButtonElement).addEventListener('click', () => {
     resetPressure(pgTool);
@@ -2030,23 +2059,33 @@ export function buildUI(
     }
     pg.classList.toggle('hidden', !open);
     pgBtn.classList.toggle('on', open);
+    setModalOpen(open);
     if (open) {
-      pgBaseline = new Set(store.doc.elements.map((el) => el.id));
       pgSaved = structuredClone(pressure);
       if (isPTool(state.tool)) pgTool = state.tool;
+      rigState.tool = pgTool;
+      rigState.lastDrawTool = pgTool;
+      rigState.color = state.color;
+      rigState.baseWidth = state.baseWidth;
+      rigState.adaptiveSize = state.adaptiveSize;
+      rigStore.doc.paper = store.doc.paper;
+      rigStore.doc.pattern = store.doc.pattern;
+      rigStore.doc.palette = store.doc.palette;
+      rigCamera.zoom = baseZoomFn();
+      rigCamera.x = 0; rigCamera.y = 0;
+      rigState.updateCursor();
+      rigRenderer.clearCache();
+      requestAnimationFrame(() => rigRenderer.invalidate());
       syncPg();
     }
   };
   pgBtn.addEventListener('click', () => togglePg(pg.classList.contains('hidden')));
   (pg.querySelector('#pg-close') as HTMLButtonElement).addEventListener('click', () => togglePg(false));
+  window.addEventListener('keydown', (e) => {
+    if (e.key === 'Escape' && !pg.classList.contains('hidden')) togglePg(false);
+  });
 
-  state.onToolChange = () => {
-    refresh();
-    if (!pg.classList.contains('hidden')) {
-      if (isPTool(state.tool)) pgTool = state.tool; // toolbar picks follow into the playground
-      syncPg();
-    }
-  };
+  state.onToolChange = refresh;
   buildPalRow();
 
   // keeps the timeline in sync after undo/redo or external changes

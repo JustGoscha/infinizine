@@ -72,7 +72,15 @@ export class Store {
   private saveTimer: number | undefined;
   onChange: () => void = () => {};
 
-  constructor() {
+  private ephemeral = false; // scratch store (pressure playground): never touches localStorage
+
+  constructor(opts?: { ephemeral?: boolean }) {
+    if (opts?.ephemeral) {
+      this.ephemeral = true;
+      this.docId = uid('scratch');
+      this.doc = emptyDoc();
+      return;
+    }
     this.migrateLegacy();
     const current = localStorage.getItem(CURRENT_KEY) ?? this.listDocs()[0]?.id;
     const loaded = current ? this.loadDoc(current) : null;
@@ -115,6 +123,7 @@ export class Store {
   }
 
   private saveNow() {
+    if (this.ephemeral) return;
     try {
       localStorage.setItem(DOC_PREFIX + this.docId, JSON.stringify(this.doc));
       const rest = this.listDocs().filter((m) => m.id !== this.docId);
@@ -125,6 +134,7 @@ export class Store {
   }
 
   private scheduleSave() {
+    if (this.ephemeral) return;
     clearTimeout(this.saveTimer);
     this.saveTimer = window.setTimeout(() => this.saveNow(), 400);
   }

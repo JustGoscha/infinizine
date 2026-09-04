@@ -1267,31 +1267,68 @@ body.presenting .popover { display: none; }
 }
 .page-format:active { background: var(--ink); color: var(--card); }
 
-/* ---------- pressure playground ---------- */
-.playground {
+/* ---------- pressure playground (modal with its own scratch canvas) ---------- */
+.pg-modal {
   position: fixed;
-  top: max(60px, calc(env(safe-area-inset-top) + 52px));
-  right: 16px;
+  inset: 0;
+  z-index: 40;
+  display: flex;
+  background: rgba(42, 36, 26, 0.35);
+  padding: max(16px, env(safe-area-inset-top)) 16px 16px;
+  gap: 12px;
+  font-size: 12px;
+  color: var(--ink);
+}
+.pg-modal.hidden { display: none; }
+.pg-stage {
+  position: relative;
+  flex: 1;
+  min-width: 0;
+  border: var(--panel-border);
+  border-radius: 4px;
+  box-shadow: var(--shadow);
+  overflow: hidden;
+  background: #FAF7EF;
+}
+.pg-stage canvas { position: absolute; inset: 0; width: 100%; height: 100%; touch-action: none; }
+.pg-stage-bar {
+  position: absolute;
+  left: 10px;
+  bottom: 10px;
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  background: var(--panel);
+  border: var(--panel-border);
+  border-radius: 4px;
+  box-shadow: var(--shadow);
+  padding: 6px 8px;
+}
+.pg-sizes { display: flex; align-items: center; gap: 2px; }
+.pg-size { width: 30px; height: 30px; border: 1.5px solid transparent; border-radius: 2px; background: transparent; display: grid; place-items: center; cursor: pointer; }
+.pg-size i { display: block; border-radius: 50%; background: var(--ink); }
+.pg-size.active { border-color: var(--ink); }
+.pg-side {
   width: 300px;
-  max-height: calc(100vh - 180px);
+  flex: none;
+  max-height: 100%;
   overflow-y: auto;
   background: var(--panel);
   border: var(--panel-border);
   border-radius: 4px;
   box-shadow: var(--shadow);
   padding: 12px 14px;
-  z-index: 21;
-  font-size: 12px;
-  color: var(--ink);
   display: flex;
   flex-direction: column;
   gap: 8px;
 }
-.playground.hidden { display: none; }
 .pg-head { display: flex; justify-content: space-between; align-items: center; font-weight: 700; font-size: 13px; }
 .pg-x { border: none; background: transparent; font: inherit; font-size: 18px; cursor: pointer; color: var(--ink); line-height: 1; }
 .pg-tools { display: flex; gap: 4px; flex-wrap: wrap; }
-.pg-tool, .pg-actions button {
+.pg-tool, .pg-actions button, .pg-stage-bar button {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
   border: 1.5px solid var(--ink);
   background: transparent;
   color: var(--ink);
@@ -1302,6 +1339,7 @@ body.presenting .popover { display: none; }
   font-weight: 600;
   cursor: pointer;
 }
+.pg-tool svg { width: 16px; height: 16px; }
 .pg-tool.active { background: var(--ink); color: var(--card); }
 .pg-curve { width: 100%; height: auto; border: 1.5px solid var(--line); border-radius: 2px; background: rgba(255,255,255,0.5); }
 .pg-row { display: grid; grid-template-columns: 74px 1fr 44px; align-items: center; gap: 6px; }
@@ -1312,3 +1350,7 @@ body.presenting .popover { display: none; }
 .pg-actions .pg-primary { background: var(--ink); color: var(--card); }
 .pg-actions button:disabled { opacity: 0.4; cursor: default; }
 .pg-hint { margin: 0; color: var(--ink-soft); font-size: 11px; }
+@media (max-width: 700px) {
+  .pg-modal { flex-direction: column; }
+  .pg-side { width: auto; max-height: 45%; }
+}

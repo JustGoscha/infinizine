@@ -145,13 +145,20 @@ export class InputState {
 
 interface TouchInfo { x: number; y: number }
 
+// A modal drawing surface (pressure playground) owns the keyboard/wheel while
+// it's open; the main canvas' global handlers stand down.
+let modalOpen = false;
+export function setModalOpen(v: boolean) { modalOpen = v; }
+
 export function attachInput(
   canvas: HTMLCanvasElement,
   camera: Camera,
   store: Store,
   state: InputState,
   invalidate: () => void,
+  scope: 'main' | 'modal' = 'main',
 ) {
+  const inScope = () => (scope === 'modal') === modalOpen;
   const touches = new Map<number, TouchInfo>();
   // multi-finger gestures: 2-finger tap = undo, 3-finger tap = redo,
   // 2-finger hold (no motion) then horizontal swipe = scrub through history
@@ -1601,6 +1608,7 @@ export function attachInput(
   // Document-level: pinch/ctrl-wheel over UI elements must zoom the canvas,
   // never the browser page. Plain scrolling over UI (e.g. palette list) stays native.
   document.addEventListener('wheel', (e) => {
+    if (!inScope()) return;
     const zooming = e.ctrlKey || e.metaKey;
     if (e.target !== canvas && !zooming) return;
     e.preventDefault();
@@ -1618,11 +1626,14 @@ export function attachInput(
 
   // Safari page pinch-zoom (gesture events) — block it everywhere; canvas pinch
   // is handled through pointer events.
-  for (const t of ['gesturestart', 'gesturechange', 'gestureend']) {
-    document.addEventListener(t, (e) => e.preventDefault());
+  if (scope === 'main') {
+    for (const t of ['gesturestart', 'gesturechange', 'gestureend']) {
+      document.addEventListener(t, (e) => e.preventDefault());
+    }
   }
 
   window.addEventListener('keydown', (e) => {
+    if (!inScope()) return;
     const tag = (e.target as HTMLElement).tagName;
     if (tag === 'INPUT' || tag === 'TEXTAREA' || (e.target as HTMLElement).isContentEditable) return;
     if (e.key === 'Escape' && !state.presenting && state.selection.size) {
