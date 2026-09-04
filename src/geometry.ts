@@ -132,6 +132,7 @@ export interface ToolPressure {
   max: number; // max width as × baseWidth
   tilt: number; // pencil: how much a flat Pencil widens a light stroke (1 = ignore tilt, 3 = up to 3×)
   tiltCurve: Curve; // tilt (0 upright … 1 flat) → tilt effect 0..1
+  nib: number; // marker: broad-nib angle in degrees (0 = horizontal edge)
 }
 export type PressureParams = Record<ToolKind, ToolPressure>;
 const base = {
@@ -141,6 +142,7 @@ const base = {
   tilt: 1,
   // flat-ish angles count, near-upright barely: eases in, then ramps
   tiltCurve: curveFromHandles([0.6, 0.05, 0.7, 1]),
+  nib: 45,
 };
 const fresh = () => structuredClone(base);
 export const DEFAULT_PRESSURE: PressureParams = {
@@ -590,6 +592,53 @@ export function strokeOutline(stroke: Stroke, detail = 1, live = false): number[
   if (live) o.end = { cap: true, taper: 0 };
   opts.simulatePressure = true;
   return getStroke(pts, opts);
+}
+
+/** Broad-nib marker: a flat nib of fixed angle swept along the path. Width
+ * follows travel direction (full across the nib, a hairline along it) and
+ * direction changes leave hard edges. Returns the fill as one Path2D of
+ * consistently-oriented per-segment quads (nonzero → clean union even where
+ * the sweep folds) plus a hull outline for selection highlights. */
+export function markerPaths(points: StrokePoint[], baseWidth: number, detail: number): { fill: Path2D; hull: Path2D } {
+  const w = widthAt('marker', baseWidth, 0.5);
+  const ang = (pressure.marker.nib * Math.PI) / 180;
+  const nx = (Math.cos(ang) * w) / 2, ny = (Math.sin(ang) * w) / 2; // half nib vector
+  const th = Math.max(w * 0.08, 0.3 / detail) / 2; // nib thickness (so along-nib strokes still mark)
+  const px = -Math.sin(ang) * th, py = Math.cos(ang) * th;
+  const raw = points.length > 2 ? densify(points, 2.2 / detail) : points;
+  const pts: StrokePoint[] = [raw[0]];
+  for (let i = 1; i < raw.length; i++) {
+    const a = pts[pts.length - 1], b = raw[i];
+    if ((b.x - a.x) ** 2 + (b.y - a.y) ** 2 > 1e-6) pts.push(b);
+  }
+  const fill = new Path2D();
+  const quad = (a: number[], b: number[], c: number[], d: number[]) => {
+    // orient every quad the same way so overlaps add up instead of cancelling
+    const area = (b[0] - a[0]) * (c[1] - a[1]) - (c[0] - a[0]) * (b[1] - a[1]) +
+      (c[0] - a[0]) * (d[1] - a[1]) - (d[0] - a[0]) * (c[1] - a[1]);
+    const q = area >= 0 ? [a, b, c, d] : [d, c, b, a];
+    fill.moveTo(q[0][0], q[0][1]);
+    for (let k = 1; k < 4; k++) fill.lineTo(q[k][0], q[k][1]);
+    fill.closePath();
+  };
+  // the nib footprint itself: a thin rotated rectangle at each sample (dots, hairlines)
+  const foot = (p: StrokePoint) =>
+    quad([p.x + nx + px, p.y + ny + py], [p.x - nx + px, p.y - ny + py], [p.x - nx - px, p.y - ny - py], [p.x + nx - px, p.y + ny - py]);
+  foot(pts[0]);
+  for (let i = 1; i < pts.length; i++) {
+    const a = pts[i - 1], b = pts[i];
+    quad([a.x + nx, a.y + ny], [b.x + nx, b.y + ny], [b.x - nx, b.y - ny], [a.x - nx, a.y - ny]);
+    // thickness sweep so a move exactly along the nib still leaves a hairline
+    quad([a.x + px, a.y + py], [b.x + px, b.y + py], [b.x - px, b.y - py], [a.x - px, a.y - py]);
+  }
+  foot(pts[pts.length - 1]);
+  // hull: nib ends along the path (may self-cross; only stroked, never filled)
+  const hull = new Path2D();
+  hull.moveTo(pts[0].x + nx, pts[0].y + ny);
+  for (let i = 1; i < pts.length; i++) hull.lineTo(pts[i].x + nx, pts[i].y + ny);
+  for (let i = pts.length - 1; i >= 0; i--) hull.lineTo(pts[i].x - nx, pts[i].y - ny);
+  hull.closePath();
+  return { fill, hull };
 }
 
 export function outlineToPath(outline: number[][]): Path2D {

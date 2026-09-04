@@ -3,7 +3,7 @@
 
 import { Camera, baseZoom } from './camera';
 import { Element, FillShape, Page, Stroke, StrokePoint } from './types';
-import { strokeOutline, pencilOutlines, outlineToPath, elementBBox, bboxIntersects, densify, filterPressure, easeP, easeTilt, LiveDenoiser, pressure, BBox } from './geometry';
+import { strokeOutline, pencilOutlines, markerPaths, outlineToPath, elementBBox, bboxIntersects, densify, filterPressure, easeP, easeTilt, LiveDenoiser, pressure, BBox } from './geometry';
 import { layoutText, fontFor, segWidth, LINE_HEIGHT } from './text';
 import { moveHandleRect, moveAllHandleRect, deleteHandleRect, eyeHandleRect, type InputState } from './input';
 import { Store } from './store';
@@ -76,11 +76,14 @@ export class Renderer {
     const detail = this.detail();
     let e = this.cache.get(el.id);
     if (!e || e.detail !== detail) {
-      const path =
-        el.kind === 'stroke'
-          ? outlineToPath(strokeOutline(el, detail))
-          : polygonPath(el.points);
-      e = { path, bbox: elementBBox(el), detail };
+      let path: Path2D, core: Path2D | undefined;
+      if (el.kind === 'stroke' && el.tool === 'marker') {
+        const mp = markerPaths(el.points, el.baseWidth, detail);
+        path = mp.fill; core = mp.hull;
+      } else {
+        path = el.kind === 'stroke' ? outlineToPath(strokeOutline(el, detail)) : polygonPath(el.points);
+      }
+      e = { path, bbox: elementBBox(el), detail, core };
       if (el.kind === 'stroke' && el.tool === 'sketch') {
         e.passes = pencilOutlines(el, detail).map(outlineToPath);
       }
@@ -452,7 +455,7 @@ export class Renderer {
         ctx.globalAlpha = 0.9;
         ctx.strokeStyle = '#E8590C';
         ctx.lineWidth = 1.5 / z;
-        ctx.stroke(e.path);
+        ctx.stroke(e.core ?? e.path);
       }
     };
     const drawLive = () => {
@@ -489,7 +492,8 @@ export class Renderer {
       }
       ctx.globalAlpha = live.opacity;
       ctx.fillStyle = this.inkStyle(live, z);
-      ctx.fill(outlineToPath(strokeOutline(shown, this.detail(), true)));
+      if (live.tool === 'marker') ctx.fill(markerPaths(shown.points, live.baseWidth, this.detail()).fill);
+      else ctx.fill(outlineToPath(strokeOutline(shown, this.detail(), true)));
     };
     // Animation: each layer runs its own timeline. Deselected areas always play;
     // in the edited area, the active layer holds on the active frame and the other
@@ -617,7 +621,8 @@ export class Renderer {
       }
       ctx.globalAlpha = el.opacity * dimFactor;
       ctx.fillStyle = this.inkStyle(el, z);
-      ctx.fill(outlineToPath(strokeOutline({ ...el, points: pts }, this.detail())));
+      if (el.tool === 'marker') ctx.fill(markerPaths(pts, el.baseWidth, this.detail()).fill);
+      else ctx.fill(outlineToPath(strokeOutline({ ...el, points: pts }, this.detail())));
       ctx.globalAlpha = 1;
     };
 
@@ -712,7 +717,8 @@ export class Renderer {
                 ctx.globalAlpha = blinkPulse;
                 ctx.strokeStyle = '#E8590C';
                 ctx.lineWidth = 5 / z;
-                ctx.stroke(this.entry(el).path);
+                const en = this.entry(el);
+                ctx.stroke(en.core ?? en.path);
                 ctx.restore();
               }
             }
