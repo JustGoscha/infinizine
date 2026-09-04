@@ -10,7 +10,7 @@
   --accent: #e8590c;
   --line: rgba(90, 75, 50, 0.18);
   /* comic-brutalist chrome: hard ink borders, hard offset shadows, glassy panels */
-  --panel: rgba(253, 252, 248, 0.9);
+  --panel: rgba(253, 252, 248, 0.82);
   --panel-border: 2px solid #2a241a;
   --shadow: 3px 3px 0 rgba(42, 36, 26, 0.25);
 }
@@ -1474,3 +1474,10 @@ body.presenting .popover { display: none; }
 }
 .crash-actions .crash-primary { background: var(--ink); color: var(--card); }
 .crash-hint { font-size: 12px; color: var(--ink-soft); }
+
+/* ---------- frosted panels: slight blur of whatever sits behind the UI ---------- */
+.toolbar, .popover, .timeline, .sel-menu, .page-menu, .toast, .chip, .tool-flyout,
+.pg-side, .pg-curve-wrap, .pg-stage-bar, .pg-close-big, .crash-box, .cal-card, .text-bar, .docs-pop {
+  -webkit-backdrop-filter: blur(10px) saturate(1.1);
+  backdrop-filter: blur(10px) saturate(1.1);
+}
