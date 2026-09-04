@@ -31,6 +31,7 @@ type Op =
   | { type: 'move-frame'; areaId: string; layerId: string; from: number; to: number }
   | { type: 'recolor-elements'; items: { id: string; before: string; after: string }[] }
   | { type: 'retime-strokes'; items: { id: string; before: number; after: number }[] }
+  | { type: 'z-order'; prevOrder: string[]; nextOrder: string[] }
   | { type: 'frame-duration'; areaId: string; layerId: string; frameId: string; before: number; after: number }
   | { type: 'area-settings'; areaId: string; before: { fps: number; loop: boolean; clip: boolean }; after: { fps: number; loop: boolean; clip: boolean } }
   | { type: 'rename-area'; areaId: string; before: string; after: string }
@@ -341,6 +342,16 @@ export class Store {
         }
         break;
       }
+      case 'z-order': {
+        const byId = new Map(d.elements.map((e) => [e.id, e]));
+        const next: Element[] = [];
+        for (const id of op.nextOrder) {
+          const el = byId.get(id);
+          if (el) next.push(el);
+        }
+        if (next.length === d.elements.length) d.elements = next;
+        break;
+      }
       case 'retime-strokes': {
         for (const it of op.items) {
           const el = d.elements.find((e) => e.id === it.id);
@@ -407,6 +418,7 @@ export class Store {
         return { ...op, items: op.items.map((it) => ({ ...it, before: it.after, after: it.before })) };
       case 'retime-strokes':
         return { ...op, items: op.items.map((it) => ({ ...it, before: it.after, after: it.before })) };
+      case 'z-order': return { ...op, prevOrder: op.nextOrder, nextOrder: op.prevOrder };
       case 'frame-duration': return { ...op, before: op.after, after: op.before };
       case 'area-settings': return { ...op, before: op.after, after: op.before };
       case 'rename-area': return { ...op, before: op.after, after: op.before };
@@ -806,6 +818,17 @@ export class Store {
     l.hidden = hidden;
     this.scheduleSave();
     this.onChange();
+  }
+
+  /** Move the selected elements to the bottom (or top) of the paint order. */
+  reorder(ids: string[], to: 'back' | 'front') {
+    const idSet = new Set(ids);
+    const prevOrder = this.doc.elements.map((e) => e.id);
+    const moved = prevOrder.filter((id) => idSet.has(id));
+    const rest = prevOrder.filter((id) => !idSet.has(id));
+    const nextOrder = to === 'back' ? [...moved, ...rest] : [...rest, ...moved];
+    if (nextOrder.join() === prevOrder.join()) return;
+    this.commit({ type: 'z-order', prevOrder, nextOrder });
   }
 
   recolorElements(ids: string[], after: string) {
