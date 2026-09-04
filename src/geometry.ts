@@ -547,10 +547,12 @@ export function pressureOutline(
     for (let k = 1; k < side.length; k++) {
       const p = side[k];
       if (!p.fan && k < side.length - 1) {
-        // moving against the stroke direction (its own, or the last kept point's)
-        // = inside a cusp → skip
+        // inside a cusp: the step from the last kept point doesn't advance along
+        // this point's own direction (needs > ~70° alignment). Judged only
+        // against the point's own tangent so the chain recovers right after a
+        // hairpin instead of skipping to the end of the stroke.
         const dx = p.x - last.x, dy = p.y - last.y;
-        if (dx * p.tx + dy * p.ty < 0 || dx * last.tx + dy * last.ty < 0) continue;
+        if (dx * p.tx + dy * p.ty < 0.3 * Math.hypot(dx, dy)) continue;
       }
       out.push([p.x, p.y]);
       last = p;
