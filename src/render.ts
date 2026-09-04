@@ -150,8 +150,18 @@ export class Renderer {
 
   private stampStroke(target: CanvasRenderingContext2D, el: Stroke, alphaScale = 1, fromIndex = 0): number {
     const nib = this.nibs(el.color);
-    // same fast-ramping pressure response as the vector tools
-    const pts = densify(filterPressure(el.points)).map((p) => ({ ...p, p: easeP(p.p) }));
+    // same fast-ramping pressure response as the vector tools; pressure is
+    // additionally smoothed along the line so stamp density doesn't flicker
+    // with the Pencil's sample-to-sample pressure noise
+    const raw = densify(filterPressure(el.points));
+    const pts = raw.map((pt, i) => {
+      let sum = 0, cnt = 0;
+      for (let k = -4; k <= 4; k++) {
+        const j = i + k;
+        if (j >= 0 && j < raw.length) { sum += raw[j].p; cnt++; }
+      }
+      return { ...pt, p: easeP(sum / cnt) };
+    });
     const wBase = el.baseWidth;
     // deterministic per-stamp randomness: variant, rotation, jitter — kills the
     // repeated-texture chain look of reusing one tile in one orientation
@@ -190,10 +200,10 @@ export class Renderer {
     }
     for (let i = fromIndex; i < stamps.length; i++) {
       const st = stamps[i];
-      const r = wBase * (0.6 + st.p * 0.2) * (0.96 + rnd(i, 3) * 0.08);
-      const jx = (rnd(i, 1) - 0.5) * r * 0.16;
-      const jy = (rnd(i, 2) - 0.5) * r * 0.16;
-      target.globalAlpha = alphaScale * (0.07 + st.p * 0.4) * (0.85 + rnd(i, 4) * 0.3);
+      const r = wBase * (0.6 + st.p * 0.2) * (0.98 + rnd(i, 3) * 0.04);
+      const jx = (rnd(i, 1) - 0.5) * r * 0.07;
+      const jy = (rnd(i, 2) - 0.5) * r * 0.07;
+      target.globalAlpha = alphaScale * (0.07 + st.p * 0.4) * (0.9 + rnd(i, 4) * 0.2);
       target.save();
       target.translate(st.x + jx, st.y + jy);
       target.rotate(rnd(i, 5) * Math.PI * 2);
@@ -235,7 +245,10 @@ export class Renderer {
     oc.translate(vw / 2, vh / 2);
     oc.scale(camNow.zoom, camNow.zoom);
     oc.translate(-camNow.x, -camNow.y);
-    ls!.count = this.stampStroke(oc, live, live.opacity, ls!.count);
+    const shown = live.points.length > 2
+      ? { ...live, points: denoise(live.points, 1.2 / camNow.zoom) }
+      : live;
+    ls!.count = this.stampStroke(oc, shown, live.opacity, ls!.count);
     // blit in screen space (we're inside the world transform here)
     ctx.save();
     ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
