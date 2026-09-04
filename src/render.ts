@@ -7,6 +7,7 @@ import { strokeOutline, pencilOutlines, markerPaths, outlineToPath, elementBBox,
 import { layoutText, fontFor, segWidth, LINE_HEIGHT } from './text';
 import { moveHandleRect, moveAllHandleRect, deleteHandleRect, eyeHandleRect, type InputState } from './input';
 import { Store } from './store';
+import { reportCrash } from './crash';
 
 interface CacheEntry { path: Path2D; bbox: BBox; passes?: Path2D[]; core?: Path2D; detail: number }
 
@@ -40,7 +41,15 @@ export class Renderer {
       const playing = this.store.doc.areas.length > 0;
       if (this.dirty || this.input.live || playing) {
         this.dirty = false;
-        this.draw();
+        try {
+          this.draw();
+        } catch (err) {
+          // keep the loop alive: drop the stroke being drawn (the usual culprit),
+          // flush caches, and show what happened
+          this.input.live = null;
+          this.clearCache();
+          reportCrash('render', err);
+        }
       }
       requestAnimationFrame(loop);
     };

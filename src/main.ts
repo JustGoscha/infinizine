@@ -4,6 +4,9 @@ import { Store } from './store';
 import { InputState, attachInput } from './input';
 import { Renderer } from './render';
 import { buildUI } from './ui';
+import { installCrashScreen } from './crash';
+
+installCrashScreen();
 
 const canvas = document.getElementById('canvas') as HTMLCanvasElement;
 const ui = document.getElementById('ui') as HTMLElement;

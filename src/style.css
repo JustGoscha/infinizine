@@ -1403,3 +1403,55 @@ body.presenting .popover { display: none; }
   .pg-bottom { flex-direction: column; }
   .pg-side { width: auto; max-height: 50%; }
 }
+
+/* ---------- crash screen ---------- */
+.crash {
+  position: fixed;
+  inset: 0;
+  z-index: 100;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  background: rgba(42, 36, 26, 0.55);
+  padding: 20px;
+}
+.crash.hidden { display: none; }
+.crash-box {
+  width: min(560px, 100%);
+  background: var(--panel);
+  border: var(--panel-border);
+  border-radius: 4px;
+  box-shadow: var(--shadow);
+  padding: 16px 18px;
+  color: var(--ink);
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+}
+.crash-head { font-weight: 700; font-size: 16px; }
+.crash-msg {
+  margin: 0;
+  max-height: 40vh;
+  overflow: auto;
+  font: 12px/1.45 'IBM Plex Mono', ui-monospace, monospace;
+  white-space: pre-wrap;
+  word-break: break-word;
+  background: rgba(255,255,255,0.6);
+  border: 1.5px solid var(--line);
+  border-radius: 2px;
+  padding: 8px 10px;
+}
+.crash-actions { display: flex; gap: 8px; flex-wrap: wrap; }
+.crash-actions button {
+  border: 1.5px solid var(--ink);
+  background: transparent;
+  color: var(--ink);
+  border-radius: 2px;
+  padding: 6px 14px;
+  font: inherit;
+  font-size: 13px;
+  font-weight: 600;
+  cursor: pointer;
+}
+.crash-actions .crash-primary { background: var(--ink); color: var(--card); }
+.crash-hint { font-size: 12px; color: var(--ink-soft); }
