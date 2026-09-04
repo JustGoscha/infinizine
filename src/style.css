@@ -1282,6 +1282,28 @@ body.presenting .popover { display: none; }
   color: var(--ink);
 }
 .pg-top, .pg-bottom { display: flex; gap: 12px; flex: 1 1 50%; min-height: 0; }
+.pg-modal { padding-top: max(56px, calc(env(safe-area-inset-top) + 48px)); }
+.pg-close-big {
+  position: absolute;
+  top: max(10px, env(safe-area-inset-top));
+  right: 16px;
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  height: 36px;
+  padding: 0 14px 0 10px;
+  border: var(--panel-border);
+  border-radius: 4px;
+  background: var(--panel);
+  box-shadow: var(--shadow);
+  color: var(--ink);
+  font: inherit;
+  font-size: 13px;
+  font-weight: 700;
+  cursor: pointer;
+}
+.pg-close-big svg { width: 18px; height: 18px; }
+.pg-close-big:active { transform: translate(2px, 2px); box-shadow: none; }
 .pg-curve-wrap {
   flex: 1;
   min-width: 0;

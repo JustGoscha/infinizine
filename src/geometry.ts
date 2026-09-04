@@ -440,8 +440,18 @@ export function pressureOutline(
     }
   };
   if (n > 2) { steady(n - 1, 1); steady(0, -1); }
-  const left: number[][] = [], right: number[][] = [];
-  const TURN = 0.45; // rad; sharper than this gets a fan so the outer edge stays round
+  // offset both sides. At a hard turn the OUTER side gets a fan of arc points
+  // so the edge stays round; the INNER side folds back on itself — those
+  // backward-travelling points are dropped (cusp removal) so the polygon never
+  // reverses direction, which would punch winding holes (white gaps) in the fill.
+  type Pt = { x: number; y: number; tx: number; ty: number; fan?: boolean };
+  const leftRaw: Pt[] = [], rightRaw: Pt[] = [];
+  const TURN = 0.45; // rad; sharper than this gets a fan on the outer side
+  const fanInto = (side: Pt[], cx: number, cy: number, rr: number, a0: number, a1: number, txx: number, tyy: number) => {
+    const tmp: number[][] = [];
+    arc(tmp, cx, cy, rr, a0, a1, detail);
+    for (const [x, y] of tmp) side.push({ x, y, tx: txx, ty: tyy, fan: true });
+  };
   for (let i = 0; i < n; i++) {
     const nx = -ty[i], ny = tx[i], r = rad[i];
     if (i > 0) {
@@ -452,16 +462,32 @@ export function pressureOutline(
       if (Math.abs(turn) > TURN) {
         const a0 = Math.atan2(py, px), a1 = a0 + turn;
         const rr = (rad[i - 1] + r) / 2;
-        const fanL: number[][] = [], fanR: number[][] = [];
-        arc(fanL, pts[i].x, pts[i].y, rr, a0, a1, detail);
-        arc(fanR, pts[i].x, pts[i].y, rr, a0 + Math.PI, a1 + Math.PI, detail);
-        left.push(...fanL);
-        right.push(...fanR);
+        // the new tangent leans toward the old left normal → the path turned left → left is inner
+        const turnedLeft = tx[i] * px + ty[i] * py > 0;
+        if (turnedLeft) fanInto(rightRaw, pts[i].x, pts[i].y, rr, a0 + Math.PI, a1 + Math.PI, tx[i], ty[i]);
+        else fanInto(leftRaw, pts[i].x, pts[i].y, rr, a0, a1, tx[i], ty[i]);
       }
     }
-    left.push([pts[i].x + nx * r, pts[i].y + ny * r]);
-    right.push([pts[i].x - nx * r, pts[i].y - ny * r]);
+    leftRaw.push({ x: pts[i].x + nx * r, y: pts[i].y + ny * r, tx: tx[i], ty: ty[i] });
+    rightRaw.push({ x: pts[i].x - nx * r, y: pts[i].y - ny * r, tx: tx[i], ty: ty[i] });
   }
+  const clean = (side: Pt[]): number[][] => {
+    const out: number[][] = [[side[0].x, side[0].y]];
+    let last = side[0];
+    for (let k = 1; k < side.length; k++) {
+      const p = side[k];
+      if (!p.fan && k < side.length - 1) {
+        // moving against the stroke direction (its own, or the last kept point's)
+        // = inside a cusp → skip
+        const dx = p.x - last.x, dy = p.y - last.y;
+        if (dx * p.tx + dy * p.ty < 0 || dx * last.tx + dy * last.ty < 0) continue;
+      }
+      out.push([p.x, p.y]);
+      last = p;
+    }
+    return out;
+  };
+  const left = clean(leftRaw), right = clean(rightRaw);
   // assemble: left forward, end cap, right backward, start cap
   // (marker = chisel tip: flat ends, the sides simply close)
   const flat = tool === 'marker';

@@ -355,6 +355,7 @@ export function buildUI(
   /** Picking a color while textboxes are selected recolors them. */
   function applyColor(c: string) {
     state.color = c;
+    writePref(`infinizine-color-${store.docId}`, c);
     const textIds = store.doc.elements
       .filter((el) => el.kind === 'text' && state.selection.has(el.id))
       .map((el) => el.id);
@@ -1938,6 +1939,7 @@ export function buildUI(
     { k: 'tilt', label: 'tilt width', min: 1, max: 40, step: 0.5, fmt: (v) => (v <= 1 ? 'off' : `${v.toFixed(1)}×`), pencilOnly: true },
   ];
   pg.innerHTML = `
+    <button class="pg-close-big" id="pg-close-big" title="Close (Esc)">${svg('<path d="M6 6 L18 18 M18 6 L6 18"/>')}<span>Close</span></button>
     <div class="pg-top">
       <div class="pg-curve-wrap"><canvas class="pg-curve" id="pg-curve" title="Tap the curve to add a point · drag points and handles"></canvas></div>
       <div class="pg-curve-wrap" id="pg-tilt-wrap"><canvas class="pg-curve" id="pg-tilt" title="Tilt → widening (pencil)"></canvas></div>
@@ -2347,6 +2349,9 @@ export function buildUI(
   };
   pgBtn.addEventListener('click', () => togglePg(pg.classList.contains('hidden')));
   (pg.querySelector('#pg-close') as HTMLButtonElement).addEventListener('click', () => togglePg(false));
+  (pg.querySelector('#pg-close-big') as HTMLButtonElement).addEventListener('click', () => togglePg(false));
+  // tapping the dimmed backdrop closes too
+  pg.addEventListener('pointerdown', (e) => { if (e.target === pg) togglePg(false); });
   window.addEventListener('keydown', (e) => {
     if (e.key === 'Escape' && !pg.classList.contains('hidden')) togglePg(false);
   });
@@ -2355,8 +2360,20 @@ export function buildUI(
   buildPalRow();
 
   // keeps the timeline in sync after undo/redo or external changes
+  // per-zine last colour: restore when a (different) document becomes current
+  let colorDocId = '';
+  const restoreColor = () => {
+    if (store.docId === colorDocId) return;
+    colorDocId = store.docId;
+    let c: string | null = null;
+    try { c = localStorage.getItem(`infinizine-color-${store.docId}`); } catch { /* ignore */ }
+    if (c) { state.color = c; refresh(); state.updateCursor(); }
+  };
+  restoreColor();
+
   return {
     docChanged() {
+      restoreColor();
       if (tlAreaId && !tl.classList.contains('hidden')) renderTimeline();
     },
   };
