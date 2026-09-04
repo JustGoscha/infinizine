@@ -152,6 +152,103 @@ const TOOL_OPTIONS = {
 /** Pencil rendering (Here-Dragons-Abound style, adapted to vectors): several
  * displaced copies of the stroke, drawn at low opacity with multiply blending.
  * Low-frequency wobble = wandering graphite line; high-frequency = rough edges. */
+/** Has a real pressure signal (pen), as opposed to the flat 0.5 of mouse/finger. */
+export function hasPressure(points: StrokePoint[]): boolean {
+  return points.some((p) => Math.abs(p.p - 0.5) >= 0.001);
+}
+
+/** Stroke diameter (world units) at pressure p for a tool — our own mapping,
+ * pressure already through easeP. Max is a fixed multiple of baseWidth so the
+ * size presets mean what they say. */
+export function widthAt(tool: Stroke['tool'], baseWidth: number, p: number): number {
+  const e = easeP(p);
+  switch (tool) {
+    case 'pen': return baseWidth * 1.6 * (0.22 + 0.78 * e);
+    case 'fineliner': return baseWidth * 1.3 * (0.86 + 0.14 * e);
+    case 'marker': return baseWidth * 2.4;
+    case 'pencil': return baseWidth * 1.3 * (0.6 + 0.4 * e);
+    case 'sketch': return baseWidth * 1.4 * (0.45 + 0.55 * e);
+  }
+}
+
+function arc(out: number[][], cx: number, cy: number, r: number, a0: number, a1: number, detail: number) {
+  // sweep from a0 to a1 (signed), vertex count from on-screen radius
+  const n = Math.max(4, Math.min(40, Math.ceil(Math.abs(a1 - a0) * Math.sqrt(r * detail * baseZoom()) * 1.4)));
+  for (let i = 0; i <= n; i++) {
+    const a = a0 + ((a1 - a0) * i) / n;
+    out.push([cx + Math.cos(a) * r, cy + Math.sin(a) * r]);
+  }
+}
+
+/** Our own variable-width outliner (replaces perfect-freehand for pressure
+ * input). Denoised, in-betweened centreline → per-sample radius from pressure
+ * → offset both sides along smoothed normals; corner fans where the path
+ * turns hard; round caps. No minimum length, no dropped points: a 2px
+ * scribble at 800% renders exactly like a 2cm one at 100%. */
+export function pressureOutline(
+  points: StrokePoint[],
+  tool: Stroke['tool'],
+  baseWidth: number,
+  detail: number,
+  widthScale = 1,
+): number[][] {
+  // in-between so normals are stable; drop exact duplicates
+  const dense = densify(filterPressure(points), 2.2 / detail);
+  const pts: StrokePoint[] = [dense[0]];
+  for (let i = 1; i < dense.length; i++) {
+    const a = pts[pts.length - 1], b = dense[i];
+    if ((b.x - a.x) ** 2 + (b.y - a.y) ** 2 > 1e-6) pts.push(b);
+  }
+  const n = pts.length;
+  if (n < 2) {
+    const c = pts[0];
+    const r = (widthAt(tool, baseWidth, c.p) * widthScale) / 2;
+    const out: number[][] = [];
+    arc(out, c.x, c.y, r, 0, Math.PI * 2, detail);
+    return out;
+  }
+  // tangents (central differences), radii
+  const tx = new Float64Array(n), ty = new Float64Array(n), rad = new Float64Array(n);
+  for (let i = 0; i < n; i++) {
+    const a = pts[Math.max(0, i - 1)], b = pts[Math.min(n - 1, i + 1)];
+    let dx = b.x - a.x, dy = b.y - a.y;
+    const l = Math.hypot(dx, dy) || 1;
+    tx[i] = dx / l; ty[i] = dy / l;
+    rad[i] = Math.max(0.02, (widthAt(tool, baseWidth, pts[i].p) * widthScale) / 2);
+  }
+  const left: number[][] = [], right: number[][] = [];
+  const TURN = 0.45; // rad; sharper than this gets a fan so the outer edge stays round
+  for (let i = 0; i < n; i++) {
+    const nx = -ty[i], ny = tx[i], r = rad[i];
+    if (i > 0) {
+      const px = -ty[i - 1], py = tx[i - 1];
+      const cross = px * ny - py * nx;
+      const dot = Math.max(-1, Math.min(1, px * nx + py * ny));
+      const turn = Math.atan2(cross, dot);
+      if (Math.abs(turn) > TURN) {
+        const a0 = Math.atan2(py, px), a1 = a0 + turn;
+        const rr = (rad[i - 1] + r) / 2;
+        const fanL: number[][] = [], fanR: number[][] = [];
+        arc(fanL, pts[i].x, pts[i].y, rr, a0, a1, detail);
+        arc(fanR, pts[i].x, pts[i].y, rr, a0 + Math.PI, a1 + Math.PI, detail);
+        left.push(...fanL);
+        right.push(...fanR);
+      }
+    }
+    left.push([pts[i].x + nx * r, pts[i].y + ny * r]);
+    right.push([pts[i].x - nx * r, pts[i].y - ny * r]);
+  }
+  // assemble: left forward, end cap, right backward, start cap
+  const out: number[][] = [...left];
+  const e = n - 1;
+  const aEnd = Math.atan2(tx[e], -ty[e]); // angle of the left normal at the end
+  arc(out, pts[e].x, pts[e].y, rad[e], aEnd, aEnd - Math.PI, detail);
+  for (let i = right.length - 1; i >= 0; i--) out.push(right[i]);
+  const aStart = Math.atan2(tx[0], -ty[0]);
+  arc(out, pts[0].x, pts[0].y, rad[0], aStart + Math.PI, aStart, detail);
+  return out;
+}
+
 export function pencilOutlines(stroke: Stroke, detail = 1): number[][][] {
   let seed = 0;
   for (let i = 0; i < stroke.id.length; i++) seed = (seed * 31 + stroke.id.charCodeAt(i)) % 9973;
@@ -161,32 +258,40 @@ export function pencilOutlines(stroke: Stroke, detail = 1): number[][][] {
     return widths.map((wk, k) =>
       dotOutline(stroke, detail, wk, Math.sin(seed + k * 2.1) * j, Math.cos(seed * 0.7 + k * 1.3) * j));
   }
-  const base = densify(filterPressure(stroke.points), 2.2 / detail);
-  const noPressure = stroke.points.every((p) => Math.abs(p.p - 0.5) < 0.001);
+  const pressured = hasPressure(stroke.points);
+  const base = pressured
+    ? filterPressure(stroke.points) // pressureOutline in-betweens itself
+    : densify(filterPressure(stroke.points), 2.2 / detail);
   const passes: number[][][] = [];
   for (let k = 0; k < 3; k++) {
     const s1 = seed * 0.13 + k * 7.3;
     const s2 = seed * 0.31 + k * 3.1;
     const s3 = seed * 0.7 + k * 11.7;
     const amp = stroke.baseWidth * 0.36;
-    const pts = base.map((p, i) => [
-      p.x + (Math.sin(i * 0.31 + s1) * 0.6 + Math.sin(i * 1.37 + s2) * 0.3) * amp,
-      p.y + (Math.sin(i * 0.27 + s2) * 0.6 + Math.sin(i * 1.51 + s3) * 0.3) * amp,
-      p.p,
-    ]);
-    const opts = { ...TOOL_OPTIONS.sketch(stroke.baseWidth * widths[k]) };
-    opts.smoothing /= detail;
-    if (noPressure) opts.simulatePressure = true;
-    passes.push(getStroke(pts, opts));
+    const wob = base.map((p, i) => ({
+      ...p,
+      x: p.x + (Math.sin(i * 0.31 + s1) * 0.6 + Math.sin(i * 1.37 + s2) * 0.3) * amp,
+      y: p.y + (Math.sin(i * 0.27 + s2) * 0.6 + Math.sin(i * 1.51 + s3) * 0.3) * amp,
+    }));
+    if (pressured) {
+      passes.push(pressureOutline(wob, 'sketch', stroke.baseWidth, detail, widths[k]));
+    } else {
+      const opts = { ...TOOL_OPTIONS.sketch(stroke.baseWidth * widths[k]) };
+      opts.smoothing /= detail;
+      opts.simulatePressure = true;
+      passes.push(getStroke(wob.map((p) => [p.x, p.y, p.p]), opts));
+    }
   }
   return passes;
 }
 
-/** A tap: one point → a perfect circle at the radius perfect-freehand would
- * give that pressure (size × easing(0.5 − thinning × (0.5 − p))). */
+/** A tap: one point → a perfect circle at the width that pressure gives. */
 export function dotRadius(stroke: Stroke): number {
-  const o = TOOL_OPTIONS[stroke.tool](stroke.baseWidth) as { size: number; thinning: number; easing?: (t: number) => number };
   const p = stroke.points[0]?.p ?? 0.5;
+  if (hasPressure(stroke.points) || stroke.tool === 'marker' || stroke.tool === 'fineliner') {
+    return Math.max(0.05, widthAt(stroke.tool, stroke.baseWidth, p) / 2);
+  }
+  const o = TOOL_OPTIONS[stroke.tool](stroke.baseWidth) as { size: number; thinning: number; easing?: (t: number) => number };
   const ease = o.easing ?? ((t: number) => t);
   return Math.max(0.05, o.size * ease(0.5 - o.thinning * (0.5 - p)));
 }
@@ -194,37 +299,25 @@ export function dotRadius(stroke: Stroke): number {
 function dotOutline(stroke: Stroke, detail: number, radiusScale = 1, dx = 0, dy = 0): number[][] {
   const c = stroke.points[0];
   const r = dotRadius(stroke) * radiusScale;
-  const n = Math.max(24, Math.min(96, Math.round(24 * Math.sqrt(detail) * Math.sqrt(Math.max(1, r)))));
   const out: number[][] = [];
-  for (let i = 0; i < n; i++) {
-    const a = (i / n) * Math.PI * 2;
-    out.push([c.x + dx + Math.cos(a) * r, c.y + dy + Math.sin(a) * r]);
-  }
+  arc(out, c.x + dx, c.y + dy, r, 0, Math.PI * 2, detail);
   return out;
 }
 
-/** Variable-width outline polygon for a stroke (world coords).
+/** Outline polygon for a stroke (world coords).
  * `detail` = zoom relative to 100% (bucketed by the renderer): in-between
  * spacing and outline vertex density scale with it so a stroke has the same
- * screen-space smoothness whether you're at 25% or 800%. */
+ * screen-space smoothness whether you're at 25% or 800%.
+ * Pressure input → our pressureOutline. Pressureless mouse/finger strokes →
+ * perfect-freehand with simulated pressure (velocity-based swell). */
 export function strokeOutline(stroke: Stroke, detail = 1, live = false): number[][] {
   if (stroke.points.length === 1) return dotOutline(stroke, detail);
+  if (hasPressure(stroke.points) || stroke.tool === 'marker' || stroke.tool === 'fineliner') {
+    return pressureOutline(stroke.points, stroke.tool, stroke.baseWidth, detail);
+  }
   const pts = densify(filterPressure(stroke.points), 2.2 / detail).map((p) => [p.x, p.y, p.p]);
   const opts = { ...TOOL_OPTIONS[stroke.tool](stroke.baseWidth) };
-  // perfect-freehand's `smoothing` is really a vertex-skip distance (size × smoothing);
-  // shrink it with zoom so round tips stay round instead of turning polygonal
   opts.smoothing /= detail;
-  // with a real pressure signal, entry/exit are shaped by pressure itself —
-  // the geometric taper only needs to round off the ends. Finger/mouse
-  // strokes (flat 0.5) keep the long synthetic taper.
-  const hasPressure = stroke.points.some((p) => Math.abs(p.p - 0.5) >= 0.001);
-  if (hasPressure && (stroke.tool === 'pen' || stroke.tool === 'pencil' || stroke.tool === 'sketch')) {
-    const w = stroke.baseWidth;
-    opts.start = { taper: w * 0.35, cap: true };
-    opts.end = { taper: w * 0.5, cap: true };
-  }
-  // tapers live in screen space: never longer than ~7px on screen, so zooming
-  // in doesn't stretch a taper into a long triangle
   const maxTaper = 7 / (detail * baseZoom());
   const o = opts as unknown as {
     start?: { cap?: boolean; taper?: number | boolean };
@@ -233,19 +326,9 @@ export function strokeOutline(stroke: Stroke, detail = 1, live = false): number[
   };
   if (typeof o.start?.taper === 'number') o.start = { ...o.start, taper: Math.min(o.start.taper, maxTaper) };
   if (typeof o.end?.taper === 'number') o.end = { ...o.end, taper: Math.min(o.end.taper, maxTaper) };
-  // the last sample is the pen tip: don't streamline it away (PF default is
-  // last:false, which lags the outline behind the tip). While drawing there is
-  // no exit taper yet — it only appears on lift.
   o.last = true;
   if (live) o.end = { cap: true, taper: 0 };
-  // pencil emulation for pressureless input (mouse/finger): synthesize
-  // pressure from stroke velocity so lines still swell and taper
-  if (
-    (stroke.tool === 'pen' || stroke.tool === 'pencil' || stroke.tool === 'sketch') &&
-    stroke.points.every((p) => Math.abs(p.p - 0.5) < 0.001)
-  ) {
-    opts.simulatePressure = true;
-  }
+  opts.simulatePressure = true;
   return getStroke(pts, opts);
 }
 

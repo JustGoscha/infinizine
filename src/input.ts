@@ -901,7 +901,7 @@ export function attachInput(
       for (let i = 1; i < s.points.length; i++) {
         travel += Math.hypot(s.points[i].x - s.points[i - 1].x, s.points[i].y - s.points[i - 1].y);
       }
-      if (travel < s.baseWidth * 0.5) {
+      if (travel < Math.max(s.baseWidth * 0.6, 5 / strokeZoom)) {
         // a tap: one point at the centroid, carrying the peak pressure of the
         // touch → renders as a perfect round dot (see geometry.dotOutline)
         const n = s.points.length;
