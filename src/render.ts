@@ -46,6 +46,19 @@ export class Renderer {
   }
 
   invalidate() { this.dirty = true; }
+
+  // decoded-image cache for image elements
+  private imageCache = new Map<string, HTMLImageElement>();
+  private image(src: string): HTMLImageElement {
+    let img = this.imageCache.get(src);
+    if (!img) {
+      img = new Image();
+      img.onload = () => this.invalidate();
+      img.src = src;
+      this.imageCache.set(src, img);
+    }
+    return img;
+  }
   dropFromCache(id: string) { this.cache.delete(id); this.pencilCache.delete(id); }
   clearCache() { this.cache.clear(); this.pencilCache.clear(); }
 
@@ -302,6 +315,25 @@ export class Renderer {
         }
         return;
       }
+      if (el.kind === 'image') {
+        const b = elementBBox(el);
+        if (!bboxIntersects(b, view)) return;
+        const img = this.image(el.src);
+        if (img.complete && img.naturalWidth) {
+          ctx.globalAlpha = dimFactor;
+          ctx.drawImage(img, el.x, el.y, el.w, el.h);
+        }
+        if ((this.input.hoverImage === el.id || selected.has(el.id)) && !this.input.presenting) {
+          this.drawBoxHandles(el.x, el.y, el.w, el.h, z);
+        }
+        if (selected.has(el.id) && !presenting) {
+          ctx.globalAlpha = 0.9;
+          ctx.strokeStyle = '#E8590C';
+          ctx.lineWidth = 1.5 / z;
+          ctx.strokeRect(el.x - 2, el.y - 2, el.w + 4, el.h + 4);
+        }
+        return;
+      }
       const e = this.entry(el);
       if (!bboxIntersects(e.bbox, view)) return;
       if (el.kind === 'stroke' && el.tool === 'pencil') {
@@ -545,7 +577,7 @@ export class Renderer {
           ctx.fillStyle = onion.color;
           for (const el of visible) {
             if (el.frame === fid) {
-              const cached = el.kind === 'text' ? null : this.entry(el);
+              const cached = el.kind === 'text' || el.kind === 'image' ? null : this.entry(el);
               if (cached) ctx.fill(cached.path);
             }
           }

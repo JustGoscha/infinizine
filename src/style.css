@@ -836,6 +836,56 @@ body.tl-docked-side .topbar { z-index: 40; }
 }
 .tl-layer button:active { background: var(--ink); color: var(--card); }
 
+/* ---------- toast + selection side menu ---------- */
+.toast {
+  position: fixed;
+  bottom: 90px;
+  left: 50%;
+  transform: translateX(-50%);
+  background: var(--ink);
+  color: var(--card);
+  font-size: 13px;
+  font-weight: 600;
+  padding: 8px 14px;
+  border-radius: 3px;
+  box-shadow: var(--shadow);
+  z-index: 70;
+  pointer-events: none;
+  transition: opacity 0.25s ease;
+}
+.toast.hidden { opacity: 0; }
+
+.sel-menu {
+  position: fixed;
+  right: 14px;
+  top: 50%;
+  transform: translateY(-50%);
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  background: var(--panel);
+  border: var(--panel-border);
+  border-radius: 3px;
+  box-shadow: var(--shadow);
+  padding: 5px;
+  z-index: 24;
+}
+.sel-menu.hidden { display: none; }
+.sel-menu button {
+  width: 40px;
+  height: 40px;
+  border: none;
+  background: transparent;
+  border-radius: 2px;
+  color: var(--ink);
+  cursor: pointer;
+  display: grid;
+  place-items: center;
+}
+.sel-menu button:active { background: var(--ink); color: var(--card); }
+.sel-menu button svg { width: 20px; height: 20px; }
+#sm-del { color: #c0392b; }
+
 /* ---------- presentation mode ---------- */
 body.presenting .toolbar,
 body.presenting .topbar,

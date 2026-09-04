@@ -142,6 +142,7 @@ export function buildUI(
   store: Store,
   camera: Camera,
   invalidate: () => void,
+  actions: { copy: () => void; cut: () => void; paste: () => void },
 ) {
   root.innerHTML = `
     <header class="topbar">
@@ -1112,7 +1113,7 @@ export function buildUI(
       head.className = `tl-track-head${l.hidden ? ' layer-hidden' : ''}`;
       const liveColor =
         l.kind === 'live'
-          ? (store.doc.elements.find((e) => e.kind === 'stroke' && e.alayer === l.id)?.color ?? '#7048e8')
+          ? ((store.doc.elements.find((e) => e.kind === 'stroke' && e.alayer === l.id) as { color?: string } | undefined)?.color ?? '#7048e8')
           : '';
       const loopOn = l.loop !== false;
       head.innerHTML = `${
@@ -1187,7 +1188,8 @@ export function buildUI(
           spacer.textContent = `${(startTicks / area.fps).toFixed(1)}s`;
         }
         strip.appendChild(spacer);
-        const inkColor = (strokes[0]?.color as string) ?? '#7048e8';
+        const first = strokes[0];
+        const inkColor = first && first.kind === 'stroke' ? first.color : '#7048e8';
         bar.style.background = inkColor;
         const n = parseInt(inkColor.slice(1), 16) || 0;
         const lum = ((n >> 16) & 255) * 0.299 + ((n >> 8) & 255) * 0.587 + (n & 255) * 0.114;
@@ -1680,7 +1682,7 @@ export function buildUI(
     for (const pg of store.doc.pages) grow(pg.x, pg.y, pg.x + pg.w, pg.y + pg.h);
     for (const a of store.doc.areas) grow(a.x, a.y, a.x + a.w, a.y + a.h);
     for (const el of store.doc.elements) {
-      if (el.kind === 'text') grow(el.x, el.y, el.x + el.w, el.y + el.h);
+      if (el.kind === 'text' || el.kind === 'image') grow(el.x, el.y, el.x + el.w, el.y + el.h);
       else for (const pt of el.points) grow(pt.x, pt.y, pt.x, pt.y);
     }
     if (minX === Infinity) return;
@@ -1758,6 +1760,56 @@ export function buildUI(
     state.toolCursor = cursorFor(state.tool, camera.zoom, state.baseWidth);
     (document.getElementById('canvas') as HTMLCanvasElement).style.cursor = state.toolCursor;
   };
+  // ---------- toast notifications ----------
+  const toastEl = document.createElement('div');
+  toastEl.className = 'toast hidden';
+  document.body.appendChild(toastEl);
+  let toastTimer = 0;
+  window.addEventListener('izine-toast', (e) => {
+    toastEl.textContent = (e as CustomEvent<string>).detail;
+    toastEl.classList.remove('hidden');
+    clearTimeout(toastTimer);
+    toastTimer = window.setTimeout(() => toastEl.classList.add('hidden'), 1700);
+  });
+
+  // ---------- selection side menu (copy / cut / paste / delete) ----------
+  const selMenu = document.createElement('div');
+  selMenu.className = 'sel-menu hidden';
+  selMenu.innerHTML = `
+    <button id="sm-copy" title="Copy (⌘C)">${svg('<rect x="9" y="9" width="12" height="12" rx="1.5"/><path d="M5 15 H4.5 A1.5 1.5 0 0 1 3 13.5 V4.5 A1.5 1.5 0 0 1 4.5 3 H13.5 A1.5 1.5 0 0 1 15 4.5 V5"/>')}</button>
+    <button id="sm-cut" title="Cut (⌘X)">${svg('<circle cx="6" cy="6" r="2.5"/><circle cx="6" cy="18" r="2.5"/><path d="M8.1 7.6 L20 19 M8.1 16.4 L20 5 M12 12 l2.5 2.4"/>')}</button>
+    <button id="sm-paste" title="Paste (⌘V)">${svg('<rect x="5" y="4" width="14" height="17" rx="1.5"/><path d="M9 4 A3 3 0 0 1 15 4"/><path d="M9 12 h6 M9 16 h6"/>')}</button>
+    <button id="sm-del" title="Delete">${svg('<path d="M4 7 H20 M9 7 V5 A1 1 0 0 1 10 4 H14 A1 1 0 0 1 15 5 V7 M6.5 7 L7.5 20 H16.5 L17.5 7"/>')}</button>
+  `;
+  document.body.appendChild(selMenu);
+  (selMenu.querySelector('#sm-copy') as HTMLButtonElement).addEventListener('click', actions.copy);
+  (selMenu.querySelector('#sm-cut') as HTMLButtonElement).addEventListener('click', actions.cut);
+  (selMenu.querySelector('#sm-paste') as HTMLButtonElement).addEventListener('click', actions.paste);
+  (selMenu.querySelector('#sm-del') as HTMLButtonElement).addEventListener('click', () => {
+    const els = store.doc.elements.filter((el) => state.selection.has(el.id));
+    if (els.length) {
+      state.selection.clear();
+      store.deleteElements(els);
+      invalidate();
+    }
+  });
+  // visibility: selection/area gets copy-cut-delete; paste shows when clipboard holds zine content
+  setInterval(() => {
+    if (state.presenting) {
+      selMenu.classList.add('hidden');
+      return;
+    }
+    const hasSel = state.selection.size > 0;
+    const hasArea = !!state.activeAreaId;
+    let hasClip = false;
+    try { hasClip = !!localStorage.getItem('infinizine-clipboard'); } catch { /* ignore */ }
+    (selMenu.querySelector('#sm-copy') as HTMLButtonElement).hidden = !(hasSel || hasArea);
+    (selMenu.querySelector('#sm-cut') as HTMLButtonElement).hidden = !(hasSel || hasArea);
+    (selMenu.querySelector('#sm-del') as HTMLButtonElement).hidden = !hasSel;
+    (selMenu.querySelector('#sm-paste') as HTMLButtonElement).hidden = !hasClip;
+    selMenu.classList.toggle('hidden', !(hasSel || hasArea || hasClip));
+  }, 300);
+
   state.onToolChange = refresh;
   buildPalRow();
 

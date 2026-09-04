@@ -91,7 +91,20 @@ export interface TextBox {
   alayer?: string;
 }
 
-export type Element = Stroke | FillShape | TextBox;
+export interface ImageBox {
+  id: string;
+  kind: 'image';
+  x: number;
+  y: number;
+  w: number;
+  h: number;
+  src: string; // data URL — keeps documents self-contained
+  layer?: Layer;
+  frame?: string;
+  alayer?: string;
+}
+
+export type Element = Stroke | FillShape | TextBox | ImageBox;
 
 export interface Page {
   id: string;

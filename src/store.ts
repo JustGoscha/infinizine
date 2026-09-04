@@ -4,6 +4,7 @@ import { AnimArea, AnimFrame, AnimLayer, Doc, Element, Page, emptyDoc, uid } fro
 
 type TextContent = { text: string; w: number; h: number; font?: string; fontSize?: number };
 type TextMetrics = { x: number; w: number; h: number; fontSize: number };
+type BoxRect = { x: number; y: number; w: number; h: number };
 
 type Op =
   | { type: 'add-elements'; elements: Element[] }
@@ -11,6 +12,7 @@ type Op =
   | { type: 'move-elements'; ids: string[]; dx: number; dy: number }
   | { type: 'update-text'; id: string; before: TextContent; after: TextContent }
   | { type: 'resize-text'; id: string; before: TextMetrics; after: TextMetrics }
+  | { type: 'resize-image'; id: string; before: BoxRect; after: BoxRect }
   | { type: 'add-page'; page: Page }
   | { type: 'delete-page'; page: Page }
   | { type: 'move-page'; id: string; dx: number; dy: number }
@@ -222,6 +224,16 @@ export class Store {
         }
         break;
       }
+      case 'resize-image': {
+        const el = d.elements.find((e) => e.id === op.id);
+        if (el && el.kind === 'image') {
+          el.x = op.after.x;
+          el.y = op.after.y;
+          el.w = op.after.w;
+          el.h = op.after.h;
+        }
+        break;
+      }
       case 'resize-text': {
         const el = d.elements.find((e) => e.id === op.id);
         if (el && el.kind === 'text') {
@@ -325,7 +337,7 @@ export class Store {
       case 'recolor-elements': {
         for (const it of op.items) {
           const el = d.elements.find((e) => e.id === it.id);
-          if (el) el.color = it.after;
+          if (el && el.kind !== 'image') el.color = it.after;
         }
         break;
       }
@@ -374,6 +386,7 @@ export class Store {
       case 'move-elements': return { ...op, dx: -op.dx, dy: -op.dy };
       case 'update-text': return { ...op, before: op.after, after: op.before };
       case 'resize-text': return { ...op, before: op.after, after: op.before };
+      case 'resize-image': return { ...op, before: op.after, after: op.before };
       case 'add-page': return { type: 'delete-page', page: op.page };
       case 'delete-page': return { type: 'add-page', page: op.page };
       case 'move-page': return { ...op, dx: -op.dx, dy: -op.dy };
@@ -405,7 +418,7 @@ export class Store {
     const set = new Set(ids);
     for (const el of this.doc.elements) {
       if (!set.has(el.id)) continue;
-      if (el.kind === 'text') {
+      if (el.kind === 'text' || el.kind === 'image') {
         el.x += dx;
         el.y += dy;
       } else {
@@ -446,6 +459,9 @@ export class Store {
   updateText(id: string, before: TextContent, after: TextContent) {
     this.commit({ type: 'update-text', id, before, after });
   }
+  resizeImage(id: string, before: BoxRect, after: BoxRect) {
+    this.commit({ type: 'resize-image', id, before, after });
+  }
   resizeText(id: string, before: TextMetrics, after: TextMetrics) {
     this.commit({ type: 'resize-text', id, before, after });
   }
@@ -465,7 +481,7 @@ export class Store {
       .filter((e) => {
         if (e.frame || (e.kind === 'stroke' && e.area)) return false;
         let cx: number, cy: number;
-        if (e.kind === 'text') {
+        if (e.kind === 'text' || e.kind === 'image') {
           cx = e.x + e.w / 2;
           cy = e.y + e.h / 2;
         } else {
@@ -795,7 +811,7 @@ export class Store {
   recolorElements(ids: string[], after: string) {
     const items = ids
       .map((id) => this.doc.elements.find((e) => e.id === id))
-      .filter((e): e is Element => !!e && e.color !== after)
+      .filter((e): e is Exclude<Element, { kind: 'image' }> => !!e && e.kind !== 'image' && e.color !== after)
       .map((e) => ({ id: e.id, before: e.color, after }));
     if (items.length) this.commit({ type: 'recolor-elements', items });
   }

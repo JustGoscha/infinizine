@@ -158,7 +158,7 @@ export function outlineToPath(outline: number[][]): Path2D {
 export interface BBox { minX: number; minY: number; maxX: number; maxY: number }
 
 export function elementBBox(el: Element): BBox {
-  if (el.kind === 'text') {
+  if (el.kind === 'text' || el.kind === 'image') {
     return { minX: el.x - 2, minY: el.y - 2, maxX: el.x + el.w + 2, maxY: el.y + el.h + 2 };
   }
   const pts: { x: number; y: number }[] = el.points;
@@ -181,7 +181,7 @@ export function bboxIntersects(b: BBox, r: { x: number; y: number; w: number; h:
 export function hitElement(el: Element, x: number, y: number, radius: number): boolean {
   const b = elementBBox(el);
   if (x < b.minX - radius || x > b.maxX + radius || y < b.minY - radius || y > b.maxY + radius) return false;
-  if (el.kind === 'text') return true; // bbox hit is enough for a textbox
+  if (el.kind === 'text' || el.kind === 'image') return true; // bbox hit suffices for boxes
   const pts = el.points;
   const r =
     radius + (el.kind === 'stroke' ? el.baseWidth * (el.tool === 'marker' ? 1.4 : 0.7) : 0);
@@ -228,7 +228,7 @@ export function elementsInLasso(elements: Element[], lasso: { x: number; y: numb
     const b = elementBBox(el);
     if (!bboxIntersects(b, { x: minX, y: minY, w: maxX - minX, h: maxY - minY })) return false;
     const pts =
-      el.kind === 'text'
+      el.kind === 'text' || el.kind === 'image'
         ? [
             { x: el.x, y: el.y }, { x: el.x + el.w, y: el.y },
             { x: el.x, y: el.y + el.h }, { x: el.x + el.w, y: el.y + el.h },

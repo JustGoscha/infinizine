@@ -4,11 +4,15 @@
 
 import { Camera } from './camera';
 import { Store } from './store';
-import { AnimArea, Stroke, FillShape, Element, Page, TextBox, uid } from './types';
+import { AnimArea, Stroke, FillShape, Element, ImageBox, Page, TextBox, uid } from './types';
 import { hitElement, elementsInLasso } from './geometry';
 import { layoutText, layoutHeight } from './text';
 
 const CLIP_KEY = 'infinizine-clipboard';
+
+function toast(msg: string) {
+  window.dispatchEvent(new CustomEvent('izine-toast', { detail: msg }));
+}
 
 export type Tool = 'pen' | 'pencil' | 'sketch' | 'fineliner' | 'marker' | 'eraser' | 'cursor' | 'lasso-select' | 'lasso-fill' | 'text' | 'anim' | 'hand';
 
@@ -21,7 +25,7 @@ export function frameEditable(el: Element, state: InputState): boolean {
 }
 
 function translateElement(el: Element, dx: number, dy: number) {
-  if (el.kind === 'text') {
+  if (el.kind === 'text' || el.kind === 'image') {
     el.x += dx;
     el.y += dy;
   } else {
@@ -89,6 +93,7 @@ export class InputState {
   hoverText: string | null = null; // textbox under the mouse (shows its move handle)
   hoverArea: string | null = null; // anim area under the mouse (shows its handles)
   hoverPage: string | null = null; // page under the mouse (shows its grabbers)
+  hoverImage: string | null = null; // image under the mouse (shows its handles)
   lastDrawTool: Tool = 'pen'; // remembered so e.g. area creation can bounce back to it
   onAnimClose: () => void = () => {};
   toolCursor = 'crosshair'; // css cursor for the current tool (set by the UI)
@@ -138,6 +143,10 @@ export function attachInput(
   let pageAllIds: string[] = [];
   let pageAllAreaIds: string[] = [];
   let pageAllApplied = { x: 0, y: 0 };
+  // image resize handles
+  let resizeImg: ImageBox | null = null;
+  let imgMode: 'w-left' | 'w-right' | 'h-bottom' | 'corner' = 'corner';
+  let imgStart = { x: 0, y: 0, w: 0, h: 0, wx: 0, wy: 0 };
   // textbox resize/scale (Excalidraw-style handles on a hovered/selected textbox)
   let resizeText: TextBox | null = null;
   let resizeMode: 'width' | 'width-left' | 'height' | 'scale' = 'width';
@@ -238,6 +247,39 @@ export function attachInput(
       return;
     }
     const w = toWorld(e);
+
+    // Image handles (any tool, on hovered/selected image)
+    for (const el of store.doc.elements) {
+      if (el.kind !== 'image') continue;
+      if (state.hoverImage !== el.id && !state.selection.has(el.id)) continue;
+      const z = camera.zoom;
+      if (inRect(w, deleteHandleRect(el.x, el.y, el.w, z))) {
+        state.selection.delete(el.id);
+        if (state.hoverImage === el.id) state.hoverImage = null;
+        store.deleteElements([el]);
+        return;
+      }
+      if (inRect(w, moveHandleRect(el.x, el.y, z))) {
+        state.selection = new Set([el.id]);
+        dragSelection = true;
+        dragStartWorld = w;
+        dragTotal = { x: 0, y: 0 };
+        invalidate();
+        return;
+      }
+      const r = 12 / z;
+      const grabImg = (mode: typeof imgMode) => {
+        state.selection = new Set([el.id]);
+        resizeImg = el;
+        imgMode = mode;
+        imgStart = { x: el.x, y: el.y, w: el.w, h: el.h, wx: w.x, wy: w.y };
+        invalidate();
+      };
+      if (Math.hypot(w.x - (el.x + el.w), w.y - (el.y + el.h)) < r) { grabImg('corner'); return; }
+      if (Math.abs(w.y - (el.y + el.h)) < r && Math.abs(w.x - (el.x + el.w / 2)) < r) { grabImg('h-bottom'); return; }
+      if (Math.abs(w.x - (el.x + el.w)) < r && Math.abs(w.y - (el.y + el.h / 2)) < r) { grabImg('w-right'); return; }
+      if (Math.abs(w.x - el.x) < r && Math.abs(w.y - (el.y + el.h / 2)) < r) { grabImg('w-left'); return; }
+    }
 
     // Textbox handles (any tool, on hovered/selected box):
     // top-left = move, bottom-right = scale, left/right edge = width
@@ -611,6 +653,34 @@ export function attachInput(
       invalidate();
       return;
     }
+    if (resizeImg) {
+      const el = resizeImg;
+      const dx = w.x - imgStart.wx;
+      const dy = w.y - imgStart.wy;
+      const MIN = 10;
+      switch (imgMode) {
+        case 'corner': {
+          const f = Math.max(0.05, (imgStart.w + dx) / imgStart.w);
+          el.w = Math.max(MIN, imgStart.w * f);
+          el.h = Math.max(MIN, imgStart.h * f);
+          break;
+        }
+        case 'w-right':
+          el.w = Math.max(MIN, imgStart.w + dx);
+          break;
+        case 'w-left': {
+          const d = Math.min(dx, imgStart.w - MIN);
+          el.x = imgStart.x + d;
+          el.w = imgStart.w - d;
+          break;
+        }
+        case 'h-bottom':
+          el.h = Math.max(MIN, imgStart.h + dy);
+          break;
+      }
+      invalidate();
+      return;
+    }
     if (resizeText) {
       const el = resizeText;
       const dx = w.x - resizeStart.wx;
@@ -781,6 +851,14 @@ export function attachInput(
       }
       return;
     }
+    if (resizeImg) {
+      const el = resizeImg;
+      resizeImg = null;
+      const after = { x: el.x, y: el.y, w: el.w, h: el.h };
+      el.x = imgStart.x; el.y = imgStart.y; el.w = imgStart.w; el.h = imgStart.h;
+      store.resizeImage(el.id, { x: imgStart.x, y: imgStart.y, w: imgStart.w, h: imgStart.h }, after);
+      return;
+    }
     if (resizeText) {
       const el = resizeText;
       resizeText = null;
@@ -868,13 +946,129 @@ export function attachInput(
         };
       }
     }
-    if (!payload) return false;
+    if (!payload) {
+      toast('Nothing selected to copy');
+      return false;
+    }
+    const json = JSON.stringify(payload);
     try {
-      localStorage.setItem(CLIP_KEY, JSON.stringify(payload));
+      localStorage.setItem(CLIP_KEY, json);
     } catch {
       return false;
     }
+    navigator.clipboard?.writeText(json).catch(() => {});
+    const p = payload as { kind: string; elements: Element[] };
+    toast(p.kind === 'area' ? 'Copied animation area' : `Copied ${p.elements.length} element${p.elements.length === 1 ? '' : 's'}`);
     return true;
+  }
+
+  function cutSelection() {
+    if (!copySelection()) return;
+    const els = store.doc.elements.filter((el) => state.selection.has(el.id));
+    if (els.length) {
+      state.selection.clear();
+      store.deleteElements(els);
+      toast(`Cut ${els.length} element${els.length === 1 ? '' : 's'}`);
+    } else if (state.activeAreaId) {
+      const area = store.doc.areas.find((a) => a.id === state.activeAreaId);
+      if (area) {
+        store.deleteArea(area);
+        state.onAnimClose();
+        toast('Cut animation area');
+      }
+    }
+    invalidate();
+  }
+
+  function addImageFromDataURL(dataURL: string) {
+    const img = new Image();
+    img.onload = () => {
+      const MAX = 260; // world units
+      const scale = Math.min(1, MAX / Math.max(img.naturalWidth, img.naturalHeight));
+      const w = Math.max(10, img.naturalWidth * scale);
+      const h = Math.max(10, img.naturalHeight * scale);
+      const el: ImageBox = {
+        id: uid('img'),
+        kind: 'image',
+        x: camera.x - w / 2,
+        y: camera.y - h / 2,
+        w,
+        h,
+        src: dataURL,
+        frame: state.activeFrameId ?? undefined,
+        alayer: state.activeFrameId ? state.activeLayerId ?? undefined : undefined,
+      };
+      store.addElement(el);
+      state.selection = new Set([el.id]);
+      toast('Pasted image');
+      invalidate();
+    };
+    img.src = dataURL;
+  }
+
+  function addTextFromString(text: string) {
+    const wBox = 220;
+    const h = Math.max(30, layoutHeight(layoutText(text, state.font, state.textSize, wBox)));
+    const el: Element = {
+      id: uid('tx'),
+      kind: 'text',
+      x: camera.x - wBox / 2,
+      y: camera.y - h / 2,
+      w: wBox,
+      h,
+      color: state.color,
+      fontSize: state.textSize,
+      font: state.font,
+      text,
+      frame: state.activeFrameId ?? undefined,
+      alayer: state.activeFrameId ? state.activeLayerId ?? undefined : undefined,
+    };
+    store.addElement(el);
+    state.selection = new Set([el.id]);
+    toast('Pasted text');
+    invalidate();
+  }
+
+  /** Smart paste: image from system clipboard → image element; plain text →
+   * textbox; zine content (ours) → elements/area. Falls back to the internal
+   * clipboard when the system one is unreadable. */
+  async function pasteSmart() {
+    try {
+      if (navigator.clipboard?.read) {
+        const items = await navigator.clipboard.read();
+        for (const it of items) {
+          const imgType = it.types.find((t) => t.startsWith('image/'));
+          if (imgType) {
+            const blob = await it.getType(imgType);
+            const fr = new FileReader();
+            fr.onload = () => addImageFromDataURL(fr.result as string);
+            fr.readAsDataURL(blob);
+            return;
+          }
+        }
+      }
+      const txt = await navigator.clipboard?.readText?.();
+      if (txt && txt.trim()) {
+        try {
+          const p = JSON.parse(txt);
+          if (p && p.app === 'infinizine-clip') {
+            try { localStorage.setItem(CLIP_KEY, txt); } catch { /* ignore */ }
+            pasteClipboard();
+            toast('Pasted');
+            return;
+          }
+        } catch { /* not ours — plain text */ }
+        addTextFromString(txt);
+        return;
+      }
+    } catch { /* clipboard unreadable (permissions) — fall back */ }
+    const had = (() => { try { return !!localStorage.getItem(CLIP_KEY); } catch { return false; } })();
+    if (had) {
+      pasteClipboard();
+      toast('Pasted');
+    } else {
+      toast('Clipboard is empty');
+    }
   }
 
   function pasteClipboard() {
@@ -903,8 +1097,12 @@ export function attachInput(
       maxX = Math.max(maxX, x); maxY = Math.max(maxY, y);
     };
     for (const el of payload.elements) {
-      if (el.kind === 'text') { grow(el.x, el.y); grow(el.x + el.w, el.y + el.h); }
-      else for (const pt of el.points) grow(pt.x, pt.y);
+      if (el.kind === 'text' || el.kind === 'image') {
+        grow(el.x, el.y);
+        grow(el.x + el.w, el.y + el.h);
+      } else {
+        for (const pt of el.points) grow(pt.x, pt.y);
+      }
     }
     if (payload.kind === 'area' && payload.area) {
       grow(payload.area.x, payload.area.y);
@@ -963,7 +1161,12 @@ export function attachInput(
   }
 
   let dropCache: (id: string) => void = () => {};
-  const api = { setDropCache(fn: (id: string) => void) { dropCache = fn; } };
+  const api = {
+    setDropCache(fn: (id: string) => void) { dropCache = fn; },
+    copySelection,
+    cutSelection,
+    pasteSmart,
+  };
 
   canvas.addEventListener('pointerdown', (e) => {
     e.preventDefault();
@@ -1046,6 +1249,31 @@ export function attachInput(
             (Math.abs(w.x - el.x) < r || Math.abs(w.x - (el.x + el.w)) < r)) cursor = 'ew-resize';
           break;
         }
+      }
+      // image hover + handle cursors
+      let hoverImage: string | null = null;
+      if (!cursor) {
+        for (const el of [...store.doc.elements].reverse()) {
+          if (el.kind !== 'image' || !frameEditable(el, state)) continue;
+          const r = 12 / z;
+          const inBox = w.x >= el.x && w.x <= el.x + el.w && w.y >= el.y && w.y <= el.y + el.h;
+          const inMove = inRect(w, moveHandleRect(el.x, el.y, z));
+          const inDel = inRect(w, deleteHandleRect(el.x, el.y, el.w, z));
+          if (inBox || inMove || inDel) {
+            hoverImage = el.id;
+            if (inMove) cursor = 'grab';
+            else if (inDel) cursor = 'pointer';
+            else if (Math.hypot(w.x - (el.x + el.w), w.y - (el.y + el.h)) < r) cursor = 'nwse-resize';
+            else if (Math.abs(w.y - (el.y + el.h)) < r && Math.abs(w.x - (el.x + el.w / 2)) < r) cursor = 'ns-resize';
+            else if (Math.abs(w.y - (el.y + el.h / 2)) < r &&
+              (Math.abs(w.x - el.x) < r || Math.abs(w.x - (el.x + el.w)) < r)) cursor = 'ew-resize';
+            break;
+          }
+        }
+      }
+      if (hoverImage !== state.hoverImage) {
+        state.hoverImage = hoverImage;
+        invalidate();
       }
       // area handles hover
       let hoverArea: string | null = null;
@@ -1137,7 +1365,7 @@ export function attachInput(
         return;
       }
     }
-    if (drawingPointer === e.pointerId || panLast || dragPage || dragArea || dragSelection || resizeArea) {
+    if (drawingPointer === e.pointerId || panLast || dragPage || dragArea || dragSelection || resizeArea || resizeImg) {
       e.preventDefault();
       moveAction(e);
     }
@@ -1146,7 +1374,7 @@ export function attachInput(
   const finish = (e: PointerEvent) => {
     touches.delete(e.pointerId);
     if (touches.size < 2) { pinchDist = 0; pinchMid = null; }
-    if (drawingPointer === e.pointerId || dragPage || dragArea || dragSelection || panLast || resizeArea) {
+    if (drawingPointer === e.pointerId || dragPage || dragArea || dragSelection || panLast || resizeArea || resizeImg) {
       drawingPointer = null;
       endAction(e);
     }
@@ -1235,26 +1463,13 @@ export function attachInput(
       return;
     }
     if (mod && e.key === 'x') {
-      if (copySelection()) {
-        e.preventDefault();
-        const els = store.doc.elements.filter((el) => state.selection.has(el.id));
-        if (els.length) {
-          state.selection.clear();
-          store.deleteElements(els);
-        } else if (state.activeAreaId) {
-          const area = store.doc.areas.find((a) => a.id === state.activeAreaId);
-          if (area) {
-            store.deleteArea(area);
-            state.onAnimClose();
-          }
-        }
-        invalidate();
-      }
+      e.preventDefault();
+      cutSelection();
       return;
     }
     if (mod && e.key === 'v') {
       e.preventDefault();
-      pasteClipboard();
+      void pasteSmart();
       return;
     }
     if (mod && e.key === 'z') {

@@ -16,7 +16,11 @@ const renderer = new Renderer(canvas, store, camera, state);
 const input = attachInput(canvas, camera, store, state, () => renderer.invalidate());
 input.setDropCache((id) => renderer.dropFromCache(id));
 
-const uiHooks = buildUI(ui, state, store, camera, () => renderer.invalidate());
+const uiHooks = buildUI(ui, state, store, camera, () => renderer.invalidate(), {
+  copy: () => input.copySelection(),
+  cut: () => input.cutSelection(),
+  paste: () => void input.pasteSmart(),
+});
 
 store.onChange = () => {
   renderer.clearCache(); // ops can add/remove/translate; cheap enough at prototype scale
