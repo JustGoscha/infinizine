@@ -62,15 +62,14 @@ export function densify(points: StrokePoint[], spacing = 2.2): StrokePoint[] {
  * touches stay light:  10% → 14%, 25% → 42%, 50% → 79%, 75% → 97%. */
 export type ToolKind = Stroke['tool'];
 export interface ToolPressure {
-  soft: number; // start exponent: >1 = gentler at feather-light touch
-  sat: number; // saturation exponent: higher = maxes out sooner
+  curve: [number, number, number, number]; // cubic Bézier handles (x1,y1,x2,y2) from (0,0) to (1,1): pressure → effect
   smooth: number; // position denoise radius in screen px (applied after drawing, live + commit)
   pSmooth: number; // pressure low-pass factor 0..1 (1 = raw)
   min: number; // width at zero pressure as a fraction of max
   max: number; // max width as × baseWidth
 }
 export type PressureParams = Record<ToolKind, ToolPressure>;
-const base = { soft: 1.3, sat: 3, smooth: 1.2, pSmooth: 0.3 };
+const base = { curve: [0.55, 0.9, 0.5, 0.95] as [number, number, number, number], smooth: 1.2, pSmooth: 0.3 };
 export const DEFAULT_PRESSURE: PressureParams = {
   pen: { ...base, min: 0.22, max: 1.6 },
   fineliner: { ...base, min: 0.86, max: 1.3 },
@@ -78,14 +77,14 @@ export const DEFAULT_PRESSURE: PressureParams = {
   sketch: { ...base, min: 0.45, max: 1.4 },
   marker: { ...base, min: 1, max: 2.4 },
 };
-const PRESSURE_KEY = 'infinizine-pressure-v2';
+const PRESSURE_KEY = 'infinizine-pressure-v3';
 export const pressure: PressureParams = (() => {
   const out = structuredClone(DEFAULT_PRESSURE);
   try {
     const raw = localStorage.getItem(PRESSURE_KEY);
     if (raw) {
       const p = JSON.parse(raw) as Partial<PressureParams>;
-      for (const t of Object.keys(out) as ToolKind[]) if (p[t]) Object.assign(out[t], p[t]);
+      for (const t of Object.keys(out) as ToolKind[]) if (p[t]) Object.assign(out[t], p[t], { curve: [...(p[t]!.curve ?? out[t].curve)] });
     }
   } catch { /* ignore */ }
   return out;
@@ -103,11 +102,23 @@ export function loadPressure(from: PressureParams) {
   for (const t of Object.keys(pressure) as ToolKind[]) Object.assign(pressure[t], from[t]);
 }
 
-export const easeP = (t: number, tool: ToolKind = 'pen') => {
-  const k = pressure[tool];
-  const g = Math.pow(Math.max(0, Math.min(1, t)), k.soft);
-  return 1 - Math.pow(1 - g, k.sat);
-};
+/** y of the cubic Bézier (0,0)-(x1,y1)-(x2,y2)-(1,1) at a given x. Handles are
+ * kept inside x∈[0,1] so x(t) is monotone; solved by bisection. */
+export function bezierAt(c: [number, number, number, number], x: number): number {
+  const [x1, y1, x2, y2] = c;
+  x = Math.max(0, Math.min(1, x));
+  let lo = 0, hi = 1, t = x;
+  for (let i = 0; i < 24; i++) {
+    t = (lo + hi) / 2;
+    const u = 1 - t;
+    const bx = 3 * u * u * t * x1 + 3 * u * t * t * x2 + t * t * t;
+    if (bx < x) lo = t; else hi = t;
+  }
+  const u = 1 - t;
+  return Math.max(0, Math.min(1, 3 * u * u * t * y1 + 3 * u * t * t * y2 + t * t * t));
+}
+
+export const easeP = (t: number, tool: ToolKind = 'pen') => bezierAt(pressure[tool].curve, t);
 
 /** Spatial Gaussian denoise along the polyline. `sigma` is in world units —
  * pass ~1.2 screen px worth (1.2 / zoom at drawing time) so quantisation

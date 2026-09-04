@@ -1914,9 +1914,8 @@ export function buildUI(
   ];
   const isPTool = (t: Tool): t is PTool => PG_TOOLS.some((o) => o.t === t);
   let pgTool: PTool = isPTool(state.tool) ? state.tool : 'pen';
-  const SLIDERS: { k: keyof typeof pressure.pen; label: string; min: number; max: number; step: number; fmt: (v: number) => string; markerToo?: boolean }[] = [
-    { k: 'soft', label: 'soft start', min: 0.5, max: 3, step: 0.05, fmt: (v) => v.toFixed(2) },
-    { k: 'sat', label: 'saturation', min: 1, max: 6, step: 0.1, fmt: (v) => v.toFixed(1) },
+  type NumKey = 'smooth' | 'pSmooth' | 'min' | 'max';
+  const SLIDERS: { k: NumKey; label: string; min: number; max: number; step: number; fmt: (v: number) => string; markerToo?: boolean }[] = [
     { k: 'smooth', label: 'smoothing', min: 0, max: 6, step: 0.1, fmt: (v) => `${v.toFixed(1)}px`, markerToo: true },
     { k: 'pSmooth', label: 'pressure lp', min: 0.05, max: 1, step: 0.05, fmt: (v) => v.toFixed(2) },
     { k: 'min', label: 'min width', min: 0, max: 1, step: 0.01, fmt: (v) => `${Math.round(v * 100)}%` },
@@ -1932,7 +1931,7 @@ export function buildUI(
     <div class="pg-side">
       <div class="pg-head"><span>Pressure playground</span><button class="pg-x" id="pg-close">×</button></div>
       <div class="pg-tools">${PG_TOOLS.map((o) => `<button class="pg-tool" data-t="${o.t}">${ICONS[o.t]}<span>${o.label}</span></button>`).join('')}</div>
-      <canvas class="pg-curve" id="pg-curve" width="272" height="150"></canvas>
+      <canvas class="pg-curve" id="pg-curve" width="272" height="200" title="Drag the two handles to shape the pressure curve"></canvas>
       ${SLIDERS.map((sl) => `<label class="pg-row" data-k="${sl.k}"><span>${sl.label}</span><input type="range" data-k="${sl.k}" min="${sl.min}" max="${sl.max}" step="${sl.step}"><b></b></label>`).join('')}
       <div class="pg-actions">
         <button id="pg-save" class="pg-primary">Save</button>
@@ -1959,44 +1958,95 @@ export function buildUI(
   let pgSaved = structuredClone(pressure); // what's on disk; unsaved edits revert to this on close
   const pgDirty = () => JSON.stringify(pgSaved) !== JSON.stringify(pressure);
   const pgCurve = pg.querySelector('#pg-curve') as HTMLCanvasElement;
+  const PAD = 12;
+  const toPx = (x: number, y: number) => [PAD + (pgCurve.width - 2 * PAD) * x, pgCurve.height - PAD - (pgCurve.height - 2 * PAD) * y];
   function drawCurve() {
     const c = pgCurve.getContext('2d')!;
-    const W = pgCurve.width, H = pgCurve.height, pad = 8;
+    const W = pgCurve.width, H = pgCurve.height;
     c.clearRect(0, 0, W, H);
     c.strokeStyle = 'rgba(42,36,26,0.18)';
     c.lineWidth = 1;
     for (let i = 0; i <= 4; i++) {
-      const x = pad + ((W - 2 * pad) * i) / 4, y = pad + ((H - 2 * pad) * i) / 4;
-      c.beginPath(); c.moveTo(x, pad); c.lineTo(x, H - pad); c.stroke();
-      c.beginPath(); c.moveTo(pad, y); c.lineTo(W - pad, y); c.stroke();
+      const [x] = toPx(i / 4, 0), [, y] = toPx(0, i / 4);
+      c.beginPath(); c.moveTo(x, PAD); c.lineTo(x, H - PAD); c.stroke();
+      c.beginPath(); c.moveTo(PAD, y); c.lineTo(W - PAD, y); c.stroke();
     }
     const k = pressure[pgTool];
+    // width band: how thick the line actually gets (min..max) over pressure
     c.fillStyle = 'rgba(42,36,26,0.08)';
     c.beginPath();
     for (let i = 0; i <= 100; i++) {
       const t = i / 100;
       const w = pgTool === 'marker' ? 1 : k.min + (1 - k.min) * easeP(t, pgTool);
-      const x = pad + (W - 2 * pad) * t, y = H - pad - (H - 2 * pad) * w;
+      const [x, y] = toPx(t, w);
       i ? c.lineTo(x, y) : c.moveTo(x, y);
     }
-    c.lineTo(W - pad, H - pad); c.lineTo(pad, H - pad); c.closePath(); c.fill();
+    c.lineTo(...(toPx(1, 0) as [number, number])); c.lineTo(...(toPx(0, 0) as [number, number])); c.closePath(); c.fill();
+    // handle arms
+    const [x1, y1, x2, y2] = k.curve;
+    c.strokeStyle = 'rgba(224,90,40,0.7)';
+    c.lineWidth = 1.5;
+    c.beginPath(); c.moveTo(...(toPx(0, 0) as [number, number])); c.lineTo(...(toPx(x1, y1) as [number, number])); c.stroke();
+    c.beginPath(); c.moveTo(...(toPx(1, 1) as [number, number])); c.lineTo(...(toPx(x2, y2) as [number, number])); c.stroke();
+    // curve
     c.strokeStyle = '#2a241a';
     c.lineWidth = 2.5;
     c.beginPath();
     for (let i = 0; i <= 100; i++) {
       const t = i / 100;
-      const x = pad + (W - 2 * pad) * t, y = H - pad - (H - 2 * pad) * easeP(t, pgTool);
+      const [x, y] = toPx(t, easeP(t, pgTool));
       i ? c.lineTo(x, y) : c.moveTo(x, y);
     }
     c.stroke();
+    // handles
+    for (const [hx, hy] of [[x1, y1], [x2, y2]]) {
+      const [x, y] = toPx(hx, hy);
+      c.fillStyle = '#E05A28';
+      c.strokeStyle = '#fff';
+      c.lineWidth = 2;
+      c.beginPath(); c.arc(x, y, 7, 0, Math.PI * 2); c.fill(); c.stroke();
+    }
     c.fillStyle = 'rgba(42,36,26,0.6)';
     c.font = '10px Libre Franklin, sans-serif';
-    c.fillText('pressure →', pad + 2, H - 1);
-    c.save(); c.translate(1, pad + 40); c.rotate(-Math.PI / 2); c.fillText('effect →', 0, 8); c.restore();
-    c.fillText(`${pgTool} · 50% → ${Math.round(easeP(0.5, pgTool) * 100)}%`, W - 110, pad + 12);
+    c.fillText('pressure →', PAD + 2, H - 2);
+    c.save(); c.translate(2, PAD + 44); c.rotate(-Math.PI / 2); c.fillText('effect →', 0, 8); c.restore();
+    c.fillText(`${pgTool} · 50% → ${Math.round(easeP(0.5, pgTool) * 100)}%`, W - 112, PAD + 12);
   }
+  // drag the Bézier handles directly in the graph
+  let dragHandle: 0 | 1 | null = null;
+  const curvePos = (e: PointerEvent) => {
+    const r = pgCurve.getBoundingClientRect();
+    const sx = pgCurve.width / r.width, sy = pgCurve.height / r.height;
+    const px = (e.clientX - r.left) * sx, py = (e.clientY - r.top) * sy;
+    return {
+      x: Math.max(0, Math.min(1, (px - PAD) / (pgCurve.width - 2 * PAD))),
+      y: Math.max(0, Math.min(1, (pgCurve.height - PAD - py) / (pgCurve.height - 2 * PAD))),
+      px, py,
+    };
+  };
+  pgCurve.addEventListener('pointerdown', (e) => {
+    if (pgTool === 'marker') return;
+    const { px, py } = curvePos(e);
+    const [x1, y1, x2, y2] = pressure[pgTool].curve;
+    const d = (hx: number, hy: number) => { const [x, y] = toPx(hx, hy); return Math.hypot(px - x, py - y); };
+    const d1 = d(x1, y1), d2 = d(x2, y2);
+    dragHandle = Math.min(d1, d2) < 40 ? (d1 <= d2 ? 0 : 1) : null;
+    if (dragHandle !== null) { pgCurve.setPointerCapture(e.pointerId); e.preventDefault(); }
+  });
+  pgCurve.addEventListener('pointermove', (e) => {
+    if (dragHandle === null) return;
+    const { x, y } = curvePos(e);
+    const cv = pressure[pgTool].curve;
+    if (dragHandle === 0) { cv[0] = x; cv[1] = y; } else { cv[2] = x; cv[3] = y; }
+    restyle();
+  });
+  const endDrag = () => { dragHandle = null; };
+  pgCurve.addEventListener('pointerup', endDrag);
+  pgCurve.addEventListener('pointercancel', endDrag);
+
   function syncPg() {
     const k = pressure[pgTool];
+    pgCurve.style.opacity = pgTool === 'marker' ? '0.35' : '1';
     for (const sl of SLIDERS) {
       const row = pg.querySelector(`.pg-row[data-k="${sl.k}"]`) as HTMLElement;
       row.hidden = pgTool === 'marker' && !sl.markerToo;
@@ -2024,7 +2074,7 @@ export function buildUI(
   });
   pg.querySelectorAll<HTMLInputElement>('.pg-row input').forEach((inp) =>
     inp.addEventListener('input', () => {
-      pressure[pgTool][inp.dataset.k as keyof typeof pressure.pen] = Number(inp.value);
+      pressure[pgTool][inp.dataset.k as NumKey] = Number(inp.value);
       restyle();
     }),
   );
