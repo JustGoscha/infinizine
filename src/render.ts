@@ -541,6 +541,7 @@ export class Renderer {
     const { canvas, ctx, camera } = this;
     const dpr = window.devicePixelRatio || 1;
     const vw = canvas.clientWidth, vh = canvas.clientHeight;
+    if (!vw || !vh) return; // hidden (e.g. the playground's scratch canvas while closed)
     if (canvas.width !== vw * dpr || canvas.height !== vh * dpr) {
       canvas.width = vw * dpr;
       canvas.height = vh * dpr;
@@ -558,9 +559,11 @@ export class Renderer {
     if (useStatic) {
       const st = this.staticLayer;
       if (!st.valid || st.key !== this.staticKey()) this.buildStatic(vw, vh, dpr);
-      ctx.setTransform(1, 0, 0, 1, 0, 0);
-      ctx.drawImage(st.canvas, 0, 0);
-      ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
+      if (st.canvas.width && st.canvas.height) {
+        ctx.setTransform(1, 0, 0, 1, 0, 0);
+        ctx.drawImage(st.canvas, 0, 0);
+        ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
+      }
     } else {
       // Desk (chosen paper color)
       ctx.fillStyle = paper;
