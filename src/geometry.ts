@@ -135,22 +135,90 @@ export interface ToolPressure {
   nib: number; // marker: broad-nib angle in degrees (0 = horizontal edge)
 }
 export type PressureParams = Record<ToolKind, ToolPressure>;
-const base = {
-  curve: curveFromHandles([0.55, 0.9, 0.5, 0.95]),
-  smooth: 2,
-  pSmooth: 0.3,
-  tilt: 1,
-  // flat-ish angles count, near-upright barely: eases in, then ramps
-  tiltCurve: curveFromHandles([0.6, 0.05, 0.7, 1]),
-  nib: 45,
-};
-const fresh = () => structuredClone(base);
+// Tuned on an iPad with an Apple Pencil (exported from the playground) — these are the defaults.
 export const DEFAULT_PRESSURE: PressureParams = {
-  pen: { ...fresh(), min: 0.22, max: 1.6 },
-  fineliner: { ...fresh(), min: 0.86, max: 1.3 },
-  pencil: { ...fresh(), min: 0.8, max: 1, tilt: 2.4 },
-  sketch: { ...fresh(), min: 0.45, max: 1.4 },
-  marker: { ...fresh(), min: 1, max: 2.4 },
+  pen: {
+    curve: [
+      { x: 0, y: 0.429, i: [0, 0], o: [0.187, 0.006], s: false },
+      { x: 0.342, y: 0.931, i: [-0.095, -0.007], o: [0.367, 0.026], s: true },
+      { x: 1, y: 0.578, i: [-0.297, -0.01], o: [0, 0], s: false },
+    ],
+    tiltCurve: [
+      { x: 0, y: 0, i: [0, 0], o: [0.6, 0.05], s: false },
+      { x: 1, y: 1, i: [-0.3, 0], o: [0, 0], s: false },
+    ],
+    smooth: 3.1,
+    pSmooth: 1,
+    tilt: 1,
+    min: 0.22,
+    max: 1.6,
+    nib: 45,
+  },
+  fineliner: {
+    curve: [
+      { x: 0, y: 0, i: [0, 0], o: [0.007, 0.808], s: false },
+      { x: 1, y: 1, i: [-0.79, -0], o: [0, 0], s: false },
+    ],
+    tiltCurve: [
+      { x: 0, y: 0, i: [0, 0], o: [0.6, 0.05], s: false },
+      { x: 1, y: 1, i: [-0.3, 0], o: [0, 0], s: false },
+    ],
+    smooth: 3.3,
+    pSmooth: 0.3,
+    tilt: 1,
+    min: 0.83,
+    max: 1.3,
+    nib: 45,
+  },
+  pencil: {
+    curve: [
+      { x: 0, y: 0, i: [0, 0], o: [-0.008, 0.322], s: false },
+      { x: 1, y: 1, i: [-0.727, -0], o: [0, 0], s: false },
+    ],
+    tiltCurve: [
+      { x: 0, y: 0, i: [0, 0], o: [0.088, -0.009], s: false },
+      { x: 0.515, y: 0.036, i: [-0.119, -0.052], o: [0.285, 0.003], s: false },
+      { x: 1, y: 1, i: [-0.131, -0.004], o: [0, 0], s: false },
+    ],
+    smooth: 2.7,
+    pSmooth: 0.3,
+    tilt: 40,
+    min: 0.56,
+    max: 1,
+    nib: 45,
+  },
+  sketch: {
+    curve: [
+      { x: 0, y: 0, i: [0, 0], o: [0.55, 0.9], s: false },
+      { x: 1, y: 1, i: [-0.5, -0.05], o: [0, 0], s: false },
+    ],
+    tiltCurve: [
+      { x: 0, y: 0, i: [0, 0], o: [0.6, 0.05], s: false },
+      { x: 1, y: 1, i: [-0.3, 0], o: [0, 0], s: false },
+    ],
+    smooth: 2,
+    pSmooth: 0.3,
+    tilt: 1,
+    min: 0.45,
+    max: 1.4,
+    nib: 45,
+  },
+  marker: {
+    curve: [
+      { x: 0, y: 0, i: [0, 0], o: [0.36, 0.938], s: false },
+      { x: 1, y: 1, i: [-0.504, 0.026], o: [0, 0], s: false },
+    ],
+    tiltCurve: [
+      { x: 0, y: 0, i: [0, 0], o: [0.6, 0.05], s: false },
+      { x: 1, y: 1, i: [-0.3, 0], o: [0, 0], s: false },
+    ],
+    smooth: 3,
+    pSmooth: 0.3,
+    tilt: 1,
+    min: 1,
+    max: 2.4,
+    nib: 45,
+  },
 };
 const PRESSURE_KEY = 'infinizine-pressure-v3';
 export const pressure: PressureParams = (() => {
