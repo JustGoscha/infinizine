@@ -1984,7 +1984,7 @@ export function buildUI(
   const rigRenderer = new Renderer(rigCanvas, rigStore, rigCamera, rigState);
   const rigInput = attachInput(rigCanvas, rigCamera, rigStore, rigState, () => rigRenderer.invalidate(), 'modal');
   rigInput.setDropCache((id) => rigRenderer.dropFromCache(id));
-  rigStore.onChange = () => { rigRenderer.clearCache(); rigRenderer.invalidate(); };
+  rigStore.onChange = (info) => rigRenderer.docChanged(info);
   rigState.updateCursor = () => { rigCanvas.style.cursor = cursorFor(rigState.tool, rigCamera.zoom, rigState.effectiveWidth(rigCamera.zoom)); };
   window.addEventListener('izine-restyle', () => { rigRenderer.clearCache(); rigRenderer.invalidate(); });
 

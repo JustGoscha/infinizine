@@ -25,9 +25,8 @@ const uiHooks = buildUI(ui, state, store, camera, () => renderer.invalidate(), {
   paste: () => void input.pasteSmart(),
 });
 
-store.onChange = () => {
-  renderer.clearCache(); // ops can add/remove/translate; cheap enough at prototype scale
-  renderer.invalidate();
+store.onChange = (info) => {
+  renderer.docChanged(info); // targeted: only touched elements leave the caches
   uiHooks.docChanged();
 };
 

@@ -6,14 +6,23 @@ import { Element, FillShape, Page, Stroke, StrokePoint } from './types';
 import { strokeOutline, pencilOutlines, markerPaths, outlineToPath, elementBBox, bboxIntersects, densify, filterPressure, easeP, easeTilt, LiveDenoiser, denoiseClosed, pressure, BBox } from './geometry';
 import { layoutText, fontFor, segWidth, LINE_HEIGHT } from './text';
 import { moveHandleRect, moveAllHandleRect, deleteHandleRect, eyeHandleRect, type InputState } from './input';
-import { Store } from './store';
+import { Store, ChangeInfo } from './store';
 import { reportCrash } from './crash';
 
+type View = { x: number; y: number; w: number; h: number }; // camera viewport, world coords
 interface CacheEntry { path: Path2D; bbox: BBox; passes?: Path2D[]; core?: Path2D; detail: number }
 
 export class Renderer {
   private ctx: CanvasRenderingContext2D;
   private cache = new Map<string, CacheEntry>();
+  // Static layer: everything committed and not animated, rendered once for the
+  // current camera. Per frame we blit it and draw live/animated/UI on top, so
+  // drawing speed no longer depends on how much is on the page.
+  private staticLayer: {
+    canvas: HTMLCanvasElement;
+    valid: boolean;
+    key: string; // camera + size + style fingerprint
+  } = { canvas: document.createElement('canvas'), valid: false, key: '' };
   private liveSmooth = new LiveDenoiser(); // vector live stroke
   private livePencilSmooth = new LiveDenoiser(); // pencil live stroke (separate: stamped incrementally)
   private dirty = true;
@@ -37,8 +46,8 @@ export class Renderer {
         this.fpsFrames = 0;
         this.fpsT = t;
       }
-      // areas animate continuously (deselected ones always play)
-      const playing = this.store.doc.areas.length > 0;
+      // areas animate continuously — but only the ones actually in view cost frames
+      const playing = this.anyAreaInView();
       if (this.dirty || this.input.live || playing) {
         this.dirty = false;
         try {
@@ -70,8 +79,193 @@ export class Renderer {
     }
     return img;
   }
-  dropFromCache(id: string) { this.cache.delete(id); this.pencilCache.delete(id); }
-  clearCache() { this.cache.clear(); this.pencilCache.clear(); }
+  dropFromCache(id: string) { this.cache.delete(id); this.pencilCache.delete(id); this.staticLayer.valid = false; }
+  clearCache() { this.cache.clear(); this.pencilCache.clear(); this.staticLayer.valid = false; }
+
+  /** Document changed: drop only the touched elements' caches; keep the static
+   * layer when the change is a fresh append we can paint on top of. */
+  docChanged(info?: ChangeInfo) {
+    if (!info) { this.clearCache(); this.invalidate(); return; }
+    for (const id of info.ids) { this.cache.delete(id); this.pencilCache.delete(id); }
+    const st = this.staticLayer;
+    const canAppend =
+      st.valid &&
+      info.added &&
+      info.added.length &&
+      st.key === this.staticKey() &&
+      info.added.every((el) => this.isStill(el) && el.layer !== 'back');
+    if (canAppend) {
+      this.paintOntoStatic(info.added!);
+    } else {
+      st.valid = false;
+    }
+    this.invalidate();
+  }
+
+  private isStill(el: Element): boolean {
+    return !el.frame && !(el.kind === 'stroke' && el.area);
+  }
+
+  private areaInView(a: { x: number; y: number; w: number; h: number }, view: View): boolean {
+    // grown by half its size: live ink may spill outside the frame when not clipped
+    const gx = a.w * 0.5, gy = a.h * 0.5;
+    return bboxIntersects({ minX: a.x - gx, minY: a.y - gy, maxX: a.x + a.w + gx, maxY: a.y + a.h + gy }, view);
+  }
+  private anyAreaInView(): boolean {
+    const areas = this.store.doc.areas;
+    if (!areas.length) return false;
+    const view = this.camera.viewport(this.canvas.clientWidth, this.canvas.clientHeight);
+    return areas.some((a) => this.areaInView(a, view));
+  }
+
+  private focusAreaId(): string | null {
+    return this.input.activeAreaId && !this.input.presenting ? this.input.activeAreaId : null;
+  }
+  private staticKey(): string {
+    const { camera, canvas } = this;
+    const d = this.store.doc;
+    return [camera.x, camera.y, camera.zoom, canvas.clientWidth, canvas.clientHeight, window.devicePixelRatio || 1,
+      this.focusAreaId() ?? '', d.paper ?? '', d.pattern ?? ''].join('|');
+  }
+
+  /** Rebuild the static layer for the current camera. */
+  private buildStatic(vw: number, vh: number, dpr: number) {
+    const st = this.staticLayer;
+    const sc = st.canvas;
+    if (sc.width !== vw * dpr || sc.height !== vh * dpr) { sc.width = vw * dpr; sc.height = vh * dpr; }
+    const sctx = sc.getContext('2d')!;
+    const saved = this.ctx;
+    this.ctx = sctx; // helpers (pattern, pencil, grain) draw through this.ctx
+    try {
+      const { camera } = this;
+      const paper = this.store.doc.paper ?? '#F7F4EC';
+      sctx.setTransform(dpr, 0, 0, dpr, 0, 0);
+      sctx.fillStyle = paper;
+      sctx.fillRect(0, 0, vw, vh);
+      this.drawPattern(vw, vh, paper);
+      const view = camera.viewport(vw, vh);
+      const z = camera.zoom;
+      sctx.save();
+      sctx.translate(vw / 2, vh / 2);
+      sctx.scale(z, z);
+      sctx.translate(-camera.x, -camera.y);
+      const dim = this.focusAreaId() ? 0.3 : 1;
+      const still = this.store.doc.elements.filter((el) => this.isStill(el));
+      for (const el of still) if (el.layer === 'back') this.paintElement(el, view, z, dim);
+      for (const el of still) if (el.layer !== 'back') this.paintElement(el, view, z, dim);
+      sctx.globalAlpha = 1;
+      sctx.restore();
+    } finally {
+      this.ctx = saved;
+    }
+    st.valid = true;
+    st.key = this.staticKey();
+  }
+
+  /** Append freshly committed elements onto the (valid) static layer. */
+  private paintOntoStatic(els: Element[]) {
+    const { camera, canvas } = this;
+    const vw = canvas.clientWidth, vh = canvas.clientHeight, dpr = window.devicePixelRatio || 1;
+    const sctx = this.staticLayer.canvas.getContext('2d')!;
+    const saved = this.ctx;
+    this.ctx = sctx;
+    try {
+      const view = camera.viewport(vw, vh);
+      const z = camera.zoom;
+      sctx.setTransform(dpr, 0, 0, dpr, 0, 0);
+      sctx.save();
+      sctx.translate(vw / 2, vh / 2);
+      sctx.scale(z, z);
+      sctx.translate(-camera.x, -camera.y);
+      const dim = this.focusAreaId() ? 0.3 : 1;
+      for (const el of els) this.paintElement(el, view, z, dim);
+      sctx.globalAlpha = 1;
+      sctx.restore();
+    } finally {
+      this.ctx = saved;
+    }
+  }
+
+  /** Paint one element's body (no handles/selection) through this.ctx. Returns false if culled. */
+  private paintElement(el: Element, view: View, z: number, dim: number): boolean {
+    const ctx = this.ctx;
+    if (el.kind === 'text') {
+      const b = elementBBox(el);
+      if (!bboxIntersects(b, view)) return false;
+      ctx.globalAlpha = dim;
+      ctx.fillStyle = el.color;
+      ctx.textAlign = 'left';
+      ctx.textBaseline = 'top';
+      const family = el.font ?? 'franklin';
+      let ty = el.y;
+      for (const line of layoutText(el.text, family, el.fontSize, el.w)) {
+        let tx = el.x;
+        for (const seg of line.segs) {
+          ctx.font = fontFor(family, line.size, seg.b, seg.i);
+          ctx.fillText(seg.t, tx, ty);
+          tx += segWidth(family, line, seg);
+        }
+        ty += line.size * LINE_HEIGHT;
+      }
+      return true;
+    }
+    if (el.kind === 'image') {
+      const b = elementBBox(el);
+      if (!bboxIntersects(b, view)) return false;
+      const img = this.image(el.src);
+      if (img.complete && img.naturalWidth) {
+        ctx.globalAlpha = dim;
+        ctx.drawImage(img, el.x, el.y, el.w, el.h);
+      }
+      return true;
+    }
+    const e = this.entry(el);
+    if (!bboxIntersects(e.bbox, view)) return false;
+    if (el.kind === 'stroke' && el.tool === 'pencil') {
+      const pr = this.pencilRaster(el, z);
+      ctx.globalAlpha = el.opacity * dim;
+      ctx.drawImage(pr.c, pr.bbox.minX, pr.bbox.minY, pr.c.width / pr.bucket, pr.c.height / pr.bucket);
+    } else if (el.kind === 'stroke' && el.tool === 'sketch' && e.passes) {
+      ctx.save();
+      ctx.globalCompositeOperation = 'multiply';
+      ctx.fillStyle = el.color;
+      for (const pass of e.passes) {
+        ctx.globalAlpha = 0.42 * el.opacity * dim;
+        ctx.fill(pass);
+      }
+      ctx.restore();
+    } else {
+      ctx.globalAlpha = el.opacity * dim;
+      ctx.fillStyle = el.color;
+      ctx.fill(e.path);
+    }
+    return true;
+  }
+
+  /** Handles + selection outline for one element (main ctx, world transform). */
+  private paintElementUi(el: Element, z: number) {
+    const ctx = this.ctx;
+    const selected = this.input.selection.has(el.id);
+    if (this.input.presenting) return;
+    if (el.kind === 'text' || el.kind === 'image') {
+      const hovered = el.kind === 'text' ? this.input.hoverText === el.id : this.input.hoverImage === el.id;
+      if (hovered || selected) this.drawBoxHandles(el.x, el.y, el.w, el.h, z);
+      if (selected) {
+        ctx.globalAlpha = 0.9;
+        ctx.strokeStyle = '#E8590C';
+        ctx.lineWidth = 1.5 / z;
+        ctx.strokeRect(el.x - 2, el.y - 2, el.w + 4, el.h + 4);
+      }
+      return;
+    }
+    if (selected) {
+      const e = this.entry(el);
+      ctx.globalAlpha = 0.9;
+      ctx.strokeStyle = '#E8590C';
+      ctx.lineWidth = 1.5 / z;
+      ctx.stroke(e.core ?? e.path);
+    }
+  }
 
   /** Outline detail bucket for the current zoom: 1 at 100%, doubling per
    * zoom octave. Cached outlines are rebuilt when the bucket changes so a
@@ -355,11 +549,24 @@ export class Renderer {
 
     const presenting = this.input.presenting;
     const paper = this.store.doc.paper ?? '#F7F4EC';
+    const live = this.input.live;
 
-    // Desk (chosen paper color)
-    ctx.fillStyle = paper;
-    ctx.fillRect(0, 0, vw, vh);
-    if (!presenting) this.drawPattern(vw, vh, paper);
+    // Static layer for the committed, non-animated content. Skipped while
+    // presenting (page clip), while the eraser hides elements, and when a
+    // paint-behind live stroke must render underneath existing ink.
+    const useStatic = !presenting && this.input.hidden.size === 0 && !(live && live.layer === 'back');
+    if (useStatic) {
+      const st = this.staticLayer;
+      if (!st.valid || st.key !== this.staticKey()) this.buildStatic(vw, vh, dpr);
+      ctx.setTransform(1, 0, 0, 1, 0, 0);
+      ctx.drawImage(st.canvas, 0, 0);
+      ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
+    } else {
+      // Desk (chosen paper color)
+      ctx.fillStyle = paper;
+      ctx.fillRect(0, 0, vw, vh);
+      if (!presenting) this.drawPattern(vw, vh, paper);
+    }
 
     const view = camera.viewport(vw, vh);
     const z = camera.zoom;
@@ -380,92 +587,11 @@ export class Renderer {
 
     // Elements, culled; 'back' layer first, then 'front' (paint-behind toggle)
     const selected = this.input.selection;
-    const live = this.input.live;
     // focus mode: while an area is being edited, everything outside it dims
-    const focusAreaId =
-      this.input.activeAreaId && !this.input.presenting ? this.input.activeAreaId : null;
+    const focusAreaId = this.focusAreaId();
     let dimFactor = 1;
     const drawEl = (el: Element) => {
-      if (el.kind === 'text') {
-        const b = elementBBox(el);
-        if (!bboxIntersects(b, view)) return;
-        ctx.globalAlpha = dimFactor;
-        ctx.fillStyle = el.color;
-        ctx.textAlign = 'left';
-        ctx.textBaseline = 'top';
-        const family = el.font ?? 'franklin';
-        let ty = el.y;
-        for (const line of layoutText(el.text, family, el.fontSize, el.w)) {
-          let tx = el.x;
-          for (const seg of line.segs) {
-            ctx.font = fontFor(family, line.size, seg.b, seg.i);
-            ctx.fillText(seg.t, tx, ty);
-            tx += segWidth(family, line, seg);
-          }
-          ty += line.size * LINE_HEIGHT;
-        }
-        if ((this.input.hoverText === el.id || selected.has(el.id)) && !this.input.presenting) {
-          this.drawBoxHandles(el.x, el.y, el.w, el.h, z);
-        }
-        if (selected.has(el.id) && !presenting) {
-          ctx.strokeStyle = '#E8590C';
-          ctx.lineWidth = 1.5 / z;
-          ctx.strokeRect(el.x - 2, el.y - 2, el.w + 4, el.h + 4);
-        }
-        return;
-      }
-      if (el.kind === 'image') {
-        const b = elementBBox(el);
-        if (!bboxIntersects(b, view)) return;
-        const img = this.image(el.src);
-        if (img.complete && img.naturalWidth) {
-          ctx.globalAlpha = dimFactor;
-          ctx.drawImage(img, el.x, el.y, el.w, el.h);
-        }
-        if ((this.input.hoverImage === el.id || selected.has(el.id)) && !this.input.presenting) {
-          this.drawBoxHandles(el.x, el.y, el.w, el.h, z);
-        }
-        if (selected.has(el.id) && !presenting) {
-          ctx.globalAlpha = 0.9;
-          ctx.strokeStyle = '#E8590C';
-          ctx.lineWidth = 1.5 / z;
-          ctx.strokeRect(el.x - 2, el.y - 2, el.w + 4, el.h + 4);
-        }
-        return;
-      }
-      const e = this.entry(el);
-      if (!bboxIntersects(e.bbox, view)) return;
-      if (el.kind === 'stroke' && el.tool === 'pencil') {
-        const pr = this.pencilRaster(el, z);
-        ctx.globalAlpha = el.opacity * dimFactor;
-        ctx.drawImage(
-          pr.c,
-          pr.bbox.minX,
-          pr.bbox.minY,
-          pr.c.width / pr.bucket,
-          pr.c.height / pr.bucket,
-        );
-      } else if (el.kind === 'stroke' && el.tool === 'sketch' && e.passes) {
-        ctx.save();
-        ctx.globalCompositeOperation = 'multiply';
-        ctx.fillStyle = el.color;
-        for (const pass of e.passes) {
-          ctx.globalAlpha = 0.42 * el.opacity * dimFactor;
-          ctx.fill(pass);
-        }
-        ctx.restore();
-      } else {
-        ctx.globalAlpha = el.opacity * dimFactor;
-        ctx.fillStyle = el.color;
-        ctx.fill(e.path);
-      }
-      // selection outline applies to every stroke flavor
-      if (selected.has(el.id) && !presenting) {
-        ctx.globalAlpha = 0.9;
-        ctx.strokeStyle = '#E8590C';
-        ctx.lineWidth = 1.5 / z;
-        ctx.stroke(e.core ?? e.path);
-      }
+      if (this.paintElement(el, view, z, dimFactor)) this.paintElementUi(el, z);
     };
     const drawLive = () => {
       if (!live) return;
@@ -658,13 +784,22 @@ export class Renderer {
     };
 
     if (live?.layer === 'back') drawLive(); // live back-ink previews behind existing back-ink
-    dimFactor = focusAreaId ? 0.3 : 1;
-    for (const el of still) if (el.layer === 'back') drawEl(el);
-    for (const el of still) if (el.layer !== 'back') drawEl(el);
-    dimFactor = 1;
+    if (useStatic) {
+      // bodies are in the static layer; only handles/selection outlines here
+      for (const el of still) {
+        const ui = selected.has(el.id) || this.input.hoverText === el.id || this.input.hoverImage === el.id;
+        if (ui && bboxIntersects(elementBBox(el), view)) this.paintElementUi(el, z);
+      }
+    } else {
+      dimFactor = focusAreaId ? 0.3 : 1;
+      for (const el of still) if (el.layer === 'back') drawEl(el);
+      for (const el of still) if (el.layer !== 'back') drawEl(el);
+      dimFactor = 1;
+    }
 
     // Animated elements: per area, per layer (bottom first); frame ownership decides the layer
     for (const area of this.store.doc.areas) {
+      if (!this.areaInView(area, view)) continue; // off-screen areas cost nothing
       dimFactor = focusAreaId && area.id !== focusAreaId ? 0.3 : 1;
       if (area.clip) {
         ctx.save();

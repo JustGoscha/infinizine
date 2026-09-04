@@ -40,6 +40,40 @@ type Op =
   | { type: 'layer-flag'; areaId: string; layerId: string; field: 'hidden' | 'loop'; before: boolean; after: boolean }
   | { type: 'area-flag'; areaId: string; field: 'hideFrames' | 'hideLive'; before: boolean; after: boolean };
 
+/** What a committed/undone op touched, for targeted cache invalidation. */
+export interface ChangeInfo {
+  ids: string[]; // elements whose geometry/colour changed (or were added/removed)
+  added?: Element[]; // freshly appended elements (safe to paint on top incrementally)
+}
+function changeInfo(op: Op): ChangeInfo {
+  switch (op.type) {
+    case 'add-elements':
+      return { ids: op.elements.map((e) => e.id), added: op.at ? undefined : op.elements };
+    case 'delete-elements':
+      return { ids: op.elements.map((e) => e.id) };
+    case 'move-elements':
+    case 'move-page-content':
+    case 'move-area-content':
+      return { ids: op.ids };
+    case 'update-text':
+    case 'resize-text':
+    case 'resize-image':
+      return { ids: [op.id] };
+    case 'recolor-elements':
+    case 'retime-strokes':
+      return { ids: op.items.map((i) => i.id) };
+    case 'add-area':
+    case 'delete-area':
+    case 'add-frame':
+    case 'delete-frame':
+    case 'add-anim-layer':
+    case 'delete-anim-layer':
+      return { ids: op.elements.map((e) => e.id) };
+    default:
+      return { ids: [] }; // pages, area rects, ordering, styles: element caches stay valid
+  }
+}
+
 // Zine library: an index of saved documents + one localStorage entry per doc.
 const LEGACY_KEY = 'infinicanvas-doc-v1';
 const INDEX_KEY = 'infinizine-docs';
@@ -104,7 +138,9 @@ export class Store {
   private undoStack: Op[] = [];
   private redoStack: Op[] = [];
   private saveTimer: number | undefined;
-  onChange: () => void = () => {};
+  /** called after every change; `info` says which elements changed so caches
+   * can be invalidated precisely (undefined = everything) */
+  onChange: (info?: ChangeInfo) => void = () => {};
 
   private ephemeral = false; // scratch store (pressure playground): never touches localStorage
   /** resolves once the current document has been loaded from IndexedDB */
@@ -279,7 +315,7 @@ export class Store {
     if (this.undoStack.length > 300) this.undoStack.shift();
     this.redoStack = [];
     this.scheduleSave();
-    this.onChange();
+    this.onChange(changeInfo(op));
   }
 
   private apply(op: Op) {
@@ -555,10 +591,11 @@ export class Store {
   undo() {
     const op = this.undoStack.pop();
     if (!op) return;
-    this.apply(this.invert(op));
+    const inv = this.invert(op);
+    this.apply(inv);
     this.redoStack.push(op);
     this.scheduleSave();
-    this.onChange();
+    this.onChange(changeInfo(inv));
   }
 
   redo() {
@@ -567,7 +604,7 @@ export class Store {
     this.apply(op);
     this.undoStack.push(op);
     this.scheduleSave();
-    this.onChange();
+    this.onChange(changeInfo(op));
   }
 
   get canUndo() { return this.undoStack.length > 0; }
