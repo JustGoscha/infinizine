@@ -2384,8 +2384,16 @@ export function buildUI(
   };
   restoreColor();
 
+  // the document arrives asynchronously (IndexedDB) and can switch (library):
+  // rebuild the palette row whenever the active palette differs from what's shown
+  let shownPalette = store.doc.palette;
   return {
     docChanged() {
+      if (store.doc.palette !== shownPalette) {
+        shownPalette = store.doc.palette;
+        buildPalRow();
+        if (!palettePop.classList.contains('hidden')) buildPalettePopover();
+      }
       restoreColor();
       if (tlAreaId && !tl.classList.contains('hidden')) renderTimeline();
     },
