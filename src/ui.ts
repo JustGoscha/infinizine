@@ -1907,11 +1907,11 @@ export function buildUI(
   pg.className = 'playground hidden';
   type PTool = 'pen' | 'pencil' | 'sketch' | 'fineliner' | 'marker';
   const PG_TOOLS: { t: PTool; label: string }[] = [
-    { t: 'pen', label: 'Pen' }, { t: 'pencil', label: 'Pencil' }, { t: 'sketch', label: 'Sketch' },
+    { t: 'pen', label: 'Pen' }, { t: 'pencil', label: 'Pencil' },
     { t: 'fineliner', label: 'Fineliner' }, { t: 'marker', label: 'Marker' },
   ];
   const isPTool = (t: Tool): t is PTool => PG_TOOLS.some((o) => o.t === t);
-  let pgTool: PTool = isPTool(state.tool) ? state.tool : 'pen';
+  let pgTool: PTool = isPTool(state.tool) && state.tool !== 'sketch' ? state.tool : 'pen';
   const SLIDERS: { k: keyof typeof pressure.pen; label: string; min: number; max: number; step: number; fmt: (v: number) => string; markerToo?: boolean }[] = [
     { k: 'soft', label: 'soft start', min: 0.5, max: 3, step: 0.05, fmt: (v) => v.toFixed(2) },
     { k: 'sat', label: 'saturation', min: 1, max: 6, step: 0.1, fmt: (v) => v.toFixed(1) },
