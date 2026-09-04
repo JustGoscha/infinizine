@@ -118,7 +118,7 @@ const TOOL_OPTIONS = {
   }),
   pen: (w: number) => ({
     size: w,
-    thinning: 0.38, // Notes-like: visible swell, no spaghetti
+    thinning: 0.6, // pressure does the tapering (see strokeOutline); fast curve keeps mid-range calm
     smoothing: 0.35,
     streamline: 0.45,
     easing: easeP,
@@ -212,6 +212,15 @@ export function strokeOutline(stroke: Stroke, detail = 1): number[][] {
   // perfect-freehand's `smoothing` is really a vertex-skip distance (size × smoothing);
   // shrink it with zoom so round tips stay round instead of turning polygonal
   opts.smoothing /= detail;
+  // with a real pressure signal, entry/exit are shaped by pressure itself —
+  // the geometric taper only needs to round off the ends. Finger/mouse
+  // strokes (flat 0.5) keep the long synthetic taper.
+  const hasPressure = stroke.points.some((p) => Math.abs(p.p - 0.5) >= 0.001);
+  if (hasPressure && (stroke.tool === 'pen' || stroke.tool === 'pencil' || stroke.tool === 'sketch')) {
+    const w = stroke.baseWidth;
+    opts.start = { taper: w * 0.35, cap: true };
+    opts.end = { taper: w * 0.5, cap: true };
+  }
   // pencil emulation for pressureless input (mouse/finger): synthesize
   // pressure from stroke velocity so lines still swell and taper
   if (
