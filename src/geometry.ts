@@ -152,6 +152,30 @@ export function savePressure() {
   try { localStorage.setItem(PRESSURE_KEY, JSON.stringify(pressure)); } catch { /* ignore */ }
 }
 /** Back to defaults in memory only — the playground's Save persists it. */
+/** Import a brush-settings file (as written by exportPressure). In memory only. */
+export function exportPressure(): string {
+  return JSON.stringify({ app: 'infinizine-brushes', version: 1, tools: pressure }, null, 2);
+}
+export function importPressure(text: string): boolean {
+  try {
+    const p = JSON.parse(text) as { app?: string; tools?: Partial<PressureParams> };
+    const tools = p.app === 'infinizine-brushes' ? p.tools : (p as unknown as Partial<PressureParams>);
+    if (!tools || typeof tools !== 'object') return false;
+    let any = false;
+    for (const t of Object.keys(pressure) as ToolKind[]) {
+      const src = tools[t];
+      if (!src) continue;
+      any = true;
+      Object.assign(pressure[t], DEFAULT_PRESSURE[t], src, {
+        curve: normalizeCurve(src.curve, DEFAULT_PRESSURE[t].curve),
+        tiltCurve: normalizeCurve(src.tiltCurve, DEFAULT_PRESSURE[t].tiltCurve),
+      });
+    }
+    return any;
+  } catch {
+    return false;
+  }
+}
 export function resetPressure(tool?: ToolKind) {
   const tools = tool ? [tool] : (Object.keys(pressure) as ToolKind[]);
   for (const t of tools) Object.assign(pressure[t], structuredClone(DEFAULT_PRESSURE[t]));

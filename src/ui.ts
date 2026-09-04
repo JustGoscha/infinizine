@@ -8,7 +8,7 @@ import { Camera, baseZoom, pxPerMm, setPxPerMm } from './camera';
 import { PALETTES, getPalette, shades } from './palettes';
 import { UNITS_PER_MM, uid } from './types';
 import { layoutText, layoutHeight, FONTS } from './text';
-import { pressure, savePressure, resetPressure, loadPressure, easeP, curveAt, type Curve, type CurveNode } from './geometry';
+import { pressure, savePressure, resetPressure, loadPressure, exportPressure, importPressure, easeP, curveAt, type Curve, type CurveNode } from './geometry';
 import { markdownToHtml, htmlToMarkdown, autoTransform, caretToEnd } from './richedit';
 
 function toast(msg: string) {
@@ -1923,21 +1923,30 @@ export function buildUI(
     { k: 'tilt', label: 'tilt width', min: 1, max: 40, step: 0.5, fmt: (v) => (v <= 1 ? 'off' : `${v.toFixed(1)}×`), pencilOnly: true },
   ];
   pg.innerHTML = `
-    <div class="pg-stage"><canvas id="pg-canvas"></canvas>
-      <div class="pg-stage-bar">
-        <div class="pg-sizes">${SIZES.map((sz) => `<button class="pg-size" data-w="${sz.w}" title="${sz.label}"><i style="width:${3 + sz.w * 3}px;height:${3 + sz.w * 3}px"></i></button>`).join('')}</div>
-        <button id="pg-clear">Clear</button>
-      </div>
+    <div class="pg-top">
+      <div class="pg-curve-wrap"><canvas class="pg-curve" id="pg-curve" title="Tap the curve to add a point · drag points and handles"></canvas></div>
+      <div class="pg-curve-wrap" id="pg-tilt-wrap"><canvas class="pg-curve" id="pg-tilt" title="Tilt → widening (pencil)"></canvas></div>
     </div>
-    <div class="pg-side">
-      <div class="pg-head"><span>Pressure playground</span><button class="pg-x" id="pg-close">×</button></div>
-      <div class="pg-tools">${PG_TOOLS.map((o) => `<button class="pg-tool" data-t="${o.t}">${ICONS[o.t]}<span>${o.label}</span></button>`).join('')}</div>
-      <canvas class="pg-curve" id="pg-curve" width="272" height="200" title="Drag the two handles to shape the pressure curve"></canvas>
-      <canvas class="pg-curve pg-tilt" id="pg-tilt" width="272" height="150" title="Tilt → widening (pencil): drag the handles"></canvas>
-      ${SLIDERS.map((sl) => `<label class="pg-row" data-k="${sl.k}"><span>${sl.label}</span><input type="range" data-k="${sl.k}" min="${sl.min}" max="${sl.max}" step="${sl.step}"><b></b></label>`).join('')}
-      <div class="pg-actions">
-        <button id="pg-save" class="pg-primary">Save</button>
-        <button id="pg-reset">Reset to default</button>
+    <div class="pg-bottom">
+      <div class="pg-stage"><canvas id="pg-canvas"></canvas>
+        <div class="pg-stage-bar">
+          <div class="pg-sizes">${SIZES.map((sz) => `<button class="pg-size" data-w="${sz.w}" title="${sz.label}"><i style="width:${3 + sz.w * 3}px;height:${3 + sz.w * 3}px"></i></button>`).join('')}</div>
+          <button id="pg-clear">Clear</button>
+        </div>
+      </div>
+      <div class="pg-side">
+        <div class="pg-head"><span>Pressure playground</span><button class="pg-x" id="pg-close">×</button></div>
+        <div class="pg-tools">${PG_TOOLS.map((o) => `<button class="pg-tool" data-t="${o.t}">${ICONS[o.t]}<span>${o.label}</span></button>`).join('')}</div>
+        ${SLIDERS.map((sl) => `<label class="pg-row" data-k="${sl.k}"><span>${sl.label}</span><input type="range" data-k="${sl.k}" min="${sl.min}" max="${sl.max}" step="${sl.step}"><b></b></label>`).join('')}
+        <div class="pg-actions">
+          <button id="pg-save" class="pg-primary">Save</button>
+          <button id="pg-reset">Reset to default</button>
+        </div>
+        <div class="pg-actions">
+          <button id="pg-export" title="Download + copy all brush settings as JSON">Export brushes</button>
+          <button id="pg-import" title="Load a brush settings JSON">Import…</button>
+          <input type="file" id="pg-import-file" accept="application/json,.json" hidden>
+        </div>
       </div>
     </div>
   `;
@@ -1971,25 +1980,47 @@ export function buildUI(
   ) {
     const bar = document.createElement('div');
     bar.className = 'pg-curve-bar';
-    bar.innerHTML = `<button data-act="smooth"></button><button data-act="delete">Delete point</button><span class="pg-curve-tip">tap the curve to add a point</span>`;
+    bar.innerHTML = `<button data-act="smooth"></button><button data-act="delete">Delete point</button><span class="pg-curve-tip">tap the curve to add a point · handles may leave the box</span>`;
     cv.insertAdjacentElement('afterend', bar);
     let sel: number | null = null; // selected anchor index
-    const toPx = (x: number, y: number): [number, number] => [PAD + (cv.width - 2 * PAD) * x, cv.height - PAD - (cv.height - 2 * PAD) * y];
+    // the unit box sits inside a wider visible domain so handles can overshoot
+    const LO = -0.35, SPAN = 1.7;
+    let W = 0, H = 0; // CSS px, set on draw
+    const toPx = (x: number, y: number): [number, number] => [
+      PAD + (W - 2 * PAD) * ((x - LO) / SPAN),
+      H - PAD - (H - 2 * PAD) * ((y - LO) / SPAN),
+    ];
+    const fromPx = (px: number, py: number) => ({
+      x: LO + SPAN * ((px - PAD) / (W - 2 * PAD)),
+      y: LO + SPAN * ((H - PAD - py) / (H - 2 * PAD)),
+    });
     const fx = (t: number) => curveAt(getCurve(), t);
     const clamp01 = (v: number) => Math.max(0, Math.min(1, v));
     function draw() {
+      const dpr = window.devicePixelRatio || 1;
+      W = cv.clientWidth; H = cv.clientHeight;
+      if (!W || !H) return;
+      if (cv.width !== Math.round(W * dpr) || cv.height !== Math.round(H * dpr)) {
+        cv.width = Math.round(W * dpr); cv.height = Math.round(H * dpr);
+      }
       const c = cv.getContext('2d')!;
-      const W = cv.width, H = cv.height;
+      c.setTransform(dpr, 0, 0, dpr, 0, 0);
       const curve = getCurve();
       if (sel !== null && sel >= curve.length) sel = null;
       c.clearRect(0, 0, W, H);
+      // unit box
+      const [bx0, by1] = toPx(0, 0), [bx1, by0] = toPx(1, 1);
+      c.fillStyle = 'rgba(255,255,255,0.55)';
+      c.fillRect(bx0, by0, bx1 - bx0, by1 - by0);
       c.strokeStyle = 'rgba(42,36,26,0.18)';
       c.lineWidth = 1;
       for (let i = 0; i <= 4; i++) {
         const [x] = toPx(i / 4, 0), [, y] = toPx(0, i / 4);
-        c.beginPath(); c.moveTo(x, PAD); c.lineTo(x, H - PAD); c.stroke();
-        c.beginPath(); c.moveTo(PAD, y); c.lineTo(W - PAD, y); c.stroke();
+        c.beginPath(); c.moveTo(x, by0); c.lineTo(x, by1); c.stroke();
+        c.beginPath(); c.moveTo(bx0, y); c.lineTo(bx1, y); c.stroke();
       }
+      c.strokeStyle = 'rgba(42,36,26,0.5)';
+      c.strokeRect(bx0, by0, bx1 - bx0, by1 - by0);
       const bandFn = band?.();
       if (bandFn) {
         c.fillStyle = 'rgba(42,36,26,0.08)';
@@ -2036,12 +2067,13 @@ export function buildUI(
         else c.arc(ax, ay, inner ? 6 : 5, 0, Math.PI * 2);
         c.fill(); c.stroke();
       });
-      c.fillStyle = 'rgba(42,36,26,0.6)';
-      c.font = '10px Libre Franklin, sans-serif';
-      c.fillText(labels.x, PAD + 2, H - 2);
-      c.save(); c.translate(2, PAD + 44); c.rotate(-Math.PI / 2); c.fillText(labels.y, 0, 8); c.restore();
+      c.fillStyle = 'rgba(42,36,26,0.7)';
+      c.font = '11px Libre Franklin, sans-serif';
+      c.fillText(labels.x, bx0, by1 + 14);
+      c.save(); c.translate(bx0 - 6, by1); c.rotate(-Math.PI / 2); c.fillText(labels.y, 0, 0); c.restore();
       const ro = labels.readout(fx);
-      c.fillText(ro, W - PAD - c.measureText(ro).width, PAD + 12);
+      c.font = '12px Libre Franklin, sans-serif';
+      c.fillText(ro, bx1 - c.measureText(ro).width, by0 - 6);
       // bar
       const inner = sel !== null && sel > 0 && sel < curve.length - 1;
       bar.classList.toggle('active', inner);
@@ -2051,8 +2083,8 @@ export function buildUI(
     type Hit = { kind: 'anchor'; k: number } | { kind: 'handle'; k: number; h: 'i' | 'o' } | { kind: 'curve'; x: number } | null;
     const pos = (e: PointerEvent) => {
       const r = cv.getBoundingClientRect();
-      const px = (e.clientX - r.left) * (cv.width / r.width), py = (e.clientY - r.top) * (cv.height / r.height);
-      return { x: (px - PAD) / (cv.width - 2 * PAD), y: (cv.height - PAD - py) / (cv.height - 2 * PAD), px, py };
+      const px = e.clientX - r.left, py = e.clientY - r.top;
+      return { ...fromPx(px, py), px, py };
     };
     function hitTest(px: number, py: number): Hit {
       const curve = getCurve();
@@ -2067,7 +2099,7 @@ export function buildUI(
       }
       for (let k = 0; k < curve.length; k++) if (d(curve[k].x, curve[k].y) < R) return { kind: 'anchor', k };
       // on the curve?
-      const x = clamp01((px - PAD) / (cv.width - 2 * PAD));
+      const x = clamp01(fromPx(px, py).x);
       if (d(x, fx(x)) < 14) return { kind: 'curve', x };
       return null;
     }
@@ -2129,7 +2161,7 @@ export function buildUI(
         const lo = drag.h === 'i' ? curve[drag.k - 1].x : n.x;
         const hi = drag.h === 'o' ? curve[drag.k + 1].x : n.x;
         const hx = Math.max(lo, Math.min(hi, x)) - n.x;
-        const hy = Math.max(-1, Math.min(2, y)) - n.y;
+        const hy = Math.max(LO, Math.min(LO + SPAN, y)) - n.y; // may leave the unit box
         n[drag.h] = [hx, hy];
         if (n.s && drag.k > 0 && drag.k < curve.length - 1) {
           // smooth: mirror direction onto the other handle, keep its own length
@@ -2179,11 +2211,14 @@ export function buildUI(
     { x: 'tilt (upright → flat) →', y: 'widening →', readout: (fx) => `45° → ${Math.round(fx(0.5) * 100)}%` },
   );
   function drawCurve() {
-    pressureEditor.draw();
-    pgTiltCv.hidden = pgTool !== 'pencil';
-    (pgTiltCv.nextElementSibling as HTMLElement).hidden = pgTiltCv.hidden;
-    if (!pgTiltCv.hidden) tiltEditor.draw();
+    (pg.querySelector('#pg-tilt-wrap') as HTMLElement).hidden = pgTool !== 'pencil';
+    // layout may have changed (tilt panel shown/hidden) → size canvases after reflow
+    requestAnimationFrame(() => {
+      pressureEditor.draw();
+      if (pgTool === 'pencil') tiltEditor.draw();
+    });
   }
+  window.addEventListener('resize', () => { if (!pg.classList.contains('hidden')) drawCurve(); });
 
   function syncPg() {
     const k = pressure[pgTool];
@@ -2243,6 +2278,30 @@ export function buildUI(
   (pg.querySelector('#pg-reset') as HTMLButtonElement).addEventListener('click', () => {
     resetPressure(pgTool);
     restyle();
+  });
+  (pg.querySelector('#pg-export') as HTMLButtonElement).addEventListener('click', () => {
+    const json = exportPressure();
+    navigator.clipboard?.writeText(json).catch(() => {});
+    const blob = new Blob([json], { type: 'application/json' });
+    const a = document.createElement('a');
+    a.href = URL.createObjectURL(blob);
+    a.download = 'infinizine-brushes.json';
+    a.click();
+    setTimeout(() => URL.revokeObjectURL(a.href), 2000);
+    toast('Brush settings exported (also copied to clipboard)');
+  });
+  const importFile = pg.querySelector('#pg-import-file') as HTMLInputElement;
+  (pg.querySelector('#pg-import') as HTMLButtonElement).addEventListener('click', () => importFile.click());
+  importFile.addEventListener('change', async () => {
+    const f = importFile.files?.[0];
+    importFile.value = '';
+    if (!f) return;
+    if (importPressure(await f.text())) {
+      restyle();
+      toast('Brush settings loaded — Save to keep them');
+    } else {
+      toast('Not a brush settings file');
+    }
   });
   const pgBtn = root.querySelector('#playground') as HTMLButtonElement;
   const togglePg = (open: boolean) => {
