@@ -32,6 +32,13 @@ function cr(p0: number, p1: number, p2: number, p3: number, t: number): number {
     (-p0 + 3 * p1 - 3 * p2 + p3) * t3);
 }
 
+function lerpAngle(a: number, b: number, t: number): number {
+  let d = b - a;
+  while (d > Math.PI) d -= 2 * Math.PI;
+  while (d < -Math.PI) d += 2 * Math.PI;
+  return a + d * t;
+}
+
 export function densify(points: StrokePoint[], spacing = 2.2): StrokePoint[] {
   if (points.length < 3) return points;
   const SPACING = spacing; // world units between in-betweens
@@ -51,6 +58,7 @@ export function densify(points: StrokePoint[], spacing = 2.2): StrokePoint[] {
         p: p1.p + (p2.p - p1.p) * t,
         t: p1.t + (p2.t - p1.t) * t,
         a: p1.a !== undefined && p2.a !== undefined ? p1.a + (p2.a - p1.a) * t : p1.a ?? p2.a,
+        r: p1.r !== undefined && p2.r !== undefined ? lerpAngle(p1.r, p2.r, t) : p1.r ?? p2.r,
       });
     }
     out.push(p2);
@@ -132,7 +140,8 @@ export interface ToolPressure {
   max: number; // max width as × baseWidth
   tilt: number; // pencil: how much a flat Pencil widens a light stroke (1 = ignore tilt, 3 = up to 3×)
   tiltCurve: Curve; // tilt (0 upright … 1 flat) → tilt effect 0..1
-  nib: number; // marker: broad-nib angle in degrees (0 = horizontal edge)
+  nib: number; // marker: nib angle offset in degrees (azimuth mode: relative to the pen's lean; travel mode: relative to the stroke normal)
+  nibMode: 'travel' | 'azimuth'; // marker: nib follows the stroke direction, or the pen's lean (falls back to travel without a pen)
 }
 export type PressureParams = Record<ToolKind, ToolPressure>;
 // Tuned on an iPad with an Apple Pencil (exported from the playground) — these are the defaults.
@@ -152,7 +161,8 @@ export const DEFAULT_PRESSURE: PressureParams = {
     tilt: 1,
     min: 0.22,
     max: 1.6,
-    nib: 45,
+    nib: 0,
+    nibMode: 'azimuth',
   },
   fineliner: {
     curve: [
@@ -168,7 +178,8 @@ export const DEFAULT_PRESSURE: PressureParams = {
     tilt: 1,
     min: 0.83,
     max: 1.3,
-    nib: 45,
+    nib: 0,
+    nibMode: 'azimuth',
   },
   pencil: {
     curve: [
@@ -185,7 +196,8 @@ export const DEFAULT_PRESSURE: PressureParams = {
     tilt: 40,
     min: 0.56,
     max: 1,
-    nib: 45,
+    nib: 0,
+    nibMode: 'azimuth',
   },
   sketch: {
     curve: [
@@ -201,7 +213,8 @@ export const DEFAULT_PRESSURE: PressureParams = {
     tilt: 1,
     min: 0.45,
     max: 1.4,
-    nib: 45,
+    nib: 0,
+    nibMode: 'azimuth',
   },
   marker: {
     curve: [
@@ -217,7 +230,8 @@ export const DEFAULT_PRESSURE: PressureParams = {
     tilt: 1,
     min: 1,
     max: 2.4,
-    nib: 45,
+    nib: 0,
+    nibMode: 'azimuth',
   },
 };
 const PRESSURE_KEY = 'infinizine-pressure-v3';
@@ -675,49 +689,74 @@ export function strokeOutline(stroke: Stroke, detail = 1, live = false): number[
   return getStroke(pts, opts);
 }
 
-/** Broad-nib marker: a flat nib of fixed angle swept along the path. Width
- * follows travel direction (full across the nib, a hairline along it) and
- * direction changes leave hard edges. Returns the fill as one Path2D of
- * consistently-oriented per-segment quads (nonzero → clean union even where
- * the sweep folds) plus a hull outline for selection highlights. */
+/** Broad-nib marker. The nib is a flat edge swept along the path; its
+ * direction per sample follows the pen's lean (azimuth, when the device
+ * reports it) or, failing that, stays perpendicular to the travel direction.
+ * Width therefore follows how you move against the nib, and direction
+ * changes give hard cuts (mitre wedges), never round fans. Fill = union of
+ * consistently-oriented quads; hull = selection outline. */
 export function markerPaths(points: StrokePoint[], baseWidth: number, detail: number): { fill: Path2D; hull: Path2D } {
   const w = widthAt('marker', baseWidth, 0.5);
-  const ang = (pressure.marker.nib * Math.PI) / 180;
-  const nx = (Math.cos(ang) * w) / 2, ny = (Math.sin(ang) * w) / 2; // half nib vector
-  const th = Math.max(w * 0.08, 0.3 / detail) / 2; // nib thickness (so along-nib strokes still mark)
-  const px = -Math.sin(ang) * th, py = Math.cos(ang) * th;
+  const half = w / 2;
+  const k = pressure.marker;
+  const offset = (k.nib * Math.PI) / 180;
+  const th = Math.max(w * 0.08, 0.3 / detail) / 2; // nib thickness: along-nib moves still mark
   const raw = points.length > 2 ? densify(points, 2.2 / detail) : points;
   const pts: StrokePoint[] = [raw[0]];
   for (let i = 1; i < raw.length; i++) {
     const a = pts[pts.length - 1], b = raw[i];
     if ((b.x - a.x) ** 2 + (b.y - a.y) ** 2 > 1e-6) pts.push(b);
   }
+  const n = pts.length;
+  const tx = new Float64Array(n), ty = new Float64Array(n);
+  for (let i = 0; i < n; i++) {
+    const a = pts[Math.max(0, i - 1)], b = pts[Math.min(n - 1, i + 1)];
+    const dx = b.x - a.x, dy = b.y - a.y, l = Math.hypot(dx, dy) || 1;
+    tx[i] = dx / l; ty[i] = dy / l;
+  }
+  if (n === 1) { tx[0] = 1; ty[0] = 0; }
+  const useAz = k.nibMode === 'azimuth' && pts.some((p) => p.r !== undefined);
+  const nxs = new Float64Array(n), nys = new Float64Array(n);
+  for (let i = 0; i < n; i++) {
+    const ang = useAz && pts[i].r !== undefined
+      ? pts[i].r! + Math.PI / 2 + offset // chisel edge sits across the lean
+      : Math.atan2(ty[i], tx[i]) + Math.PI / 2 + offset; // across the travel direction
+    nxs[i] = Math.cos(ang) * half; nys[i] = Math.sin(ang) * half;
+  }
   const fill = new Path2D();
-  const quad = (a: number[], b: number[], c: number[], d: number[]) => {
-    // orient every quad the same way so overlaps add up instead of cancelling
-    const area = (b[0] - a[0]) * (c[1] - a[1]) - (c[0] - a[0]) * (b[1] - a[1]) +
-      (c[0] - a[0]) * (d[1] - a[1]) - (d[0] - a[0]) * (c[1] - a[1]);
-    const q = area >= 0 ? [a, b, c, d] : [d, c, b, a];
-    fill.moveTo(q[0][0], q[0][1]);
-    for (let k = 1; k < 4; k++) fill.lineTo(q[k][0], q[k][1]);
+  const poly = (q: number[][]) => {
+    // orient every polygon the same way so overlaps add up instead of cancelling
+    let area = 0;
+    for (let i = 0; i < q.length; i++) { const a = q[i], b = q[(i + 1) % q.length]; area += a[0] * b[1] - b[0] * a[1]; }
+    const o = area >= 0 ? q : [...q].reverse();
+    fill.moveTo(o[0][0], o[0][1]);
+    for (let i = 1; i < o.length; i++) fill.lineTo(o[i][0], o[i][1]);
     fill.closePath();
   };
-  // the nib footprint itself: a thin rotated rectangle at each sample (dots, hairlines)
-  const foot = (p: StrokePoint) =>
-    quad([p.x + nx + px, p.y + ny + py], [p.x - nx + px, p.y - ny + py], [p.x - nx - px, p.y - ny - py], [p.x + nx - px, p.y + ny - py]);
-  foot(pts[0]);
-  for (let i = 1; i < pts.length; i++) {
+  const foot = (i: number) => {
+    // the nib itself: a thin rotated bar (dots, hairlines, flat ends)
+    const p = pts[i], nx = nxs[i], ny = nys[i];
+    const px = (-ny / half) * th, py = (nx / half) * th;
+    poly([[p.x + nx + px, p.y + ny + py], [p.x - nx + px, p.y - ny + py], [p.x - nx - px, p.y - ny - py], [p.x + nx - px, p.y + ny - py]]);
+  };
+  foot(0);
+  for (let i = 1; i < n; i++) {
     const a = pts[i - 1], b = pts[i];
-    quad([a.x + nx, a.y + ny], [b.x + nx, b.y + ny], [b.x - nx, b.y - ny], [a.x - nx, a.y - ny]);
-    // thickness sweep so a move exactly along the nib still leaves a hairline
-    quad([a.x + px, a.y + py], [b.x + px, b.y + py], [b.x - px, b.y - py], [a.x - px, a.y - py]);
+    poly([[a.x + nxs[i - 1], a.y + nys[i - 1]], [b.x + nxs[i], b.y + nys[i]], [b.x - nxs[i], b.y - nys[i]], [a.x - nxs[i - 1], a.y - nys[i - 1]]]);
+    // hard mitre wedges where the nib direction jumps between samples
+    if (i < n - 1) {
+      const dot = nxs[i - 1] * nxs[i] + nys[i - 1] * nys[i];
+      if (dot < half * half * 0.985) {
+        poly([[b.x, b.y], [b.x + nxs[i - 1], b.y + nys[i - 1]], [b.x + nxs[i], b.y + nys[i]]]);
+        poly([[b.x, b.y], [b.x - nxs[i - 1], b.y - nys[i - 1]], [b.x - nxs[i], b.y - nys[i]]]);
+      }
+    }
   }
-  foot(pts[pts.length - 1]);
-  // hull: nib ends along the path (may self-cross; only stroked, never filled)
+  foot(n - 1);
   const hull = new Path2D();
-  hull.moveTo(pts[0].x + nx, pts[0].y + ny);
-  for (let i = 1; i < pts.length; i++) hull.lineTo(pts[i].x + nx, pts[i].y + ny);
-  for (let i = pts.length - 1; i >= 0; i--) hull.lineTo(pts[i].x - nx, pts[i].y - ny);
+  hull.moveTo(pts[0].x + nxs[0], pts[0].y + nys[0]);
+  for (let i = 1; i < n; i++) hull.lineTo(pts[i].x + nxs[i], pts[i].y + nys[i]);
+  for (let i = n - 1; i >= 0; i--) hull.lineTo(pts[i].x - nxs[i], pts[i].y - nys[i]);
   hull.closePath();
   return { fill, hull };
 }
