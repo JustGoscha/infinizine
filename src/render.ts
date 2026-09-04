@@ -3,7 +3,7 @@
 
 import { Camera, baseZoom } from './camera';
 import { Element, FillShape, Page, Stroke, StrokePoint } from './types';
-import { strokeOutline, pencilOutlines, outlineToPath, elementBBox, bboxIntersects, densify, filterPressure, easeP, denoise, BBox } from './geometry';
+import { strokeOutline, pencilOutlines, outlineToPath, elementBBox, bboxIntersects, densify, filterPressure, easeP, denoise, pressure, BBox } from './geometry';
 import { layoutText, fontFor, segWidth, LINE_HEIGHT } from './text';
 import { moveHandleRect, moveAllHandleRect, deleteHandleRect, eyeHandleRect, type InputState } from './input';
 import { Store } from './store';
@@ -246,7 +246,7 @@ export class Renderer {
     oc.scale(camNow.zoom, camNow.zoom);
     oc.translate(-camNow.x, -camNow.y);
     const shown = live.points.length > 2
-      ? { ...live, points: denoise(live.points, 1.2 / camNow.zoom) }
+      ? { ...live, points: denoise(live.points, pressure.smooth / camNow.zoom) }
       : live;
     ls!.count = this.stampStroke(oc, shown, live.opacity, ls!.count);
     // blit in screen space (we're inside the world transform here)
@@ -424,7 +424,7 @@ export class Renderer {
       // same screen-space denoise the stroke gets on commit, so the live line
       // looks like the final one and the tip never flickers on sample jitter
       const shown: Stroke = live.points.length > 2
-        ? { ...live, points: denoise(live.points, 1.2 / this.camera.zoom) }
+        ? { ...live, points: denoise(live.points, pressure.smooth / this.camera.zoom) }
         : live;
       if (live.tool === 'sketch') {
         ctx.save();

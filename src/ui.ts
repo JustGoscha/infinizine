@@ -6,6 +6,7 @@ import { Camera, baseZoom, pxPerMm, setPxPerMm } from './camera';
 import { PALETTES, getPalette, shades } from './palettes';
 import { UNITS_PER_MM, uid } from './types';
 import { layoutText, layoutHeight, FONTS } from './text';
+import { pressure, savePressure, resetPressure, easeP } from './geometry';
 import { markdownToHtml, htmlToMarkdown, autoTransform, caretToEnd } from './richedit';
 
 const svg = (inner: string) =>
@@ -169,6 +170,7 @@ export function buildUI(
         <button class="chip" id="eagle" title="Eagle view: fit everything, tap again to return">${svg('<path d="M4 9V4h5 M20 9V4h-5 M4 15v5h5 M20 15v5h-5"/><rect x="9.5" y="9.5" width="5" height="5"/>')}</button>
         <button class="chip" id="zoom-lock" title="Zoom lock"></button>
         <button class="chip chip-text" id="zoom-100" title="Back to 100% (⌘0)">1:1</button>
+        <button class="chip" id="playground" title="Pressure playground">${svg('<circle cx="12" cy="12" r="3"/><path d="M12 3v2.5M12 18.5V21M3 12h2.5M18.5 12H21M5.6 5.6l1.8 1.8M16.6 16.6l1.8 1.8M5.6 18.4l1.8-1.8M16.6 7.4l1.8-1.8"/>')}</button>
         <button class="chip" id="present" title="Present">${svg('<path d="M8 5.5 L18 12 L8 18.5 Z"/>')}</button>
       </div>
     </header>
@@ -1896,7 +1898,134 @@ export function buildUI(
     selMenu.classList.toggle('hidden', !(hasSel || hasArea || hasClip));
   }, 300);
 
-  state.onToolChange = refresh;
+  // ---------- pressure playground: draw on the canvas, tune the curves live ----------
+  const pg = document.createElement('div');
+  pg.className = 'playground hidden';
+  const PG_TOOLS: { t: Tool; label: string }[] = [
+    { t: 'pen', label: 'Pen' }, { t: 'pencil', label: 'Pencil' }, { t: 'sketch', label: 'Sketch' },
+    { t: 'fineliner', label: 'Fineliner' }, { t: 'marker', label: 'Marker' },
+  ];
+  const WIDTH_TOOLS: Tool[] = ['pen', 'fineliner', 'pencil', 'sketch'];
+  pg.innerHTML = `
+    <div class="pg-head"><span>Pressure playground</span><button class="pg-x" id="pg-close">×</button></div>
+    <div class="pg-tools">${PG_TOOLS.map((o) => `<button class="pg-tool" data-t="${o.t}">${o.label}</button>`).join('')}</div>
+    <canvas class="pg-curve" id="pg-curve" width="272" height="150"></canvas>
+    <label class="pg-row"><span>soft start</span><input type="range" id="pg-soft" min="0.5" max="3" step="0.05"><b id="pg-soft-v"></b></label>
+    <label class="pg-row"><span>saturation</span><input type="range" id="pg-sat" min="1" max="6" step="0.1"><b id="pg-sat-v"></b></label>
+    <label class="pg-row"><span>smoothing</span><input type="range" id="pg-smooth" min="0" max="6" step="0.1"><b id="pg-smooth-v"></b></label>
+    <label class="pg-row"><span>pressure lp</span><input type="range" id="pg-psmooth" min="0.05" max="1" step="0.05"><b id="pg-psmooth-v"></b></label>
+    <div class="pg-widths">${WIDTH_TOOLS.map((t) => `
+      <div class="pg-w">
+        <span class="pg-w-name">${t}</span>
+        <label>min <input type="range" data-t="${t}" data-k="min" min="0" max="1" step="0.01"><b></b></label>
+        <label>max <input type="range" data-t="${t}" data-k="max" min="0.5" max="3" step="0.05"><b></b></label>
+      </div>`).join('')}</div>
+    <div class="pg-actions">
+      <button id="pg-clear">Clear test strokes</button>
+      <button id="pg-reset">Reset curves</button>
+    </div>
+    <p class="pg-hint">Draw on the canvas while this is open. Curves and widths re-render every existing stroke; smoothing applies to strokes drawn from now on.</p>
+  `;
+  document.body.appendChild(pg);
+  let pgBaseline = new Set<string>();
+  const pgCurve = pg.querySelector('#pg-curve') as HTMLCanvasElement;
+  function drawCurve() {
+    const c = pgCurve.getContext('2d')!;
+    const W = pgCurve.width, H = pgCurve.height, pad = 8;
+    c.clearRect(0, 0, W, H);
+    c.strokeStyle = 'rgba(42,36,26,0.18)';
+    c.lineWidth = 1;
+    for (let i = 0; i <= 4; i++) {
+      const x = pad + ((W - 2 * pad) * i) / 4, y = pad + ((H - 2 * pad) * i) / 4;
+      c.beginPath(); c.moveTo(x, pad); c.lineTo(x, H - pad); c.stroke();
+      c.beginPath(); c.moveTo(pad, y); c.lineTo(W - pad, y); c.stroke();
+    }
+    c.strokeStyle = '#2a241a';
+    c.lineWidth = 2.5;
+    c.beginPath();
+    for (let i = 0; i <= 100; i++) {
+      const t = i / 100;
+      const x = pad + (W - 2 * pad) * t, y = H - pad - (H - 2 * pad) * easeP(t);
+      i ? c.lineTo(x, y) : c.moveTo(x, y);
+    }
+    c.stroke();
+    c.fillStyle = 'rgba(42,36,26,0.6)';
+    c.font = '10px Libre Franklin, sans-serif';
+    c.fillText('pressure →', pad + 2, H - 1);
+    c.save(); c.translate(1, pad + 40); c.rotate(-Math.PI / 2); c.fillText('effect →', 0, 8); c.restore();
+    c.fillText(`50% → ${Math.round(easeP(0.5) * 100)}%`, W - 74, pad + 12);
+  }
+  function syncPg() {
+    (pg.querySelector('#pg-soft') as HTMLInputElement).value = String(pressure.soft);
+    (pg.querySelector('#pg-sat') as HTMLInputElement).value = String(pressure.sat);
+    (pg.querySelector('#pg-soft-v') as HTMLElement).textContent = pressure.soft.toFixed(2);
+    (pg.querySelector('#pg-sat-v') as HTMLElement).textContent = pressure.sat.toFixed(1);
+    (pg.querySelector('#pg-smooth') as HTMLInputElement).value = String(pressure.smooth);
+    (pg.querySelector('#pg-smooth-v') as HTMLElement).textContent = `${pressure.smooth.toFixed(1)}px`;
+    (pg.querySelector('#pg-psmooth') as HTMLInputElement).value = String(pressure.pSmooth);
+    (pg.querySelector('#pg-psmooth-v') as HTMLElement).textContent = pressure.pSmooth.toFixed(2);
+    pg.querySelectorAll<HTMLInputElement>('.pg-w input').forEach((inp) => {
+      const t = inp.dataset.t as keyof typeof pressure.widths, k = inp.dataset.k as 'min' | 'max';
+      inp.value = String(pressure.widths[t][k]);
+      (inp.nextElementSibling as HTMLElement).textContent =
+        k === 'min' ? `${Math.round(pressure.widths[t][k] * 100)}%` : `${pressure.widths[t][k].toFixed(2)}×`;
+    });
+    pg.querySelectorAll<HTMLElement>('.pg-tool').forEach((b) => b.classList.toggle('active', b.dataset.t === state.tool));
+    drawCurve();
+  }
+  const restyle = () => {
+    savePressure();
+    syncPg();
+    window.dispatchEvent(new Event('izine-restyle'));
+  };
+  (pg.querySelector('#pg-soft') as HTMLInputElement).addEventListener('input', (e) => {
+    pressure.soft = Number((e.target as HTMLInputElement).value); restyle();
+  });
+  (pg.querySelector('#pg-sat') as HTMLInputElement).addEventListener('input', (e) => {
+    pressure.sat = Number((e.target as HTMLInputElement).value); restyle();
+  });
+  (pg.querySelector('#pg-smooth') as HTMLInputElement).addEventListener('input', (e) => {
+    pressure.smooth = Number((e.target as HTMLInputElement).value); restyle();
+  });
+  (pg.querySelector('#pg-psmooth') as HTMLInputElement).addEventListener('input', (e) => {
+    pressure.pSmooth = Number((e.target as HTMLInputElement).value); restyle();
+  });
+  pg.querySelectorAll<HTMLInputElement>('.pg-w input').forEach((inp) =>
+    inp.addEventListener('input', () => {
+      const t = inp.dataset.t as keyof typeof pressure.widths, k = inp.dataset.k as 'min' | 'max';
+      pressure.widths[t][k] = Number(inp.value);
+      restyle();
+    }),
+  );
+  pg.querySelectorAll<HTMLElement>('.pg-tool').forEach((b) =>
+    b.addEventListener('click', () => {
+      state.tool = b.dataset.t as Tool;
+      state.lastDrawTool = state.tool;
+      state.onToolChange();
+      syncPg();
+    }),
+  );
+  (pg.querySelector('#pg-clear') as HTMLButtonElement).addEventListener('click', () => {
+    const test = store.doc.elements.filter((el) => !pgBaseline.has(el.id));
+    if (test.length) { state.selection.clear(); store.deleteElements(test); invalidate(); }
+  });
+  (pg.querySelector('#pg-reset') as HTMLButtonElement).addEventListener('click', () => {
+    resetPressure();
+    restyle();
+  });
+  const pgBtn = root.querySelector('#playground') as HTMLButtonElement;
+  const togglePg = (open: boolean) => {
+    pg.classList.toggle('hidden', !open);
+    pgBtn.classList.toggle('on', open);
+    if (open) {
+      pgBaseline = new Set(store.doc.elements.map((el) => el.id));
+      syncPg();
+    }
+  };
+  pgBtn.addEventListener('click', () => togglePg(pg.classList.contains('hidden')));
+  (pg.querySelector('#pg-close') as HTMLButtonElement).addEventListener('click', () => togglePg(false));
+
+  state.onToolChange = () => { refresh(); if (!pg.classList.contains('hidden')) syncPg(); };
   buildPalRow();
 
   // keeps the timeline in sync after undo/redo or external changes

@@ -45,4 +45,6 @@ requestAnimationFrame(() => {
   renderer.invalidate();
 });
 window.addEventListener('resize', () => renderer.invalidate());
+// pressure playground changed the curves: every cached outline is stale
+window.addEventListener('izine-restyle', () => { renderer.clearCache(); renderer.invalidate(); });
 canvas.addEventListener('contextmenu', (e) => e.preventDefault());

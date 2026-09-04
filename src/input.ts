@@ -5,7 +5,7 @@
 import { Camera, baseZoom } from './camera';
 import { Store } from './store';
 import { AnimArea, Stroke, FillShape, Element, ImageBox, Page, TextBox, uid } from './types';
-import { hitElement, elementsInLasso, denoise } from './geometry';
+import { hitElement, elementsInLasso, denoise, pressure } from './geometry';
 import { layoutText, layoutHeight } from './text';
 
 const CLIP_KEY = 'infinizine-clipboard';
@@ -193,8 +193,10 @@ export function attachInput(
   let resizeText: TextBox | null = null;
   let resizeMode: 'width' | 'width-left' | 'height' | 'scale' = 'width';
   let resizeStart = { x: 0, w: 0, h: 0, fontSize: 0, wx: 0, wy: 0 };
-  let ema: { x: number; y: number } | null = null; // input smoothing (Doodely-style EMA)
-  const EMA_FACTOR = 0.6; // higher = more responsive, lower = smoother
+  // positions are recorded raw; all smoothing happens after the fact
+  // (screen-space denoise, see geometry.denoise) so nothing lags the tip
+  let ema: { x: number; y: number } | null = null;
+  const EMA_FACTOR = 1;
   // pressure conditioning (ported from Doodely): Apple Pencil reports noisy
   // pressure and an exact 0.5 when it hasn't measured yet → carry the last
   // valid value, back-fill the uncertain head once a real reading arrives,
@@ -202,7 +204,7 @@ export function attachInput(
   let pEma: number | null = null;
   let lastValidP: number | null = null;
   let rawPMax: number | null = null; // peak raw pressure of the stroke (taps become dots at this)
-  const P_EMA = 0.3;
+  const P_EMA = () => pressure.pSmooth;
   const MIN_DIST_PX = 1.2; // screen px; drops stacked samples at slow speed
   let minDistSq = 0; // world-space square of MIN_DIST_PX, fixed at stroke start
   let strokeZoom = 1; // zoom at drawing time → denoise radius on commit
@@ -222,7 +224,7 @@ export function attachInput(
       lastValidP = raw;
     }
     const target = uncertain ? (lastValidP ?? 0.5) : raw;
-    pEma = pEma === null ? target : pEma + P_EMA * (target - pEma);
+    pEma = pEma === null ? target : pEma + P_EMA() * (target - pEma);
     return pEma;
   }
 
@@ -912,7 +914,7 @@ export function attachInput(
         // digitiser quantisation is ~1 screen px; smooth it away in world units
         // scaled by the zoom you drew at, so zoomed-out lines don't kink when
         // you zoom back in and zoomed-in lines keep every intended wiggle
-        s.points = denoise(s.points, 1.2 / strokeZoom);
+        s.points = denoise(s.points, pressure.smooth / strokeZoom);
       }
       if (s.area) {
         // live ink: every stroke gets its own live layer with its own cycle

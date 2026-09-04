@@ -60,10 +60,52 @@ export function densify(points: StrokePoint[], spacing = 2.2): StrokePoint[] {
 /** Pressure response. Nobody presses an Apple Pencil anywhere near its
  * maximum, so the curve saturates early, with a soft start so feather-light
  * touches stay light:  10% → 14%, 25% → 42%, 50% → 79%, 75% → 97%. */
+export interface PressureParams {
+  soft: number; // start exponent: >1 = gentler at feather-light touch
+  sat: number; // saturation exponent: higher = maxes out sooner
+  smooth: number; // position denoise radius in screen px (applied after drawing, live + commit)
+  pSmooth: number; // pressure low-pass factor 0..1 (1 = raw)
+  widths: Record<Stroke['tool'], { min: number; max: number }>; // min = fraction of max at zero pressure; max = × baseWidth
+}
+export const DEFAULT_PRESSURE: PressureParams = {
+  soft: 1.3,
+  sat: 3,
+  smooth: 1.2,
+  pSmooth: 0.3,
+  widths: {
+    pen: { min: 0.22, max: 1.6 },
+    fineliner: { min: 0.86, max: 1.3 },
+    pencil: { min: 0.6, max: 1.3 },
+    sketch: { min: 0.45, max: 1.4 },
+    marker: { min: 1, max: 2.4 },
+  },
+};
+const PRESSURE_KEY = 'infinizine-pressure';
+export const pressure: PressureParams = (() => {
+  try {
+    const raw = localStorage.getItem(PRESSURE_KEY);
+    if (raw) {
+      const p = JSON.parse(raw) as Partial<PressureParams>;
+      return {
+        ...DEFAULT_PRESSURE,
+        ...p,
+        widths: { ...DEFAULT_PRESSURE.widths, ...(p.widths ?? {}) },
+      };
+    }
+  } catch { /* ignore */ }
+  return structuredClone(DEFAULT_PRESSURE);
+})();
+export function savePressure() {
+  try { localStorage.setItem(PRESSURE_KEY, JSON.stringify(pressure)); } catch { /* ignore */ }
+}
+export function resetPressure() {
+  Object.assign(pressure, structuredClone(DEFAULT_PRESSURE));
+  try { localStorage.removeItem(PRESSURE_KEY); } catch { /* ignore */ }
+}
+
 export const easeP = (t: number) => {
-  const g = Math.pow(Math.max(0, Math.min(1, t)), 1.3);
-  const u = 1 - g;
-  return 1 - u * u * u;
+  const g = Math.pow(Math.max(0, Math.min(1, t)), pressure.soft);
+  return 1 - Math.pow(1 - g, pressure.sat);
 };
 
 /** Spatial Gaussian denoise along the polyline. `sigma` is in world units —
@@ -161,14 +203,9 @@ export function hasPressure(points: StrokePoint[]): boolean {
  * pressure already through easeP. Max is a fixed multiple of baseWidth so the
  * size presets mean what they say. */
 export function widthAt(tool: Stroke['tool'], baseWidth: number, p: number): number {
-  const e = easeP(p);
-  switch (tool) {
-    case 'pen': return baseWidth * 1.6 * (0.22 + 0.78 * e);
-    case 'fineliner': return baseWidth * 1.3 * (0.86 + 0.14 * e);
-    case 'marker': return baseWidth * 2.4;
-    case 'pencil': return baseWidth * 1.3 * (0.6 + 0.4 * e);
-    case 'sketch': return baseWidth * 1.4 * (0.45 + 0.55 * e);
-  }
+  const w = pressure.widths[tool];
+  if (tool === 'marker') return baseWidth * w.max;
+  return baseWidth * w.max * (w.min + (1 - w.min) * easeP(p));
 }
 
 function arc(out: number[][], cx: number, cy: number, r: number, a0: number, a1: number, detail: number) {
