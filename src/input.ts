@@ -106,7 +106,7 @@ export class InputState {
     return readPref(PEN_KEY) === '1' ? 'pan' : 'draw';
   })();
   fingerDraws = this.fingerMode === 'draw'; // legacy flag, kept in sync with fingerMode === 'draw'
-  zoomLocked = true; // Notes-style: paint with what you've got; unlock to zoom
+  zoomLocked = readPref('infinizine-zoom-lock') !== '0'; // Notes-style: paint with what you've got; unlock to zoom
   armedPageDrag: Page | null = null; // set by the page menu's Move action
   presenting = false; // presentation mode: render only page content
   presentPage: Page | null = null; // the single page shown while presenting
@@ -1653,6 +1653,14 @@ export function attachInput(
     if (mod && e.key === 'z') {
       e.preventDefault();
       e.shiftKey ? store.redo() : store.undo();
+      return;
+    }
+    if (mod && e.key === '0') {
+      e.preventDefault();
+      camera.zoom = baseZoom();
+      state.updateCursor();
+      state.onToolChange();
+      invalidate();
       return;
     }
     if (mod) return;

@@ -168,6 +168,7 @@ export function buildUI(
         <button class="chip" id="finger-toggle" title="Finger mode"></button>
         <button class="chip" id="eagle" title="Eagle view: fit everything, tap again to return">${svg('<path d="M4 9V4h5 M20 9V4h-5 M4 15v5h5 M20 15v5h-5"/><rect x="9.5" y="9.5" width="5" height="5"/>')}</button>
         <button class="chip" id="zoom-lock" title="Zoom lock"></button>
+        <button class="chip chip-text" id="zoom-100" title="Back to 100% (⌘0)">1:1</button>
         <button class="chip" id="present" title="Present">${svg('<path d="M8 5.5 L18 12 L8 18.5 Z"/>')}</button>
       </div>
     </header>
@@ -1716,6 +1717,13 @@ export function buildUI(
   const zoomLockBtn = root.querySelector('#zoom-lock') as HTMLButtonElement;
   zoomLockBtn.addEventListener('click', () => {
     state.zoomLocked = !state.zoomLocked;
+    writePref('infinizine-zoom-lock', state.zoomLocked ? '1' : '0');
+    refresh();
+    invalidate();
+  });
+  (root.querySelector('#zoom-100') as HTMLButtonElement).addEventListener('click', () => {
+    camera.zoom = baseZoom();
+    state.updateCursor();
     refresh();
     invalidate();
   });

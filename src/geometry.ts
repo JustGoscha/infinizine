@@ -3,6 +3,7 @@
 
 import { getStroke } from 'perfect-freehand';
 import type { Stroke, StrokePoint, Element } from './types';
+import { baseZoom } from './camera';
 
 /** Filter Apple-Pencil-style pressure spikes: clamp per-sample delta. */
 export function filterPressure(points: StrokePoint[]): StrokePoint[] {
@@ -206,7 +207,7 @@ function dotOutline(stroke: Stroke, detail: number, radiusScale = 1, dx = 0, dy 
  * `detail` = zoom relative to 100% (bucketed by the renderer): in-between
  * spacing and outline vertex density scale with it so a stroke has the same
  * screen-space smoothness whether you're at 25% or 800%. */
-export function strokeOutline(stroke: Stroke, detail = 1): number[][] {
+export function strokeOutline(stroke: Stroke, detail = 1, live = false): number[][] {
   if (stroke.points.length === 1) return dotOutline(stroke, detail);
   const pts = densify(filterPressure(stroke.points), 2.2 / detail).map((p) => [p.x, p.y, p.p]);
   const opts = { ...TOOL_OPTIONS[stroke.tool](stroke.baseWidth) };
@@ -222,6 +223,18 @@ export function strokeOutline(stroke: Stroke, detail = 1): number[][] {
     opts.start = { taper: w * 0.35, cap: true };
     opts.end = { taper: w * 0.5, cap: true };
   }
+  // tapers live in screen space: never longer than ~7px on screen, so zooming
+  // in doesn't stretch a taper into a long triangle
+  const maxTaper = 7 / (detail * baseZoom());
+  const o = opts as unknown as {
+    start?: { cap?: boolean; taper?: number | boolean };
+    end?: { cap?: boolean; taper?: number | boolean };
+    last?: boolean;
+  };
+  if (typeof o.start?.taper === 'number') o.start = { ...o.start, taper: Math.min(o.start.taper, maxTaper) };
+  if (typeof o.end?.taper === 'number') o.end = { ...o.end, taper: Math.min(o.end.taper, maxTaper) };
+  // while drawing, the end isn't an end yet: no exit taper chasing the tip
+  if (live) o.last = false;
   // pencil emulation for pressureless input (mouse/finger): synthesize
   // pressure from stroke velocity so lines still swell and taper
   if (

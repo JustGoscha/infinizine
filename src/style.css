@@ -207,6 +207,7 @@ html, body {
 .size-flyout { align-items: center; padding: 10px; gap: 8px; }
 .size-presets { display: flex; align-items: center; gap: 2px; }
 #size-fader { width: 110px; accent-color: var(--accent); }
+.chip.chip-text { font-size: 12px; font-weight: 700; letter-spacing: 0.02em; }
 .size-adaptive {
   display: inline-flex;
   align-items: center;

@@ -421,7 +421,7 @@ export class Renderer {
       }
       ctx.globalAlpha = live.opacity;
       ctx.fillStyle = this.inkStyle(live, z);
-      ctx.fill(outlineToPath(strokeOutline(live, this.detail())));
+      ctx.fill(outlineToPath(strokeOutline(live, this.detail(), true)));
     };
     // Animation: each layer runs its own timeline. Deselected areas always play;
     // in the edited area, the active layer holds on the active frame and the other
