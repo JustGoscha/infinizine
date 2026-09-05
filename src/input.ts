@@ -1435,11 +1435,16 @@ export function attachInput(
         const inHandle = w.x >= hr.x && w.x <= hr.x + hr.s && w.y >= hr.y && w.y <= hr.y + hr.s;
         const inDel = inRect(w, deleteHandleRect(el.x, el.y, el.w, z));
         const inBox = w.x >= el.x && w.x <= el.x + el.w && w.y >= el.y && w.y <= el.y + el.h;
-        if (inHandle || inBox || inDel) {
+        // resize handles straddle the border: their outer half must keep the box hovered
+        const r = 12 / z;
+        const nearResize =
+          Math.hypot(w.x - (el.x + el.w), w.y - (el.y + el.h)) < r ||
+          (Math.abs(w.y - (el.y + el.h)) < r && Math.abs(w.x - (el.x + el.w / 2)) < r) ||
+          (Math.abs(w.y - (el.y + el.h / 2)) < r && (Math.abs(w.x - el.x) < r || Math.abs(w.x - (el.x + el.w)) < r));
+        if (inHandle || inBox || inDel || nearResize) {
           hover = el.id;
           if (inHandle) cursor = 'grab';
           if (inDel) cursor = 'pointer';
-          const r = 12 / z;
           if (Math.hypot(w.x - (el.x + el.w), w.y - (el.y + el.h)) < r) cursor = 'nwse-resize';
           else if (Math.abs(w.y - (el.y + el.h)) < r && Math.abs(w.x - (el.x + el.w / 2)) < r) cursor = 'ns-resize';
           else if (Math.abs(w.y - (el.y + el.h / 2)) < r &&
@@ -1456,7 +1461,11 @@ export function attachInput(
           const inBox = w.x >= el.x && w.x <= el.x + el.w && w.y >= el.y && w.y <= el.y + el.h;
           const inMove = inRect(w, moveHandleRect(el.x, el.y, z));
           const inDel = inRect(w, deleteHandleRect(el.x, el.y, el.w, z));
-          if (inBox || inMove || inDel) {
+          const nearResize =
+            Math.hypot(w.x - (el.x + el.w), w.y - (el.y + el.h)) < r ||
+            (Math.abs(w.y - (el.y + el.h)) < r && Math.abs(w.x - (el.x + el.w / 2)) < r) ||
+            (Math.abs(w.y - (el.y + el.h / 2)) < r && (Math.abs(w.x - el.x) < r || Math.abs(w.x - (el.x + el.w)) < r));
+          if (inBox || inMove || inDel || nearResize) {
             hoverImage = el.id;
             if (inMove) cursor = 'grab';
             else if (inDel) cursor = 'pointer';
