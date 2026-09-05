@@ -23,6 +23,34 @@ export const PALETTES: PalettePreset[] = [
     hues: ['#FFFFFF', '#231F20', '#00AEEF', '#EC008C', '#FFF100'],
   },
   {
+    // the original DMG-01 LCD: four greens, nothing else (great with dithers)
+    id: 'gameboy',
+    drama: 0,
+    name: 'Game Boy',
+    hues: ['#9BBC0F', '#0F380F', '#8BAC0F', '#306230'],
+  },
+  {
+    // NES-flavoured: the console's greys plus its punchiest primaries
+    id: 'nes',
+    drama: 0.1,
+    name: 'NES',
+    hues: ['#FCFCFC', '#000000', '#7C7C7C', '#E40058', '#0078F8', '#F8B800', '#00A800'],
+  },
+  {
+    // SNES / 16-bit: softer, more saturated mid-tones
+    id: 'snes',
+    drama: 0.2,
+    name: 'Super 16-bit',
+    hues: ['#F8F8F8', '#202040', '#A0A8C0', '#F85030', '#48A0F8', '#F8D830', '#68C840', '#B060E0'],
+  },
+  {
+    // CGA / early PC: cyan-magenta glare
+    id: 'cga',
+    drama: 0,
+    name: 'CGA',
+    hues: ['#FFFFFF', '#000000', '#55FFFF', '#FF55FF', '#AAAAAA'],
+  },
+  {
     id: 'ink',
     drama: 0.3,
     name: 'Classic Ink',
