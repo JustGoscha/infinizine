@@ -1514,8 +1514,8 @@ body.presenting .popover { display: none; }
 }
 
 /* ---------- settings popover ---------- */
-#settings-popover { display: flex; flex-direction: column; gap: 10px; }
-#settings-popover.hidden { display: none; }
+#settings-popover, #export-popover { display: flex; flex-direction: column; gap: 10px; }
+#settings-popover.hidden, #export-popover.hidden { display: none; }
 .set-title { font-weight: 700; font-size: 13px; }
 .set-row { display: flex; align-items: center; justify-content: space-between; gap: 10px; font-size: 12px; }
 .seg { display: inline-flex; border: 1.5px solid var(--ink); border-radius: 2px; overflow: hidden; }
