@@ -1443,7 +1443,38 @@ export function buildUI(
         b.dataset.fid = f.id;
         b.style.width = `${Math.max(14, 30 * f.duration * tlZoom)}px`;
         b.textContent = String(i + 1);
-        b.title = `${l.name} · frame ${i + 1} · ${f.duration}f (drag to reorder)`;
+        b.title = `${l.name} · frame ${i + 1} · ${f.duration}f (drag to reorder, drag the edge to lengthen)`;
+        // right-edge grip: drag to lengthen/shorten the frame (in ticks)
+        const grip = document.createElement('span');
+        grip.className = 'tl-frame-grip';
+        grip.title = 'Drag to change duration';
+        grip.addEventListener('pointerdown', (e) => {
+          e.stopPropagation(); // not a reorder / tap
+          e.preventDefault();
+          grip.setPointerCapture(e.pointerId);
+          const startX = e.clientX;
+          const startDur = f.duration;
+          const perTick = 30 * tlZoom;
+          let dur = startDur;
+          const onMove = (ev: PointerEvent) => {
+            dur = Math.max(1, Math.round(startDur + (ev.clientX - startX) / perTick));
+            b.style.width = `${Math.max(14, perTick * dur)}px`;
+            b.classList.add('resizing');
+          };
+          const onUp = () => {
+            grip.removeEventListener('pointermove', onMove);
+            grip.removeEventListener('pointerup', onUp);
+            grip.removeEventListener('pointercancel', onUp);
+            b.classList.remove('resizing');
+            if (dur !== startDur) store.setFrameDuration(area.id, l.id, f.id, dur);
+            renderTimeline();
+            invalidate();
+          };
+          grip.addEventListener('pointermove', onMove);
+          grip.addEventListener('pointerup', onUp);
+          grip.addEventListener('pointercancel', onUp);
+        });
+        b.appendChild(grip);
         // tap selects; horizontal drag reorders within the layer
         let marker: HTMLElement | null = null;
         const insertIndex = (px: number) => {

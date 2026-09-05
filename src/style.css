@@ -1575,3 +1575,27 @@ body.presenting .popover { display: none; }
 }
 .tl-addlayer-row svg { width: 14px; height: 14px; }
 .tl-addlayer-row:hover { color: var(--ink); }
+
+/* frame duration grip on the right edge of a frame tile */
+.tl-frame-grip {
+  position: absolute;
+  top: 0;
+  right: -4px;
+  width: 9px;
+  height: 100%;
+  cursor: ew-resize;
+  touch-action: none;
+  z-index: 2;
+}
+.tl-frame-grip::after {
+  content: '';
+  position: absolute;
+  left: 3px;
+  top: 25%;
+  height: 50%;
+  width: 2px;
+  border-radius: 1px;
+  background: rgba(42,36,26,0.25);
+}
+.tl-frame:hover .tl-frame-grip::after, .tl-frame.active .tl-frame-grip::after { background: var(--ink); }
+.tl-frame.resizing { background: rgba(42,36,26,0.08); }
