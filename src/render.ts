@@ -998,7 +998,11 @@ export class Renderer {
             const len = l.frames.length;
             const alphas = [0.35, 0.18, 0.08];
             for (let k = 1; k <= 3; k++) {
-              if (idx - k >= 0) onionFrames.set(l.frames[idx - k].id, { alpha: alphas[k - 1], color: '#D6336C' });
+              // when looping, the frames before the first are the last ones
+              const prevIdx = area.loop ? (((idx - k) % len) + len) % len : idx - k;
+              if (prevIdx >= 0 && prevIdx !== idx && !onionFrames.has(l.frames[prevIdx].id)) {
+                onionFrames.set(l.frames[prevIdx].id, { alpha: alphas[k - 1], color: '#D6336C' });
+              }
               const nextIdx = area.loop ? (idx + k) % len : idx + k;
               if (nextIdx !== idx && nextIdx < len && !onionFrames.has(l.frames[nextIdx].id)) {
                 onionFrames.set(l.frames[nextIdx].id, { alpha: alphas[k - 1] * 0.85, color: '#2F9E44' });

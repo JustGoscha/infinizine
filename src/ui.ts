@@ -1932,7 +1932,9 @@ export function buildUI(
     const stepFrame = (d: number, light = false) => {
       if (!activeLayer || activeLayer.kind === 'live' || !activeLayer.frames.length) return;
       const cur = activeLayer.frames.findIndex((f) => f.id === state.activeFrameId);
-      const i = Math.max(0, Math.min(activeLayer.frames.length - 1, cur + d));
+      const n = activeLayer.frames.length;
+      // a looping area flips round like a flipbook: past the last frame comes the first
+      const i = area.loop ? (((cur + d) % n) + n) % n : Math.max(0, Math.min(n - 1, cur + d));
       if (i === cur) return;
       state.activeFrameId = activeLayer.frames[i].id;
       if (light) {
