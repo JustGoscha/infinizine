@@ -248,8 +248,8 @@ export function attachInput(
   // just lifted, when a contact is palm-sized, or when the two fingers didn't
   // arrive together (a resting palm + a finger is not a two-finger tap)
   const PEN_QUIET_MS = 700;
-  const TOGETHER_MS = 150;
-  const PALM_PX = 30;
+  const TOGETHER_MS = 300; // two fingers of one hand land within this
+  const PALM_PX = 70; // finger contacts report ~20–50 px on iPad; a palm is far wider
   let lastPenAt = -1e9;
   function armScrub() {
     window.clearTimeout(scrubTimer);
