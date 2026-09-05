@@ -10,9 +10,13 @@ export const isPattern = (c: string) => c.startsWith('pattern:');
 export const inkOf = (c: string) => (isPattern(c) ? PATTERN_INK : c);
 
 type Family =
-  | 'tone' | 'hatch' | 'cross' | 'lines' | 'grid' | 'sand' | 'waves' | 'scales' // manga
-  | 'bayer' | 'scan' | 'checker' | 'pixnoise' | 'stairs'; // digital
-const FAMILIES: Family[] = ['tone', 'hatch', 'cross', 'lines', 'grid', 'sand', 'waves', 'scales', 'bayer', 'scan', 'checker', 'pixnoise', 'stairs'];
+  | 'tone' | 'hatch' | 'cross' | 'lines' | 'grid' | 'sand' | 'waves' | 'scales' // manga (vector tiles)
+  | 'bayer' | 'cluster' | 'pixdots' | 'checker' | 'scan' | 'vscan' | 'stairs' | 'xhatch' | 'zigzag' | 'brick' | 'pixnoise'; // digital (pixel grid)
+const FAMILIES: Family[] = [
+  'tone', 'hatch', 'cross', 'lines', 'grid', 'sand', 'waves', 'scales',
+  'bayer', 'cluster', 'pixdots', 'checker', 'scan', 'vscan', 'stairs', 'xhatch', 'zigzag', 'brick', 'pixnoise',
+];
+const PIXEL: Set<string> = new Set(['bayer', 'cluster', 'pixdots', 'checker', 'scan', 'vscan', 'stairs', 'xhatch', 'zigzag', 'brick', 'pixnoise']);
 const parse = (id: string): { fam: Family; k: number } | null => {
   const m = /^pattern:([a-z]+)-([1-5])$/.exec(id);
   if (!m || !FAMILIES.includes(m[1] as Family)) return null;
@@ -23,26 +27,31 @@ export function patternVariants(id: string): string[] {
   const p = parse(id);
   return p ? [1, 2, 3, 4, 5].map((k) => `pattern:${p.fam}-${k}`) : [];
 }
+const NAMES: Record<Family, string> = {
+  tone: 'Screentone', hatch: 'Hatching', cross: 'Cross-hatch', lines: 'Ruled lines', grid: 'Grid',
+  sand: 'Sand tone', waves: 'Waves', scales: 'Scales',
+  bayer: 'Ordered dither', cluster: 'Halftone dither', pixdots: 'Pixel dots', checker: 'Checker',
+  scan: 'Scanlines', vscan: 'Vertical lines', stairs: 'Pixel diagonal', xhatch: 'Pixel crosshatch',
+  zigzag: 'Zigzag', brick: 'Bricks', pixnoise: 'Pixel noise',
+};
 export function patternLabel(id: string): string {
   const p = parse(id);
-  if (!p) return id;
-  const names: Record<Family, string> = {
-    tone: 'Screentone', hatch: 'Hatching', cross: 'Cross-hatch', lines: 'Ruled lines', grid: 'Grid',
-    sand: 'Sand tone', waves: 'Waves', scales: 'Scales',
-    bayer: 'Dither', scan: 'Scanlines', checker: 'Checker', pixnoise: 'Pixel noise', stairs: 'Pixel stairs',
-  };
-  return `${names[p.fam]} ${p.k}`;
+  return p ? `${NAMES[p.fam]} ${p.k}` : id;
 }
 
-/** tile size in world units (2 units = 1mm): tones repeat every 1.5mm, dither cells are 0.6mm */
+/** One pixel of every digital pattern, in world units (2 units = 1mm → 0.6mm cells).
+ * Every pixel family shares this grid, anchored at the world origin, so dithers
+ * drawn next to each other line up pixel for pixel. */
+export const PIXEL_CELL = 1.2;
+/** cells per repeat of the pixel tile (the LCM of every family's period) */
+const PIXEL_TILE_CELLS = 24;
+
+/** tile size in world units: tones repeat every 1.5mm; pixel families every 24 cells */
 export function patternTileSize(id: string): number {
   const p = parse(id);
   if (!p) return 3;
+  if (PIXEL.has(p.fam)) return PIXEL_CELL * PIXEL_TILE_CELLS;
   switch (p.fam) {
-    case 'bayer': case 'stairs': return 4.8; // 8 × 0.6mm cells (stairs: 4)
-    case 'pixnoise': return 12; // 20 × 0.6mm cells: random-looking, repeat not noticeable
-    case 'scan': return 2.4;
-    case 'checker': return 2 * [0.5, 0.7, 0.9, 1.2, 1.6][p.k - 1];
     case 'sand': return 14; // big tile so the stipple doesn't visibly repeat
     case 'waves': case 'scales': return 4;
     default: return 3;
@@ -52,38 +61,80 @@ export function patternTileSize(id: string): number {
 /** Pixel families: cell size in world units (fills snap their outline to this grid). */
 export function patternCellSize(id: string): number | null {
   const p = parse(id);
-  if (!p) return null;
-  const T = patternTileSize(id);
-  switch (p.fam) {
-    case 'bayer': case 'stairs': return T / 4;
-    case 'pixnoise': return T / 20;
-    case 'checker': case 'scan': return T / 2;
-    default: return null;
-  }
+  return p && PIXEL.has(p.fam) ? PIXEL_CELL : null;
 }
 export const isPixelPattern = (id: string) => patternCellSize(id) !== null;
 
-/** Pixel families as a cell predicate + per-cell drawn height fraction (scanlines are thin rows). */
-function cellRule(id: string): { on: (i: number, j: number) => boolean; hFrac: number } | null {
+const mod = (a: number, n: number) => ((a % n) + n) % n;
+// deterministic hash of a cell → [0,1): the noise never repeats, at any coordinate
+const hash2 = (i: number, j: number) => {
+  let h = (i * 374761393 + j * 668265263) | 0;
+  h = Math.imul(h ^ (h >>> 13), 1274126177);
+  return ((h ^ (h >>> 16)) >>> 0) / 4294967296;
+};
+
+const BAYER = [
+  [0, 8, 2, 10],
+  [12, 4, 14, 6],
+  [3, 11, 1, 9],
+  [15, 7, 13, 5],
+];
+// clustered-dot ordered dither (4×4 spiral): dots grow from the centre like a halftone
+const CLUSTER = [
+  [12, 5, 6, 13],
+  [4, 0, 1, 7],
+  [11, 3, 2, 8],
+  [15, 10, 9, 14],
+];
+
+/** Pixel families as a cell predicate: is cell (row i, column j) inked? */
+function cellRule(id: string): ((i: number, j: number) => boolean) | null {
   const p = parse(id);
-  if (!p) return null;
+  if (!p || !PIXEL.has(p.fam)) return null;
   const { fam, k } = p;
   switch (fam) {
-    case 'bayer': { const level = [2, 5, 8, 11, 14][k - 1]; return { on: (i, j) => BAYER[((i % 4) + 4) % 4][((j % 4) + 4) % 4] < level, hFrac: 1 }; }
-    case 'stairs': return { on: (i, j) => ((((i + j) % 4) + 4) % 4) < Math.min(k, 3), hFrac: 1 };
-    case 'checker': return { on: (i, j) => ((((i + j) % 2) + 2) % 2) === 0, hFrac: 1 };
-    case 'pixnoise': { const pr = [0.1, 0.22, 0.38, 0.55, 0.72][k - 1]; return { on: (i, j) => rnd((((i % 20) + 20) % 20) * 20 + (((j % 20) + 20) % 20), 5) < pr, hFrac: 1 }; }
-    case 'scan': return { on: (i) => (((i % 2) + 2) % 2) === 0, hFrac: [0.25, 0.4, 0.55, 0.7, 0.85][k - 1] };
+    case 'bayer': { const level = [2, 5, 8, 11, 14][k - 1]; return (i, j) => BAYER[mod(i, 4)][mod(j, 4)] < level; }
+    case 'cluster': { const level = [2, 5, 8, 11, 14][k - 1]; return (i, j) => CLUSTER[mod(i, 4)][mod(j, 4)] < level; }
+    case 'pixdots':
+      // the classic 8-bit ramp: lone pixels every 4, 3, 2 → checker → everything but every other pixel
+      return [
+        (i: number, j: number) => mod(i, 4) === 0 && mod(j, 4) === 0,
+        (i: number, j: number) => mod(i, 3) === 0 && mod(j, 3) === 0,
+        (i: number, j: number) => mod(i, 2) === 0 && mod(j, 2) === 0,
+        (i: number, j: number) => mod(i + j, 2) === 0,
+        (i: number, j: number) => !(mod(i, 2) === 0 && mod(j, 2) === 0),
+      ][k - 1];
+    case 'checker': { const s = [1, 2, 3, 4, 6][k - 1]; return (i, j) => mod(Math.floor(i / s) + Math.floor(j / s), 2) === 0; }
+    case 'scan': return [(i: number) => mod(i, 4) === 0, (i: number) => mod(i, 3) === 0, (i: number) => mod(i, 2) === 0, (i: number) => mod(i, 3) !== 0, (i: number) => mod(i, 4) !== 0][k - 1];
+    case 'vscan': return [(_: number, j: number) => mod(j, 4) === 0, (_: number, j: number) => mod(j, 3) === 0, (_: number, j: number) => mod(j, 2) === 0, (_: number, j: number) => mod(j, 3) !== 0, (_: number, j: number) => mod(j, 4) !== 0][k - 1];
+    case 'stairs': return [(i: number, j: number) => mod(i + j, 4) === 0, (i: number, j: number) => mod(i + j, 3) === 0, (i: number, j: number) => mod(i + j, 2) === 0, (i: number, j: number) => mod(i + j, 3) !== 0, (i: number, j: number) => mod(i + j, 4) !== 0][k - 1];
+    case 'xhatch': {
+      const P = [8, 6, 4, 3, 4][k - 1], thick = k === 5 ? 2 : 1;
+      return (i, j) => mod(i + j, P) < thick || mod(i - j, P) < thick;
+    }
+    case 'zigzag': {
+      // a pixel zigzag line (rise 3 over 3, fall 3 over 3) every S rows
+      const S = [8, 6, 5, 4, 3][k - 1];
+      return (i, j) => { const t = mod(j, 6); const h = t < 3 ? t : 6 - t; return mod(i - h, S) === 0; };
+    }
+    case 'brick': {
+      // mortar lines of a staggered brick wall; level 5 is the wall itself with paper mortar
+      const [W, H] = [[8, 4], [6, 3], [4, 2], [3, 2], [6, 3]][k - 1];
+      const mortar = (i: number, j: number) => mod(i, H) === 0 || mod(j + (mod(Math.floor(i / H), 2) ? Math.floor(W / 2) : 0), W) === 0;
+      return k === 5 ? (i, j) => !mortar(i, j) : mortar;
+    }
+    case 'pixnoise': { const pr = [0.1, 0.22, 0.38, 0.55, 0.72][k - 1]; return (i, j) => hash2(i, j) < pr; }
     default: return null;
   }
 }
 
 /** Pixel-pattern fill as solid geometry: every "on" cell whose centre is inside
  * the polygon, merged into horizontal runs. No repeating tile → no resampling
- * seams between pixels at any zoom; whole cells only at the edge. */
-export function cellPath(points: { x: number; y: number }[], id: string): Path2D | null {
+ * seams between pixels at any zoom; whole cells only at the edge.
+ * `m` scales the grid (zoom-stepped tones: coarser pixels when zoomed far out). */
+export function cellPath(points: { x: number; y: number }[], id: string, m = 1): Path2D | null {
   const rule = cellRule(id);
-  const cell = patternCellSize(id);
+  const cell = (patternCellSize(id) ?? 0) * m;
   if (!rule || !cell || points.length < 3) return null;
   let minX = Infinity, minY = Infinity, maxX = -Infinity, maxY = -Infinity;
   for (const q of points) { minX = Math.min(minX, q.x); minY = Math.min(minY, q.y); maxX = Math.max(maxX, q.x); maxY = Math.max(maxY, q.y); }
@@ -94,13 +145,13 @@ export function cellPath(points: { x: number; y: number }[], id: string): Path2D
   const eps = cell * 0.02; // hairline overlap between runs so rows never show antialias seams
   for (let r = r0; r < r1; r++) {
     const cy = (r + 0.5) * cell;
-    let run = -1;
+    let run: number | null = null; // start column of the current run (columns may be negative)
     for (let c = c0; c <= c1; c++) {
-      const inside = c < c1 && rule.on(r, c) && pointInPolygon((c + 0.5) * cell, cy, points);
-      if (inside && run < 0) run = c;
-      if (!inside && run >= 0) {
-        path.rect(run * cell - eps, r * cell - eps, (c - run) * cell + 2 * eps, cell * rule.hFrac + (rule.hFrac === 1 ? 2 * eps : 0));
-        run = -1;
+      const inside = c < c1 && rule(r, c) && pointInPolygon((c + 0.5) * cell, cy, points);
+      if (inside && run === null) run = c;
+      if (!inside && run !== null) {
+        path.rect(run * cell - eps, r * cell - eps, (c - run) * cell + 2 * eps, cell + 2 * eps);
+        run = null;
       }
     }
   }
@@ -120,11 +171,11 @@ export function snapPolygonToCells(points: { x: number; y: number }[], cell: num
   const path = new Path2D();
   for (let r = r0; r < r1; r++) {
     const cy = (r + 0.5) * cell;
-    let run = -1;
+    let run: number | null = null;
     for (let c = c0; c <= c1; c++) {
       const inside = c < c1 && pointInPolygon((c + 0.5) * cell, cy, points);
-      if (inside && run < 0) run = c;
-      if (!inside && run >= 0) { path.rect(run * cell, r * cell, (c - run) * cell, cell); run = -1; }
+      if (inside && run === null) run = c;
+      if (!inside && run !== null) { path.rect(run * cell, r * cell, (c - run) * cell, cell); run = null; }
     }
   }
   return path;
@@ -132,11 +183,12 @@ export function snapPolygonToCells(points: { x: number; y: number }[], cell: num
 
 /** Dot families (screentone, sand): the fill is built from WHOLE motifs — a dot
  * is in when its centre is inside the polygon, so the edge never shows half
- * dots. Returns null for line-like families (those clip the pattern instead). */
-export function motifPath(points: { x: number; y: number }[], id: string, angleDeg: number): Path2D | null {
+ * dots. Returns null for line-like families (those clip the pattern instead).
+ * `m` scales the tile (zoom-stepped tones). */
+export function motifPath(points: { x: number; y: number }[], id: string, angleDeg: number, m = 1): Path2D | null {
   const p = parse(id);
   if (!p || (p.fam !== 'tone' && p.fam !== 'sand') || points.length < 3) return null;
-  const T = patternTileSize(id);
+  const T = patternTileSize(id) * m;
   const a = (angleDeg * Math.PI) / 180, ca = Math.cos(a), sa = Math.sin(a);
   // polygon bbox → pattern-space bbox (inverse rotation of the corners)
   let minX = Infinity, minY = Infinity, maxX = -Infinity, maxY = -Infinity;
@@ -150,8 +202,8 @@ export function motifPath(points: { x: number; y: number }[], id: string, angleD
   const j0 = Math.floor(pv0 / T) - 1, j1 = Math.ceil(pv1 / T) + 1;
   const motifs: [number, number][] = p.fam === 'tone'
     ? [[0, 0], [T / 2, T / 2]]
-    : Array.from({ length: Math.round([10, 22, 40, 65, 100][p.k - 1] * (T * T) / 16) }, (_, i) => [rnd(i, 1) * T, rnd(i, 2) * T] as [number, number]);
-  const r = p.fam === 'tone' ? Math.sqrt(([0.08, 0.18, 0.3, 0.45, 0.62][p.k - 1] * T * T) / 2 / Math.PI) : 0.13;
+    : Array.from({ length: Math.round([10, 22, 40, 65, 100][p.k - 1] * (T * T) / 16 / (m * m)) }, (_, i) => [rnd(i, 1) * T, rnd(i, 2) * T] as [number, number]);
+  const r = p.fam === 'tone' ? Math.sqrt(([0.08, 0.18, 0.3, 0.45, 0.62][p.k - 1] * T * T) / 2 / Math.PI) : 0.13 * m;
   if ((i1 - i0) * (j1 - j0) * motifs.length > 400_000) return null; // too many dots: clip the pattern instead
   const path = new Path2D();
   for (let i = i0; i < i1; i++) for (let j = j0; j < j1; j++) {
@@ -173,13 +225,6 @@ const rnd = (i: number, salt: number) => {
   return x - Math.floor(x);
 };
 
-const BAYER = [
-  [0, 8, 2, 10],
-  [12, 4, 14, 6],
-  [3, 11, 1, 9],
-  [15, 7, 13, 5],
-];
-
 /** Draw one seamless tile of `id` in `color`, `px` pixels square. */
 export function patternTile(id: string, color: string, px: number): HTMLCanvasElement {
   const c = document.createElement('canvas');
@@ -193,7 +238,19 @@ export function patternTile(id: string, color: string, px: number): HTMLCanvasEl
   g.fillStyle = color;
   g.strokeStyle = color;
   const { fam, k } = p;
-  if (fam === 'tone') {
+  const rule = cellRule(id);
+  if (rule) {
+    // pixel families: the tile is PIXEL_TILE_CELLS² cells of the shared grid
+    const cell = PIXEL_CELL;
+    for (let i = 0; i < PIXEL_TILE_CELLS; i++) {
+      let run: number | null = null;
+      for (let j = 0; j <= PIXEL_TILE_CELLS; j++) {
+        const on = j < PIXEL_TILE_CELLS && rule(i, j);
+        if (on && run === null) run = j;
+        if (!on && run !== null) { g.fillRect(run * cell, i * cell, (j - run) * cell + 0.01, cell + 0.01); run = null; }
+      }
+    }
+  } else if (fam === 'tone') {
     const d = [0.08, 0.18, 0.3, 0.45, 0.62][k - 1];
     const r = Math.sqrt((d * T * T) / 2 / Math.PI);
     for (const [x, y] of [[0, 0], [T, 0], [0, T], [T, T], [T / 2, T / 2]]) {
@@ -254,45 +311,21 @@ export function patternTile(id: string, color: string, px: number): HTMLCanvasEl
         g.beginPath(); g.arc(col * 2 * R + shift, y, R, Math.PI, 0); g.stroke();
       }
     }
-  } else if (fam === 'checker') {
-    const c = T / 2;
-    g.fillRect(0, 0, c + 0.01, c + 0.01);
-    g.fillRect(c, c, c + 0.01, c + 0.01);
-  } else if (fam === 'pixnoise') {
-    const N = 20, cell = T / N;
-    const p = [0.1, 0.22, 0.38, 0.55, 0.72][k - 1];
-    for (let i = 0; i < N; i++) for (let j = 0; j < N; j++) {
-      if (rnd(i * N + j, 5) < p) g.fillRect(j * cell, i * cell, cell + 0.01, cell + 0.01);
-    }
-  } else if (fam === 'stairs') {
-    // pixel diagonal: a 1-cell-wide staircase per 4 cells, thicker with level
-    const cell = T / 4;
-    const thick = k; // 1..5 cells wide out of 8? keep within the 4-cell period
-    for (let i = 0; i < 4; i++) for (let j = 0; j < 4; j++) {
-      if (((i + j) % 4) < Math.min(thick, 3)) g.fillRect(j * cell, i * cell, cell + 0.01, cell + 0.01);
-    }
-  } else if (fam === 'bayer') {
-    const level = [2, 5, 8, 11, 14][k - 1];
-    const cell = T / 4;
-    for (let i = 0; i < 4; i++) for (let j = 0; j < 4; j++) {
-      if (BAYER[i][j] < level) g.fillRect(j * cell, i * cell, cell + 0.01, cell + 0.01);
-    }
-  } else if (fam === 'scan') {
-    const cell = T / 2;
-    const h = [0.25, 0.4, 0.55, 0.7, 0.85][k - 1] * cell;
-    g.fillRect(0, 0, T + 0.01, h);
-    g.fillRect(0, cell, T + 0.01, h);
   }
   return c;
 }
 
 const previewCache = new Map<string, string>();
-/** CSS background for a swatch: the tile as a data URL (repeat it at `px`) */
-export function patternPreviewCSS(id: string, color = PATTERN_INK, px = 14): string {
-  const key = `${id}|${color}|${px}`;
+/** CSS background for a swatch, at `scale` CSS px per world unit — every
+ * pattern previews at the same magnification, so a coarse checker really
+ * looks coarser than a fine one (rendered 2× for retina). */
+export function patternPreviewCSS(id: string, color = PATTERN_INK, scale = 3): string {
+  const key = `${id}|${color}|${scale}`;
   let url = previewCache.get(key);
+  const T = patternTileSize(id);
+  const px = T * scale;
   if (!url) {
-    url = patternTile(id, color, px * 2).toDataURL();
+    url = patternTile(id, color, Math.round(px * 2)).toDataURL();
     previewCache.set(key, url);
   }
   return `url(${url}) 0 0 / ${px}px ${px}px repeat, #FDFCF8`;
@@ -309,10 +342,12 @@ export const PATTERN_CATEGORIES: { label: string; families: { fam: string; label
     ],
   },
   {
-    label: 'Digital',
+    label: 'Digital · one pixel grid',
     families: [
-      { fam: 'bayer', label: 'Dither' }, { fam: 'scan', label: 'Scanlines' }, { fam: 'checker', label: 'Checker' },
-      { fam: 'pixnoise', label: 'Pixel noise' }, { fam: 'stairs', label: 'Pixel stairs' },
+      { fam: 'bayer', label: 'Ordered' }, { fam: 'cluster', label: 'Halftone' }, { fam: 'pixdots', label: 'Pixel dots' },
+      { fam: 'checker', label: 'Checker' }, { fam: 'scan', label: 'Scanlines' }, { fam: 'vscan', label: 'Vertical' },
+      { fam: 'stairs', label: 'Diagonal' }, { fam: 'xhatch', label: 'Crosshatch' }, { fam: 'zigzag', label: 'Zigzag' },
+      { fam: 'brick', label: 'Bricks' }, { fam: 'pixnoise', label: 'Noise' },
     ],
   },
 ];

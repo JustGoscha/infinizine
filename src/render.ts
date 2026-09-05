@@ -12,7 +12,7 @@ import { patternTile, patternTileSize, patternCellSize, cellPath, motifPath, isP
 import { reportCrash } from './crash';
 
 type View = { x: number; y: number; w: number; h: number }; // camera viewport, world coords
-interface CacheEntry { solid?: boolean; zoomFree?: boolean; path: Path2D; bbox: BBox; passes?: Path2D[]; core?: Path2D; detail: number }
+interface CacheEntry { solid?: boolean; zoomFree?: boolean; path: Path2D; bbox: BBox; passes?: Path2D[]; core?: Path2D; detail: number; tone?: number }
 
 export class Renderer {
   private ctx: CanvasRenderingContext2D;
@@ -37,9 +37,9 @@ export class Renderer {
   private fillPatterns = new Map<string, CanvasPattern>();
   /** world-anchored fill pattern (screentone / dither) at the current zoom bucket */
   private fillPattern(id: string, color: string, angle = 0): CanvasPattern | string {
-    const T = patternTileSize(id);
+    const T = patternTileSize(id) * this.toneScale();
     const dpr = window.devicePixelRatio || 1;
-    const px = Math.max(8, Math.min(512, Math.round(T * this.detail() * baseZoom() * dpr)));
+    const px = Math.max(8, Math.min(1024, Math.round(T * this.detail() * baseZoom() * dpr)));
     const key = `${id}|${color}|${px}`;
     let pat = this.fillPatterns.get(key);
     if (!pat) {
@@ -167,6 +167,8 @@ export class Renderer {
     const g = c.getContext('2d')!;
     const saved = this.ctx;
     const savedDetail = this.detailOverride;
+    const savedTone = this.toneOverride;
+    this.toneOverride = 1;
     this.ctx = g;
     this.detailOverride = Math.min(16, Math.max(0.25, 2 ** Math.round(Math.log2(scale / baseZoom()))));
     try {
@@ -193,6 +195,7 @@ export class Renderer {
     } finally {
       this.ctx = saved;
       this.detailOverride = savedDetail;
+      this.toneOverride = savedTone;
       // caches were built at the export detail: let them rebuild for the screen
       this.clearCache();
       this.invalidate();
@@ -362,11 +365,24 @@ export class Renderer {
     const rel = this.camera.zoom / baseZoom();
     return Math.min(16, Math.max(0.25, 2 ** Math.round(Math.log2(rel))));
   }
+  /** Tone/dither scale for the current zoom: patterns are world-anchored, so
+   * zoomed far out the dots would shrink to dust and zoomed in they'd be
+   * boulders — every ~4× of zoom the grid steps by 4× instead, staying within
+   * a legible band on screen. 1 at 100% (and for exports). */
+  private toneOverride: number | null = null;
+  toneScale(): number {
+    if (this.toneOverride !== null) return this.toneOverride;
+    const rel = this.camera.zoom / baseZoom();
+    // switch points sit at ~41% / 10% (out) and ~162% / 650% (in), not at the step itself
+    const k = Math.round(Math.log(1 / rel) / Math.log(4) - 0.15);
+    return 4 ** Math.max(-3, Math.min(4, k));
+  }
 
   private entry(el: Stroke | FillShape): CacheEntry {
     const detail = this.detail();
+    const tone = this.toneScale();
     let e = this.cache.get(el.id);
-    if (!e || (e.detail !== detail && !e.zoomFree)) {
+    if (!e || (e.detail !== detail && !e.zoomFree) || (e.tone !== undefined && e.tone !== tone)) {
       let path: Path2D, core: Path2D | undefined;
       if (el.kind === 'stroke' && el.tool === 'marker') {
         const mp = markerPaths(el.points, el.baseWidth, detail);
@@ -374,19 +390,19 @@ export class Renderer {
       } else if (el.kind === 'fill' && el.pattern && patternCellSize(el.pattern)) {
         // pixel patterns: solid geometry of the "on" cells inside the shape — whole cells,
         // no repeating tile, so no seams between pixels (zoom-independent)
-        const cells = cellPath(el.points, el.pattern);
+        const cells = cellPath(el.points, el.pattern, tone);
         path = cells ?? polygonPath(el.points);
-        e = { path, bbox: elementBBox(el), detail, zoomFree: true, solid: !!cells };
+        e = { path, bbox: elementBBox(el), detail, zoomFree: true, solid: !!cells, tone };
         this.cache.set(el.id, e);
         return e;
-      } else if (el.kind === 'fill' && el.pattern && (path = motifPath(el.points, el.pattern, el.patternAngle ?? 0)!)) {
+      } else if (el.kind === 'fill' && el.pattern && (path = motifPath(el.points, el.pattern, el.patternAngle ?? 0, tone)!)) {
         // dot tones: whole dots only — the path IS the dots, filled solid (zoom-independent)
-        e = { path, bbox: elementBBox(el), detail, solid: true, zoomFree: true };
+        e = { path, bbox: elementBBox(el), detail, solid: true, zoomFree: true, tone };
         this.cache.set(el.id, e);
         return e;
       } else if (el.kind === 'fill') {
         path = polygonPath(el.points);
-        e = { path, bbox: elementBBox(el), detail, zoomFree: true };
+        e = { path, bbox: elementBBox(el), detail, zoomFree: true, tone: el.pattern ? tone : undefined };
         this.cache.set(el.id, e);
         return e;
       } else {

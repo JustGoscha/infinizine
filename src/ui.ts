@@ -416,7 +416,7 @@ export function buildUI(
       for (const c of hueList) {
         const s = document.createElement('button');
         s.className = 'pal-shade';
-        s.style.background = isPattern(c) ? patternPreviewCSS(c, undefined, 10) : c;
+        s.style.background = isPattern(c) ? patternPreviewCSS(c, undefined, 3.3) : c;
         if (isPattern(c)) s.title = `${patternLabel(c)} — fill tool only`;
         s.addEventListener('pointerdown', (e) => e.preventDefault()); // keep the text editor focused
         s.addEventListener('click', (e) => {
@@ -429,7 +429,7 @@ export function buildUI(
       const dot = document.createElement('button');
       dot.className = 'pal-main';
       dot.dataset.hue = hue;
-      dot.style.background = isPattern(hue) ? patternPreviewCSS(hue) : hue;
+      dot.style.background = isPattern(hue) ? patternPreviewCSS(hue, undefined, 4.5) : hue;
       if (isPattern(hue)) dot.title = `${patternLabel(hue)} — paints with the fill tool; strokes get ink`;
       dot.addEventListener('pointerdown', (e) => { if (state.onEditColor) e.preventDefault(); }); // keep the text editor focused
       let lp = 0;
@@ -476,7 +476,7 @@ export function buildUI(
         const card = (p: (typeof PALETTES)[number]) => `<button class="pal-preset ${p.id === preset.id ? 'active' : ''}" data-id="${p.id}">
           <span class="pal-preset-name">${p.name}</span>
           <span class="pal-preview">${p.hues
-            .map((c: string) => `<i style="background:${isPattern(c) ? patternPreviewCSS(c, undefined, 6) : c}"></i>`)
+            .map((c: string) => `<i style="background:${isPattern(c) ? patternPreviewCSS(c, undefined, 2) : c}"></i>`)
             .join('')}</span>
         </button>`;
         return groups.map((g) => `<div class="pal-group-label">${g.label}</div>${g.ids
@@ -547,7 +547,7 @@ export function buildUI(
   const patternPop = root.querySelector('#pattern-popover') as HTMLElement;
   const syncPatBtn = () => {
     const pat = state.fillPattern;
-    patBtn.style.background = pat ? patternPreviewCSS(pat, state.color, 9) : '';
+    patBtn.style.background = pat ? patternPreviewCSS(pat, state.color, 3) : '';
     patBtn.classList.toggle('none', !pat);
     patBtn.classList.toggle('on', !!pat);
     patBtn.title = pat ? `${patternLabel(pat)} — fills use it (tap to change)` : 'Fill pattern: solid (tap to pick a screentone / dither)';
@@ -576,7 +576,7 @@ export function buildUI(
           <div class="pat-fam"><span class="pat-fam-name">${f.label}</span>
             <div class="pat-swatches">${[1, 2, 3, 4, 5].map((k) => {
               const id = `pattern:${f.fam}-${k}`;
-              return `<button class="pat-sw${state.fillPattern === id ? ' active' : ''}" data-id="${id}" title="${f.label} ${k}" style="background:${patternPreviewCSS(id, state.color, 9)}"></button>`;
+              return `<button class="pat-sw${state.fillPattern === id ? ' active' : ''}" data-id="${id}" title="${f.label} ${k}" style="background:${patternPreviewCSS(id, state.color, 3)}"></button>`;
             }).join('')}</div>
           </div>`).join('')}`).join('')}
       <label class="pg-row pat-ink"><span>ink density</span><input type="range" id="pat-ink" min="0.3" max="1" step="0.05" value="${state.inkDensity}"><b>${Math.round(state.inkDensity * 100)}%</b></label>
@@ -2137,7 +2137,7 @@ export function buildUI(
       const pr = getPalette(store.doc.palette);
       const sh = pr.strict ? (pr.ramps?.[hue] ?? []) : shades(hue, drama);
       d.classList.toggle('active', hue === state.color || sh.includes(state.color));
-      if (sh.includes(state.color) && hue !== state.color) d.style.background = isPattern(state.color) ? patternPreviewCSS(state.color) : state.color;
+      if (sh.includes(state.color) && hue !== state.color) d.style.background = isPattern(state.color) ? patternPreviewCSS(state.color, undefined, 4.5) : state.color;
       else d.style.background = hue;
     });
     // Layer symbol: current-color stroke over / behind a white square
