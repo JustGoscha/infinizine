@@ -6,7 +6,7 @@ import { baseZoom as baseZoomFn } from './camera';
 import { Store } from './store';
 import { Camera, baseZoom, pxPerMm, setPxPerMm } from './camera';
 import { PALETTES, PALETTE_GROUPS, getPalette, shades, sortByLightness } from './palettes';
-import { isPattern, patternPreviewCSS, patternLabel, patternLevels, patternVariants, PATTERN_CATEGORIES } from './patterns';
+import { isPattern, patternPreviewCSS, patternLabel, patternLevels, patternVariants, PATTERN_CATEGORIES, PIXEL_FILL } from './patterns';
 import type { ExportOptions } from './export';
 import { UNITS_PER_MM, uid, FORMAT_VERSION, FILL_BLENDS } from './types';
 import { type Fmt, PRIMARY_FORMATS, FORMAT_GROUPS, MORE_FORMATS, fitPage, customFormats, saveCustomFormat, mm } from './formats';
@@ -670,6 +670,26 @@ export function buildUI(
       b.addEventListener('click', (e) => { e.stopPropagation(); closeFlyouts(); pickPattern(v); });
       patFly.appendChild(b);
     }
+    // always at hand: the solid pixel fill and plain (unpatterned) ink
+    const sep = document.createElement('i');
+    sep.className = 'pat-fly-sep';
+    patFly.appendChild(sep);
+    if (!pat.startsWith(PIXEL_FILL)) {
+      const px = document.createElement('button');
+      px.className = 'pal-shade pat-shade';
+      px.title = 'Pixel fill (solid, grid-edged)';
+      px.style.background = patternPreviewCSS(PIXEL_FILL, state.color, 3);
+      px.addEventListener('pointerdown', (e) => e.preventDefault());
+      px.addEventListener('click', (e) => { e.stopPropagation(); closeFlyouts(); pickPattern(PIXEL_FILL); });
+      patFly.appendChild(px);
+    }
+    const solid = document.createElement('button');
+    solid.className = 'pal-shade pat-shade pat-solid';
+    solid.title = 'Solid ink — no pattern';
+    solid.style.background = state.color;
+    solid.addEventListener('pointerdown', (e) => e.preventDefault());
+    solid.addEventListener('click', (e) => { e.stopPropagation(); closeFlyouts(); pickPattern(null); });
+    patFly.appendChild(solid);
     const more = document.createElement('button');
     more.className = 'pal-shade pat-shade pat-more';
     more.textContent = '···';

@@ -1781,3 +1781,4 @@ body.presenting .pages-panel { z-index: 60; }
 .pat-shade { border-radius: 3px; }
 .pat-shade.active { outline: 2px solid var(--ink); outline-offset: 1px; }
 .pat-more { background: transparent; font-weight: 700; letter-spacing: 0.05em; color: var(--ink); }
+.pat-fly-sep { display: block; height: 1px; background: var(--line); margin: 1px 0; }
