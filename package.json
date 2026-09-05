@@ -1,12 +1,14 @@
 {
   "name": "infinizine",
   "private": true,
-  "version": "0.2.0",
+  "version": "0.2.1",
   "type": "module",
   "scripts": {
     "dev": "vite --host",
     "build": "tsc && vite build",
-    "preview": "vite preview --host"
+    "preview": "vite preview --host",
+    "bump": "bun scripts/bump.ts",
+    "postinstall": "git config core.hooksPath .githooks || true"
   },
   "dependencies": {
     "@fontsource-variable/crimson-pro": "^5.3.0",

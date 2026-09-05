@@ -1,0 +1,24 @@
+#!/bin/sh
+# InfiniZine pre-commit: every commit that touches the app must bump the version.
+#   patch — fixes, tuning, small tweaks           (bun run bump patch)
+#   minor — new features, new settings, new tools  (bun run bump minor)
+#   major — breaking changes to the zine format    (bun run bump major, and bump FORMAT_VERSION in src/types.ts)
+# Docs/config-only commits are exempt. Skip deliberately with:  git commit --no-verify
+changed=$(git diff --cached --name-only --diff-filter=ACMR)
+echo "$changed" | grep -Eq '^(src/|index\.html|vite\.config\.ts|public/)' || exit 0
+
+head_ver=$(git show HEAD:package.json 2>/dev/null | grep -E '"version"' | head -1 | sed -E 's/.*"version": *"([^"]+)".*/\1/')
+new_ver=$(git show :package.json | grep -E '"version"' | head -1 | sed -E 's/.*"version": *"([^"]+)".*/\1/')
+
+if [ -z "$head_ver" ] || [ "$head_ver" != "$new_ver" ]; then
+  exit 0
+fi
+
+echo ""
+echo "✗ Version not bumped (still $head_ver) but app files changed."
+echo "  bun run bump patch   fixes / tuning"
+echo "  bun run bump minor   new feature"
+echo "  bun run bump major   breaking zine-format change (also bump FORMAT_VERSION in src/types.ts)"
+echo "  …then commit again. (git commit --no-verify to skip on purpose)"
+echo ""
+exit 1
