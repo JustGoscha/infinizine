@@ -823,7 +823,7 @@ export function attachInput(
           el.h = Math.max(MIN, imgStart.h + dy);
           break;
       }
-      invalidate();
+      invalidateStatic();
       return;
     }
     if (resizeText) {
@@ -847,7 +847,7 @@ export function attachInput(
         resizeMode === 'height'
           ? Math.max(contentH, resizeStart.h + dy)
           : Math.max(contentH, resizeStart.h * f);
-      invalidate();
+      invalidateStatic();
       return;
     }
     if (state.textRect) {
@@ -1336,6 +1336,9 @@ export function attachInput(
   }
 
   let dropCache: (id: string) => void = () => {};
+  // live mutations of text/image boxes (resize previews) aren't store changes:
+  // the renderer's static layer must be told to rebuild so the preview shows
+  const invalidateStatic = () => { dropCache('*'); invalidate(); };
   const api = {
     setDropCache(fn: (id: string) => void) { dropCache = fn; },
     copySelection,
