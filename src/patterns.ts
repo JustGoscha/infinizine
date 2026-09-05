@@ -37,10 +37,12 @@ export function patternTileSize(id: string): number {
   const p = parse(id);
   if (!p) return 3;
   switch (p.fam) {
-    case 'bayer': case 'pixnoise': case 'stairs': return 4.8; // 8 × 0.6mm cells (stairs: 4)
+    case 'bayer': case 'stairs': return 4.8; // 8 × 0.6mm cells (stairs: 4)
+    case 'pixnoise': return 12; // 20 × 0.6mm cells: random-looking, repeat not noticeable
     case 'scan': return 2.4;
     case 'checker': return 2 * [0.5, 0.7, 0.9, 1.2, 1.6][p.k - 1];
-    case 'sand': case 'waves': case 'scales': return 4;
+    case 'sand': return 14; // big tile so the stipple doesn't visibly repeat
+    case 'waves': case 'scales': return 4;
     default: return 3;
   }
 }
@@ -101,7 +103,7 @@ export function patternTile(id: string, color: string, px: number): HTMLCanvasEl
     g.fillRect(T / 2 - w / 2, -1, w, T + 2);
   } else if (fam === 'sand') {
     // stipple: seeded scatter, more grains per level; drawn also wrapped so the tile is seamless
-    const n = [10, 22, 40, 65, 100][k - 1];
+    const n = Math.round([10, 22, 40, 65, 100][k - 1] * (T * T) / 16); // same grain density as before, over the bigger tile
     const r = 0.13;
     for (let i = 0; i < n; i++) {
       const x = rnd(i, 1) * T, y = rnd(i, 2) * T;
@@ -137,10 +139,10 @@ export function patternTile(id: string, color: string, px: number): HTMLCanvasEl
     g.fillRect(0, 0, c + 0.01, c + 0.01);
     g.fillRect(c, c, c + 0.01, c + 0.01);
   } else if (fam === 'pixnoise') {
-    const cell = T / 8;
+    const N = 20, cell = T / N;
     const p = [0.1, 0.22, 0.38, 0.55, 0.72][k - 1];
-    for (let i = 0; i < 8; i++) for (let j = 0; j < 8; j++) {
-      if (rnd(i * 8 + j, 5) < p) g.fillRect(j * cell, i * cell, cell + 0.01, cell + 0.01);
+    for (let i = 0; i < N; i++) for (let j = 0; j < N; j++) {
+      if (rnd(i * N + j, 5) < p) g.fillRect(j * cell, i * cell, cell + 0.01, cell + 0.01);
     }
   } else if (fam === 'stairs') {
     // pixel diagonal: a 1-cell-wide staircase per 4 cells, thicker with level
