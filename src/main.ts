@@ -1,4 +1,5 @@
 import './style.css';
+import './fonts';
 import { Camera, baseZoom } from './camera';
 import { Store } from './store';
 import { InputState, attachInput } from './input';
@@ -86,6 +87,8 @@ setInterval(() => {
   }
 }, 400);
 window.addEventListener('resize', () => renderer.invalidate());
+// canvas text is measured/drawn with web fonts: redraw once they've arrived
+document.fonts?.ready.then(() => { renderer.clearCache(); renderer.invalidate(); });
 // pressure playground changed the curves: every cached outline is stale
 window.addEventListener('izine-restyle', () => { renderer.clearCache(); renderer.invalidate(); });
 canvas.addEventListener('contextmenu', (e) => e.preventDefault());

@@ -7,7 +7,7 @@ import { Store } from './store';
 import { Camera, baseZoom, pxPerMm, setPxPerMm } from './camera';
 import { PALETTES, getPalette, shades } from './palettes';
 import { UNITS_PER_MM, uid } from './types';
-import { layoutText, layoutHeight, layoutWidth, FONTS } from './text';
+import { layoutText, layoutHeight, layoutWidth, FONTS, FACES, chosenFaces, setFace, type FontRole } from './text';
 import { pressure, savePressure, resetPressure, loadPressure, exportPressure, importPressure, easeP, curveAt, type Curve, type CurveNode } from './geometry';
 import { markdownToHtml, htmlToMarkdown, autoTransform, caretToEnd } from './richedit';
 
@@ -298,6 +298,9 @@ export function buildUI(
         <div class="seg" id="set-adaptive"><button data-v="0">Physical</button><button data-v="1">Adaptive</button></div></div>
       <div class="set-row"><span>Zoom</span>
         <div class="seg" id="set-lock"><button data-v="1">Locked</button><button data-v="0">Free</button></div></div>
+      <div class="set-title set-sub">Typefaces</div>
+      <div class="set-fonts" id="set-fonts"></div>
+      <div class="set-note">All fonts are bundled with the app (SIL Open Font Licence / Apache). Nothing is loaded from Google.</div>
       <button class="set-action" id="set-brushes">Brush settings…</button>
     </div>
     <div class="popover hidden" id="palette-popover"></div>
@@ -2565,6 +2568,33 @@ export function buildUI(
     }
   };
   const settingsPop = root.querySelector('#settings-popover') as HTMLElement;
+  // typeface pickers: one <select> per role, options rendered in their own face
+  const fontsBox = settingsPop.querySelector('#set-fonts') as HTMLElement;
+  const ROLE_LABEL: Record<FontRole, string> = { franklin: 'Sans', serif: 'Serif', mono: 'Mono', comic: 'Comic', shout: 'Shout' };
+  for (const role of Object.keys(FACES) as FontRole[]) {
+    const row = document.createElement('label');
+    row.className = 'set-row';
+    const sel = document.createElement('select');
+    for (const f of FACES[role]) {
+      const o = document.createElement('option');
+      o.value = f.id;
+      o.textContent = f.name;
+      o.style.fontFamily = f.css;
+      sel.appendChild(o);
+    }
+    sel.value = chosenFaces[role];
+    sel.style.fontFamily = FONTS[role].css;
+    sel.addEventListener('change', () => {
+      setFace(role, sel.value);
+      sel.style.fontFamily = FONTS[role].css;
+      const face = FACES[role].find((f) => f.id === sel.value)!;
+      // wait for the face to load, then restyle every text box using this role
+      document.fonts.load(`16px ${face.css}`).finally(() => window.dispatchEvent(new Event('izine-restyle')));
+      refresh();
+    });
+    row.append(Object.assign(document.createElement('span'), { textContent: ROLE_LABEL[role] }), sel);
+    fontsBox.appendChild(row);
+  }
   const syncSettings = () => {
     const left = document.body.classList.contains('left-hand');
     settingsPop.querySelectorAll<HTMLElement>('#set-hand button').forEach((b) => b.classList.toggle('active', b.dataset.v === (left ? 'left' : 'right')));
