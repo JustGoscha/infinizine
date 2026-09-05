@@ -1511,3 +1511,34 @@ body.presenting .popover { display: none; }
   -webkit-backdrop-filter: blur(10px) saturate(1.1);
   backdrop-filter: blur(10px) saturate(1.1);
 }
+
+/* ---------- settings popover ---------- */
+#settings-popover { display: flex; flex-direction: column; gap: 10px; }
+#settings-popover.hidden { display: none; }
+.set-title { font-weight: 700; font-size: 13px; }
+.set-row { display: flex; align-items: center; justify-content: space-between; gap: 10px; font-size: 12px; }
+.seg { display: inline-flex; border: 1.5px solid var(--ink); border-radius: 2px; overflow: hidden; }
+.seg button {
+  border: none;
+  background: transparent;
+  color: var(--ink);
+  font: inherit;
+  font-size: 12px;
+  font-weight: 600;
+  padding: 5px 10px;
+  cursor: pointer;
+}
+.seg button + button { border-left: 1.5px solid var(--ink); }
+.seg button.active { background: var(--ink); color: var(--card); }
+.set-action {
+  border: 1.5px solid var(--ink);
+  background: var(--ink);
+  color: var(--card);
+  border-radius: 2px;
+  padding: 7px 12px;
+  font: inherit;
+  font-size: 12px;
+  font-weight: 700;
+  cursor: pointer;
+  text-align: left;
+}

@@ -227,6 +227,16 @@ export function buildUI(
       <button class="add-page" id="add-page" title="New page">${svg('<path d="M7 3.5 H13.5 L18 8 V20.5 H7 Z"/><path d="M13.5 3.5 V8 H18"/><path d="M12.5 11.5 v5 M10 14 h5"/>')}</button>
     </div>
     <div class="popover top-pop hidden" id="docs-popover"></div>
+    <div class="popover top-pop hidden" id="settings-popover">
+      <div class="set-title">Settings</div>
+      <div class="set-row"><span>Handedness</span>
+        <div class="seg" id="set-hand"><button data-v="right">Right</button><button data-v="left">Left</button></div></div>
+      <div class="set-row"><span>Brush size</span>
+        <div class="seg" id="set-adaptive"><button data-v="0">Physical</button><button data-v="1">Adaptive</button></div></div>
+      <div class="set-row"><span>Zoom</span>
+        <div class="seg" id="set-lock"><button data-v="1">Locked</button><button data-v="0">Free</button></div></div>
+      <button class="set-action" id="set-brushes">Brush settings…</button>
+    </div>
     <div class="popover hidden" id="palette-popover"></div>
     <div class="popover hidden" id="page-popover"></div>
     <div class="page-menu hidden" id="page-menu">
@@ -2015,7 +2025,6 @@ export function buildUI(
         <div class="pg-tools">${PG_TOOLS.map((o) => `<button class="pg-tool" data-t="${o.t}">${ICONS[o.t]}<span>${o.label}</span></button>`).join('')}</div>
         ${SLIDERS.map((sl) => `<label class="pg-row" data-k="${sl.k}"><span>${sl.label}</span><input type="range" data-k="${sl.k}" min="${sl.min}" max="${sl.max}" step="${sl.step}"><b></b></label>`).join('')}
         <div class="pg-actions" id="pg-nib-row"><button id="pg-nib-mode"></button></div>
-        <div class="pg-actions"><button id="pg-hand" title="Which side the undo/redo and selection bars sit on"></button></div>
         <div class="pg-actions">
           <button id="pg-save" class="pg-primary">Save</button>
           <button id="pg-reset">Reset to default</button>
@@ -2358,17 +2367,6 @@ export function buildUI(
     resetPressure(pgTool);
     restyle();
   });
-  const handBtn = pg.querySelector('#pg-hand') as HTMLButtonElement;
-  const syncHand = () => {
-    handBtn.textContent = document.body.classList.contains('left-hand') ? 'Left-handed UI · tap for right' : 'Right-handed UI · tap for left';
-  };
-  syncHand();
-  handBtn.addEventListener('click', () => {
-    const left = !document.body.classList.contains('left-hand');
-    writePref('infinizine-hand', left ? 'left' : 'right');
-    document.body.classList.toggle('left-hand', left);
-    syncHand();
-  });
   (pg.querySelector('#pg-nib-mode') as HTMLButtonElement).addEventListener('click', () => {
     pressure.marker.nibMode = pressure.marker.nibMode === 'azimuth' ? 'travel' : 'azimuth';
     restyle();
@@ -2426,7 +2424,56 @@ export function buildUI(
       syncPg();
     }
   };
-  pgBtn.addEventListener('click', () => togglePg(pg.classList.contains('hidden')));
+  const settingsPop = root.querySelector('#settings-popover') as HTMLElement;
+  const syncSettings = () => {
+    const left = document.body.classList.contains('left-hand');
+    settingsPop.querySelectorAll<HTMLElement>('#set-hand button').forEach((b) => b.classList.toggle('active', b.dataset.v === (left ? 'left' : 'right')));
+    settingsPop.querySelectorAll<HTMLElement>('#set-adaptive button').forEach((b) => b.classList.toggle('active', b.dataset.v === (state.adaptiveSize ? '1' : '0')));
+    settingsPop.querySelectorAll<HTMLElement>('#set-lock button').forEach((b) => b.classList.toggle('active', b.dataset.v === (state.zoomLocked ? '1' : '0')));
+  };
+  settingsPop.querySelector('#set-hand')!.addEventListener('click', (e) => {
+    const v = (e.target as HTMLElement).closest('button')?.dataset.v;
+    if (!v) return;
+    writePref('infinizine-hand', v);
+    document.body.classList.toggle('left-hand', v === 'left');
+    syncSettings();
+  });
+  settingsPop.querySelector('#set-adaptive')!.addEventListener('click', (e) => {
+    const v = (e.target as HTMLElement).closest('button')?.dataset.v;
+    if (!v) return;
+    state.adaptiveSize = v === '1';
+    writePref(ADAPTIVE_KEY, v);
+    state.updateCursor();
+    refresh();
+    syncSettings();
+  });
+  settingsPop.querySelector('#set-lock')!.addEventListener('click', (e) => {
+    const v = (e.target as HTMLElement).closest('button')?.dataset.v;
+    if (!v) return;
+    state.zoomLocked = v === '1';
+    writePref('infinizine-zoom-lock', v);
+    refresh();
+    invalidate();
+    syncSettings();
+  });
+  (settingsPop.querySelector('#set-brushes') as HTMLButtonElement).addEventListener('click', () => {
+    settingsPop.classList.add('hidden');
+    togglePg(true);
+  });
+  pgBtn.addEventListener('click', () => {
+    const open = settingsPop.classList.contains('hidden');
+    docsPop.classList.add('hidden');
+    settingsPop.classList.toggle('hidden', !open);
+    pgBtn.classList.toggle('on', open);
+    if (open) syncSettings();
+  });
+  document.addEventListener('pointerdown', (e) => {
+    const t = e.target as HTMLElement;
+    if (!t.closest?.('#settings-popover') && !t.closest?.('#playground')) {
+      settingsPop.classList.add('hidden');
+      if (pg.classList.contains('hidden')) pgBtn.classList.remove('on');
+    }
+  });
   (pg.querySelector('#pg-close') as HTMLButtonElement).addEventListener('click', () => togglePg(false));
   (pg.querySelector('#pg-close-big') as HTMLButtonElement).addEventListener('click', () => togglePg(false));
   // tapping the dimmed backdrop closes too
