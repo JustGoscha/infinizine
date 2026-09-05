@@ -70,6 +70,8 @@ function changeInfo(op: Op): ChangeInfo {
     case 'fill-ink':
     case 'fill-blend':
       return { ids: op.items.map((i) => i.id) };
+    case 'z-order':
+      return { ids: op.layers?.map((l) => l.id) ?? [] };
     case 'add-area':
     case 'delete-area':
     case 'add-frame':
@@ -127,36 +129,67 @@ function normalizeDoc(doc: Doc): Doc {
   return doc;
 }
 
-// Document bodies live in IndexedDB (localStorage's ~5MB cap is a few minutes
-// of pencil ink); only the small library index + current id stay in localStorage.
+// Document bodies live in IndexedDB; only the small library index + current id
+// stay in localStorage. Each element is its own record (key [docId, elementId])
+// and the rest of the document is a small "meta" record with the paint order,
+// so a save after a stroke writes one element, not a 20 MB JSON string — the
+// serialise-everything save used to freeze the iPad for seconds mid-sentence.
 const IDB_NAME = 'infinizine';
-const IDB_STORE = 'docs';
+const LEGACY_STORE = 'docs'; // v1: whole document as a JSON string
+const META_STORE = 'meta';
+const ELS_STORE = 'els';
 let idbPromise: Promise<IDBDatabase> | null = null;
 function idb(): Promise<IDBDatabase> {
   if (!idbPromise) {
     idbPromise = new Promise((resolve, reject) => {
-      const req = indexedDB.open(IDB_NAME, 1);
-      req.onupgradeneeded = () => req.result.createObjectStore(IDB_STORE);
+      const req = indexedDB.open(IDB_NAME, 2);
+      req.onupgradeneeded = () => {
+        const db = req.result;
+        for (const name of [LEGACY_STORE, META_STORE, ELS_STORE]) {
+          if (!db.objectStoreNames.contains(name)) db.createObjectStore(name);
+        }
+      };
       req.onsuccess = () => resolve(req.result);
       req.onerror = () => reject(req.error);
     });
   }
   return idbPromise;
 }
-function idbReq<T>(mode: IDBTransactionMode, fn: (s: IDBObjectStore) => IDBRequest<T>): Promise<T> {
+/** one transaction over `stores`; `fn` queues its requests synchronously */
+function idbTx(stores: string[], mode: IDBTransactionMode, fn: (tx: IDBTransaction) => void): Promise<void> {
   return idb().then(
     (db) =>
-      new Promise<T>((resolve, reject) => {
-        const tx = db.transaction(IDB_STORE, mode);
-        const req = fn(tx.objectStore(IDB_STORE));
-        req.onsuccess = () => resolve(req.result);
+      new Promise<void>((resolve, reject) => {
+        const tx = db.transaction(stores, mode);
+        tx.oncomplete = () => resolve();
+        tx.onerror = () => reject(tx.error);
+        tx.onabort = () => reject(tx.error);
+        fn(tx);
+      }),
+  );
+}
+function idbGet<T>(store: string, key: IDBValidKey): Promise<T | undefined> {
+  return idb().then(
+    (db) =>
+      new Promise<T | undefined>((resolve, reject) => {
+        const req = db.transaction(store, 'readonly').objectStore(store).get(key);
+        req.onsuccess = () => resolve(req.result as T | undefined);
         req.onerror = () => reject(req.error);
       }),
   );
 }
-const idbGet = (id: string) => idbReq<string | undefined>('readonly', (s) => s.get(id));
-const idbPut = (id: string, json: string) => idbReq('readwrite', (s) => s.put(json, id));
-const idbDel = (id: string) => idbReq('readwrite', (s) => s.delete(id));
+function idbGetAll<T>(store: string, range: IDBKeyRange): Promise<T[]> {
+  return idb().then(
+    (db) =>
+      new Promise<T[]>((resolve, reject) => {
+        const req = db.transaction(store, 'readonly').objectStore(store).getAll(range);
+        req.onsuccess = () => resolve(req.result as T[]);
+        req.onerror = () => reject(req.error);
+      }),
+  );
+}
+const elRange = (docId: string) => IDBKeyRange.bound([docId, ''], [docId, '\uffff']);
+type DocMetaRecord = Omit<Doc, 'elements'> & { order: string[] };
 function toast(msg: string) {
   window.dispatchEvent(new CustomEvent('izine-toast', { detail: msg }));
 }
@@ -175,6 +208,10 @@ export class Store {
   /** resolves once the current document has been loaded from IndexedDB */
   ready: Promise<void>;
   private saveFailed = false;
+  // what the next flush has to write
+  private dirtyIds = new Set<string>();
+  private metaDirty = false;
+  private dirtyAll = false;
 
   constructor(opts?: { ephemeral?: boolean }) {
     this.doc = emptyDoc();
@@ -187,6 +224,8 @@ export class Store {
     }
     this.migrateLegacy();
     this.ready = this.init();
+    // a save still pending when the tab goes away is written now
+    window.addEventListener('pagehide', () => { if (this.saveTimer !== undefined) this.flush(); });
   }
 
   private async init() {
@@ -194,10 +233,12 @@ export class Store {
     const loaded = current ? await this.loadDoc(current) : null;
     if (loaded && current) {
       this.docId = current;
-      this.doc = loaded;
+      this.doc = loaded.doc;
+      if (loaded.legacy) this.dirtyAll = true; // rewrite in the per-element format (and drop the old blob)
     } else {
-      this.saveNow();
+      this.dirtyAll = true;
     }
+    if (this.dirtyAll) this.flush();
     this.onChange();
   }
 
@@ -213,24 +254,30 @@ export class Store {
     } catch { /* ignore */ }
   }
 
-  private async loadDoc(id: string): Promise<Doc | null> {
+  private async loadDoc(id: string): Promise<{ doc: Doc; legacy: boolean } | null> {
     try {
-      let raw = await idbGet(id).catch(() => undefined);
-      if (!raw) {
-        // pre-IndexedDB document: move it over and free the localStorage quota
-        raw = localStorage.getItem(DOC_PREFIX + id) ?? undefined;
-        if (raw) {
-          await idbPut(id, raw);
-          localStorage.removeItem(DOC_PREFIX + id);
-        }
+      const meta = await idbGet<DocMetaRecord>(META_STORE, id).catch(() => undefined);
+      let parsed: Doc | undefined;
+      let legacy = false;
+      if (meta) {
+        const els = await idbGetAll<Element>(ELS_STORE, elRange(id));
+        const pos = new Map(meta.order.map((eid, i) => [eid, i]));
+        els.sort((a, b) => (pos.get(a.id) ?? 1e9) - (pos.get(b.id) ?? 1e9));
+        const { order: _order, ...rest } = meta;
+        parsed = { ...rest, elements: els } as Doc;
+      } else {
+        // v1 formats: one JSON string in IndexedDB, or (older still) in localStorage
+        let raw = await idbGet<string>(LEGACY_STORE, id).catch(() => undefined);
+        if (!raw) raw = localStorage.getItem(DOC_PREFIX + id) ?? undefined;
+        if (!raw) return null;
+        parsed = JSON.parse(raw) as Doc;
+        legacy = true;
       }
-      if (!raw) return null;
-      const parsed = JSON.parse(raw) as Doc;
       const doc = migrateDoc(parsed);
       if (!doc && typeof parsed?.version === 'number' && parsed.version > FORMAT_VERSION) {
         toast(`This zine was saved by a newer InfiniZine (format ${parsed.version}) — please update`);
       }
-      return doc;
+      return doc ? { doc, legacy } : null;
     } catch {
       return null;
     }
@@ -245,16 +292,50 @@ export class Store {
     }
   }
 
-  private saveNow() {
-    if (this.ephemeral) return;
+  /** remember what an op touched; the write happens a moment later, batched */
+  private noteChange(info: ChangeInfo) {
+    for (const id of info.ids) this.dirtyIds.add(id);
+    this.metaDirty = true; // order, pages, areas, styles — cheap, always refreshed
+    this.scheduleSave();
+  }
+
+  /** Write everything dirty for the current document. Captures the document
+   * synchronously, so a switch right after is safe. */
+  private flush(): Promise<void> {
+    if (this.ephemeral) return Promise.resolve();
+    clearTimeout(this.saveTimer);
+    this.saveTimer = undefined;
     const id = this.docId;
-    // serialise synchronously (switchTo swaps the doc right after), round
-    // coordinates to 1/1000 unit — sub-micron, and a third smaller on disk
-    this.doc.version = FORMAT_VERSION;
-    this.doc.app = __APP_VERSION__;
-    this.doc.savedAt = Date.now();
-    const json = JSON.stringify(this.doc, (_k, v) => (typeof v === 'number' ? Math.round(v * 1000) / 1000 : v));
-    idbPut(id, json).then(
+    const doc = this.doc;
+    const all = this.dirtyAll;
+    const metaDirty = this.metaDirty || all;
+    const ids = [...this.dirtyIds];
+    this.dirtyAll = false;
+    this.metaDirty = false;
+    this.dirtyIds.clear();
+    if (!all && !metaDirty && !ids.length) return Promise.resolve();
+    doc.version = FORMAT_VERSION;
+    doc.app = __APP_VERSION__;
+    doc.savedAt = Date.now();
+    const done = idbTx([META_STORE, ELS_STORE, LEGACY_STORE], 'readwrite', (tx) => {
+      const els = tx.objectStore(ELS_STORE);
+      if (metaDirty) {
+        const { elements, ...rest } = doc;
+        tx.objectStore(META_STORE).put({ ...rest, order: elements.map((e) => e.id) } as DocMetaRecord, id);
+      }
+      if (all) {
+        els.delete(elRange(id));
+        for (const el of doc.elements) els.put(el, [id, el.id]);
+        tx.objectStore(LEGACY_STORE).delete(id); // the whole-document blob is superseded
+      } else if (ids.length) {
+        const byId = new Map(doc.elements.map((e) => [e.id, e]));
+        for (const eid of ids) {
+          const el = byId.get(eid);
+          if (el) els.put(el, [id, eid]);
+          else els.delete([id, eid]);
+        }
+      }
+    }).then(
       () => { this.saveFailed = false; },
       () => {
         if (!this.saveFailed) toast('Could not save the zine (storage error)');
@@ -263,32 +344,35 @@ export class Store {
     );
     try {
       const rest = this.listDocs().filter((m) => m.id !== id);
-      rest.unshift({ id, name: this.doc.name, updated: Date.now() });
+      rest.unshift({ id, name: doc.name, updated: Date.now() });
       localStorage.setItem(INDEX_KEY, JSON.stringify(rest));
       localStorage.setItem(CURRENT_KEY, id);
+      localStorage.removeItem(DOC_PREFIX + id); // pre-IndexedDB copy, if any
     } catch { /* index only; the body is safe in IndexedDB */ }
+    return done;
   }
 
   private scheduleSave() {
     if (this.ephemeral) return;
     clearTimeout(this.saveTimer);
-    this.saveTimer = window.setTimeout(() => this.saveNow(), 400);
+    this.saveTimer = window.setTimeout(() => this.flush(), 400);
   }
 
   private switchTo(id: string, doc: Doc) {
-    this.saveNow(); // flush the outgoing doc
+    void this.flush(); // the outgoing doc is captured now, before the swap
     this.docId = id;
     this.doc = doc;
     this.undoStack = [];
     this.redoStack = [];
-    this.saveNow();
+    this.dirtyAll = true;
+    void this.flush();
     this.onChange();
   }
 
   async openDoc(id: string) {
     if (id === this.docId) return;
-    const doc = await this.loadDoc(id);
-    if (doc) this.switchTo(id, doc);
+    const loaded = await this.loadDoc(id);
+    if (loaded) this.switchTo(id, loaded.doc);
     else toast('Could not open that zine');
   }
 
@@ -303,12 +387,17 @@ export class Store {
   }
 
   deleteDoc(id: string) {
-    void idbDel(id).catch(() => {});
+    void idbTx([META_STORE, ELS_STORE, LEGACY_STORE], 'readwrite', (tx) => {
+      tx.objectStore(META_STORE).delete(id);
+      tx.objectStore(ELS_STORE).delete(elRange(id));
+      tx.objectStore(LEGACY_STORE).delete(id);
+    }).catch(() => {});
     try {
       localStorage.removeItem(DOC_PREFIX + id);
       localStorage.setItem(INDEX_KEY, JSON.stringify(this.listDocs().filter((m) => m.id !== id)));
     } catch { /* ignore */ }
     if (id === this.docId) {
+      this.dirtyIds.clear(); this.metaDirty = false; this.dirtyAll = false; // nothing of it should come back
       const next = this.listDocs()[0];
       if (next) void this.openDoc(next.id);
       else this.newDoc();
@@ -321,16 +410,17 @@ export class Store {
     const n = name.trim();
     if (!n || n === this.doc.name) return;
     this.doc.name = n;
-    this.saveNow();
+    this.metaDirty = true;
+    void this.flush();
     this.onChange();
   }
 
-  /** Self-contained export: plain JSON, the whole document. */
+  /** Self-contained export: plain JSON, the whole document (numbers to 1/1000 unit — sub-micron). */
   exportJSON(): string {
     return JSON.stringify(
       { ...this.doc, version: FORMAT_VERSION, app: __APP_VERSION__, savedAt: Date.now(), format: 'infinizine' },
-      null,
-      2,
+      (_k, v) => (typeof v === 'number' ? Math.round(v * 1000) / 1000 : v),
+      1,
     );
   }
 
@@ -357,8 +447,9 @@ export class Store {
     this.undoStack.push(op);
     if (this.undoStack.length > 300) this.undoStack.shift();
     this.redoStack = [];
-    this.scheduleSave();
-    this.onChange(changeInfo(op));
+    const info = changeInfo(op);
+    this.noteChange(info);
+    this.onChange(info);
   }
 
   private apply(op: Op) {
@@ -684,8 +775,9 @@ export class Store {
     const inv = this.invert(op);
     this.apply(inv);
     this.redoStack.push(op);
-    this.scheduleSave();
-    this.onChange(changeInfo(inv));
+    const info = changeInfo(inv);
+    this.noteChange(info);
+    this.onChange(info);
   }
 
   redo() {
@@ -693,8 +785,9 @@ export class Store {
     if (!op) return;
     this.apply(op);
     this.undoStack.push(op);
-    this.scheduleSave();
-    this.onChange(changeInfo(op));
+    const info = changeInfo(op);
+    this.noteChange(info);
+    this.onChange(info);
   }
 
   get canUndo() { return this.undoStack.length > 0; }
