@@ -149,6 +149,8 @@ export class InputState {
   presenting = false; // presentation mode: render only page content
   presentPage: Page | null = null; // the single page shown while presenting
   onToolChange: () => void = () => {};
+  /** set while the text editor is open: a colour pick recolours the text being edited */
+  onEditColor: ((c: string) => void) | null = null;
   onPageMenu: (page: Page, clientX: number, clientY: number) => void = () => {};
   onPagePreview: (page: Page) => void = () => {};
   textRect: { x: number; y: number; w: number; h: number } | null = null; // rect being drawn with the text tool

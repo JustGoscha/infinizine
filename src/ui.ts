@@ -452,6 +452,7 @@ export function buildUI(
   /** Picking a color while textboxes are selected recolors them. */
   function applyColor(c: string) {
     state.color = c;
+    state.onEditColor?.(c); // text being edited follows the palette
     writePref(`infinizine-color-${store.docId}`, c);
     writePref('infinizine-last-color', c);
     state.rememberTool();
@@ -476,6 +477,7 @@ export function buildUI(
         const s = document.createElement('button');
         s.className = 'pal-shade';
         s.style.background = c;
+        s.addEventListener('pointerdown', (e) => e.preventDefault()); // keep the text editor focused
         s.addEventListener('click', (e) => {
           e.stopPropagation();
           closeFlyouts();
@@ -487,6 +489,7 @@ export function buildUI(
       dot.className = 'pal-main';
       dot.dataset.hue = hue;
       dot.style.background = hue;
+      dot.addEventListener('pointerdown', (e) => { if (state.onEditColor) e.preventDefault(); }); // keep the text editor focused
       let lp = 0;
       let longPressed = false;
       const hueShades = shades(hue, preset.drama).map((c) => c.toLowerCase());
@@ -711,8 +714,9 @@ export function buildUI(
 
   state.onTextEdit = (target, rect) => {
     let fontSize = target ? target.fontSize : state.textSize;
-    const color = target ? target.color : state.color;
+    let color = target ? target.color : state.color;
     let family = target?.font ?? state.font;
+    state.onEditColor = (c) => { color = c; place(); ta.focus(); };
     if (target) state.hidden.add(target.id);
     invalidate();
 
@@ -806,12 +810,14 @@ export function buildUI(
     const commit = () => {
       if (done) return;
       done = true;
+      state.onEditColor = null;
       ta.remove();
       bar.remove();
       if (target) state.hidden.delete(target.id);
       const text = value().replace(/\s+$/, '');
       const h = Math.max(rect.h, layoutHeight(layoutText(text || ' ', family, fontSize, rect.w)));
       if (target) {
+        if (color !== target.color) store.recolorElements([target.id], color);
         if (text === target.text && family === (target.font ?? 'franklin') && fontSize === target.fontSize) {
           invalidate();
           return;
