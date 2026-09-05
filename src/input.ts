@@ -103,7 +103,10 @@ export function textHandleRect(el: TextBox, zoom: number) {
 }
 
 export class InputState {
-  private _tool: Tool = 'pen';
+  private _tool: Tool = (() => {
+    const t = readPref('infinizine-last-tool');
+    return t && REMEMBER_TOOLS.has(t) ? (t as Tool) : 'pen'; // drawing tools only; never boot into eraser/anim
+  })();
   /** per-tool colour + size memory: switching tools brings back what you last used with each */
   private toolMem: Partial<Record<Tool, { color: string; baseWidth: number }>> = (() => {
     try { return JSON.parse(readPref(TOOL_MEM_KEY) ?? '{}'); } catch { return {}; }
@@ -115,6 +118,7 @@ export class InputState {
     this._tool = t;
     const m = this.toolMem[t];
     if (m) { this.color = m.color; this.baseWidth = m.baseWidth; }
+    if (REMEMBER_TOOLS.has(t)) writePref('infinizine-last-tool', t);
   }
   /** store the current colour/size under the current tool (called on switch and on edits) */
   rememberTool() {
@@ -158,7 +162,7 @@ export class InputState {
   hoverArea: string | null = null; // anim area under the mouse (shows its handles)
   hoverPage: string | null = null; // page under the mouse (shows its grabbers)
   hoverImage: string | null = null; // image under the mouse (shows its handles)
-  lastDrawTool: Tool = 'pen'; // remembered so e.g. area creation can bounce back to it
+  lastDrawTool: Tool = this._tool; // remembered so e.g. area creation can bounce back to it
   onAnimClose: () => void = () => {};
   toolCursor = 'crosshair'; // css cursor for the current tool (set by the UI)
   updateCursor: () => void = () => {};

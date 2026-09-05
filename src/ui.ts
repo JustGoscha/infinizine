@@ -2651,30 +2651,60 @@ export function buildUI(
   // typeface pickers: one <select> per role, options rendered in their own face
   const fontsBox = settingsPop.querySelector('#set-fonts') as HTMLElement;
   const ROLE_LABEL: Record<FontRole, string> = { franklin: 'Sans', serif: 'Serif', mono: 'Mono', comic: 'Comic', shout: 'Shout' };
+  const SAMPLE: Record<FontRole, string> = {
+    franklin: 'The quick brown fox jumps over 13 lazy dogs.',
+    serif: 'Once upon a midnight dreary, while I pondered…',
+    mono: 'const zine = await fold(pages, 8);',
+    comic: 'Whoa!! Did you see that?! Let\'s go!',
+    shout: 'BAM! KAPOW! EXTRA! EXTRA!',
+  };
+  let openPicker: HTMLElement | null = null;
+  const closePicker = () => { openPicker?.remove(); openPicker = null; };
   for (const role of Object.keys(FACES) as FontRole[]) {
-    const row = document.createElement('label');
+    const row = document.createElement('div');
     row.className = 'set-row';
-    const sel = document.createElement('select');
-    for (const f of FACES[role]) {
-      const o = document.createElement('option');
-      o.value = f.id;
-      o.textContent = f.name;
-      o.style.fontFamily = f.css;
-      sel.appendChild(o);
-    }
-    sel.value = chosenFaces[role];
-    sel.style.fontFamily = FONTS[role].css;
-    sel.addEventListener('change', () => {
-      setFace(role, sel.value);
-      sel.style.fontFamily = FONTS[role].css;
-      const face = FACES[role].find((f) => f.id === sel.value)!;
-      // wait for the face to load, then restyle every text box using this role
-      document.fonts.load(`16px ${face.css}`).finally(() => window.dispatchEvent(new Event('izine-restyle')));
-      refresh();
+    const btn = document.createElement('button');
+    btn.className = 'face-btn';
+    const syncBtn = () => {
+      const f = FACES[role].find((x) => x.id === chosenFaces[role])!;
+      btn.textContent = f.name;
+      btn.style.fontFamily = f.css;
+    };
+    syncBtn();
+    btn.addEventListener('click', (e) => {
+      e.stopPropagation();
+      if (openPicker?.dataset.role === role) { closePicker(); return; }
+      closePicker();
+      // a real preview list: every face shows its name and a sentence in itself
+      const pick = document.createElement('div');
+      pick.className = 'face-pick';
+      pick.dataset.role = role;
+      for (const f of FACES[role]) {
+        const o = document.createElement('button');
+        o.className = `face-opt${f.id === chosenFaces[role] ? ' active' : ''}`;
+        o.style.fontFamily = f.css;
+        o.innerHTML = `<span class="face-name">${f.name}</span><span class="face-sample">${SAMPLE[role]}</span>`;
+        o.addEventListener('click', () => {
+          setFace(role, f.id);
+          syncBtn();
+          closePicker();
+          document.fonts.load(`16px ${f.css}`).finally(() => window.dispatchEvent(new Event('izine-restyle')));
+          refresh();
+        });
+        pick.appendChild(o);
+      }
+      const r = btn.getBoundingClientRect();
+      pick.style.top = `${r.bottom + 6}px`;
+      pick.style.right = `${window.innerWidth - r.right}px`;
+      document.body.appendChild(pick);
+      openPicker = pick;
     });
-    row.append(Object.assign(document.createElement('span'), { textContent: ROLE_LABEL[role] }), sel);
+    row.append(Object.assign(document.createElement('span'), { textContent: ROLE_LABEL[role] }), btn);
     fontsBox.appendChild(row);
   }
+  document.addEventListener('pointerdown', (e) => {
+    if (!(e.target as HTMLElement).closest('.face-pick, .face-btn')) closePicker();
+  });
   const syncSettings = () => {
     const left = document.body.classList.contains('left-hand');
     settingsPop.querySelectorAll<HTMLElement>('#set-hand button').forEach((b) => b.classList.toggle('active', b.dataset.v === (left ? 'left' : 'right')));
