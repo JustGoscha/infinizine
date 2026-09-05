@@ -590,7 +590,8 @@ export function buildUI(
     // selected fills take the pattern right away
     const ids = store.doc.elements.filter((el) => el.kind === 'fill' && state.selection.has(el.id)).map((el) => el.id);
     if (ids.length) store.setPatterns(ids, pat);
-    if (pat && state.tool !== 'lasso-fill') { state.tool = 'lasso-fill'; state.onToolChange(); }
+    // the pens paint patterns too, so only a non-drawing tool jumps to the fill tool
+    if (pat && !['pen', 'pencil', 'sketch', 'fineliner', 'marker', 'lasso-fill'].includes(state.tool)) { state.tool = 'lasso-fill'; state.onToolChange(); }
     syncPatBtn();
     buildPatternPopover();
     invalidate();

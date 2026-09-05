@@ -8,7 +8,7 @@ import { layoutText, fontFor, segWidth, LINE_HEIGHT } from './text';
 import { moveHandleRect, moveAllHandleRect, deleteHandleRect, eyeHandleRect, type InputState } from './input';
 import { Store, ChangeInfo } from './store';
 import { formatLabel } from './formats';
-import { patternTile, patternTileSize, patternCellSize, cellPath, motifPath, isPixelPattern, PIXEL_CELL, PIXEL_FILL } from './patterns';
+import { patternTile, patternTileSize, patternCellSize, cellPath, motifPath, isPixelPattern, PIXEL_CELL } from './patterns';
 import { reportCrash } from './crash';
 
 type View = { x: number; y: number; w: number; h: number }; // camera viewport, world coords
@@ -880,19 +880,24 @@ export class Renderer {
           return;
         }
       }
-      if (this.input.pixelInk()) {
-        // pixel brush preview: the outline snapped to grid cells, as it will commit
+      if (this.input.patternInk()) {
+        // pattern brush preview: the outline filled with the pattern as it will commit
+        // (pixel patterns snapped to grid cells; tones clipped, dots whole on commit)
+        const pat = this.input.fillPattern!;
         const shown: Stroke = live.points.length > 2
           ? { ...live, points: this.liveSmooth.update(live.id, live.points, pressure[live.tool].smooth / this.camera.zoom) }
           : live;
         const outline = strokeOutline(shown, 1, true).map(([x, y]) => ({ x, y }));
-        const b = elementBBox({ ...shown, points: outline.map((q) => ({ ...q, p: 1, t: 0 })) });
-        const work = ((b.maxX - b.minX) / PIXEL_CELL) * ((b.maxY - b.minY) / PIXEL_CELL) * outline.length;
-        const path = work < 4e6 ? cellPath(outline, PIXEL_FILL) : null; // huge scribbles preview as vector
+        let path: Path2D | null = null;
+        if (isPixelPattern(pat)) {
+          const b = elementBBox({ ...shown, points: outline.map((q) => ({ ...q, p: 1, t: 0 })) });
+          const work = ((b.maxX - b.minX) / PIXEL_CELL) * ((b.maxY - b.minY) / PIXEL_CELL) * outline.length;
+          if (work < 4e6) path = cellPath(outline, pat); // huge scribbles preview as vector
+        }
         ctx.save();
         ctx.globalCompositeOperation = this.input.fillBlend;
         ctx.globalAlpha = live.opacity * this.input.inkDensity;
-        ctx.fillStyle = live.color;
+        ctx.fillStyle = path || isPixelPattern(pat) ? live.color : this.fillPattern(pat, live.color, this.input.liveToneAngle);
         ctx.fill(path ?? outlineToPath(strokeOutline(shown, this.detail(), true)));
         ctx.restore();
         return;

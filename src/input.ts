@@ -6,7 +6,7 @@ import { Camera, baseZoom } from './camera';
 import { Store } from './store';
 import { AnimArea, Stroke, FillShape, Element, ImageBox, Page, TextBox, uid } from './types';
 import { hitElement, elementsInLasso, denoise, denoiseClosed, pressure, strokeOutline } from './geometry';
-import { isPixelPattern, migratePatternId, PIXEL_FILL } from './patterns';
+import { isPixelPattern, migratePatternId } from './patterns';
 import { layoutText, layoutHeight } from './text';
 
 const CLIP_KEY = 'infinizine-clipboard';
@@ -143,9 +143,11 @@ export class InputState {
   })();
   /** ink coverage for pattern fills (CMYK-style tint): 1 = solid ink, lower lets paper through so overlaps mix */
   inkDensity = (() => { const v = Number(readPref('infinizine-fill-opacity')); return v >= 0.3 && v <= 1 ? v : 1; })();
-  /** pixel brush: with a pixel pattern selected, the pens paint solid pixels on the
-   * shared grid — the stroke's outline becomes a pixel fill, so it edges in whole cells */
-  pixelInk(): boolean { return !!this.fillPattern && isPixelPattern(this.fillPattern) && BRUSH_TOOLS.has(this.tool); }
+  /** pattern brush: with a pattern selected, the pens paint it — the stroke's outline
+   * becomes a pattern fill (pixel patterns edge in whole grid cells; tones keep whole dots) */
+  patternInk(): boolean { return !!this.fillPattern && BRUSH_TOOLS.has(this.tool); }
+  /** tone angle for the stroke being drawn (chosen at pen-down so the preview matches the commit) */
+  liveToneAngle = 0;
   /** every new tone fill gets its own random angle (off: all fills share angle 0) */
   toneRandom = readPref('infinizine-tone-random') !== '0';
   /** two-finger tap = undo, three = redo (off: fingers only pan/zoom) */
@@ -613,6 +615,7 @@ export function attachInput(
           points: [{ x: w.x, y: w.y, p: 0.5, t: 0, a: tiltOf(e), r: azimuthOf(e) }],
           startTime: Date.now() / 1000,
         };
+        state.liveToneAngle = state.fillPattern && !isPixelPattern(state.fillPattern) && state.toneRandom ? Math.floor(Math.random() * 36) * 5 : 0;
         conditionPressure(e);
         state.live.points[0].p = pEma ?? 0.5;
         return;
@@ -1011,13 +1014,14 @@ export function attachInput(
       if (s.area) {
         // live ink: every stroke gets its own live layer with its own cycle
         store.addLiveLayer(s.area, s, 'continuous');
-      } else if (state.pixelInk()) {
-        // pixel brush: commit the stroke's outline as a solid pixel fill (whole grid cells)
+      } else if (state.patternInk()) {
+        // pattern brush: commit the stroke's outline as a fill in the active pattern
         const outline = strokeOutline(s, 1).map(([x, y]) => ({ x, y }));
         if (outline.length >= 3) {
           const fill: FillShape = {
             id: uid('fl'), kind: 'fill', color: s.color, opacity: s.opacity,
-            pattern: PIXEL_FILL, ink: state.inkDensity,
+            pattern: state.fillPattern!, ink: state.inkDensity,
+            patternAngle: state.liveToneAngle || undefined,
             blend: state.fillBlend !== 'multiply' ? state.fillBlend : undefined,
             layer: s.layer, frame: s.frame, alayer: s.alayer, points: outline,
           };
