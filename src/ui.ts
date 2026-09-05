@@ -1203,9 +1203,9 @@ export function buildUI(
       <div class="tl-tracks" id="tl-tracks"></div>
       ${tlView === 'frames'
         ? `<div class="tl-ops">
-        <button id="tl-add" title="Add frame">＋</button>
-        <button id="tl-dup" title="Duplicate frame">⧉</button>
         <button id="tl-del" title="Delete frame">−</button>
+        <button id="tl-add" title="Add frame after the current one">＋</button>
+        <button id="tl-dup" title="Duplicate frame">⧉</button>
         <span class="tl-sep"></span>
         <button id="tl-shorter" title="Shorter">⇤</button>
         <button id="tl-longer" title="Longer">⇥</button>
@@ -1501,10 +1501,44 @@ export function buildUI(
         });
         strip.appendChild(b);
       });
+      // always a "+" after the last frame: the next frame is one tap away
+      const addTile = document.createElement('button');
+      addTile.className = 'tl-frame tl-frame-add';
+      addTile.textContent = '+';
+      addTile.title = 'Add a frame at the end of this layer';
+      addTile.addEventListener('click', () => {
+        const last = l.frames[l.frames.length - 1];
+        const nf = store.addFrame(area.id, l.id, l.frames.length, last?.duration ?? 1);
+        state.activeLayerId = l.id;
+        state.activeFrameId = nf.id;
+        renderTimeline();
+        invalidate();
+      });
+      strip.appendChild(addTile);
 
       row.append(head, strip);
       tracksEl.appendChild(row);
     });
+    if (tlView === 'frames') {
+      // "+ layer" row under the last layer
+      const addRow = document.createElement('div');
+      addRow.className = 'tl-track tl-track-add';
+      const addBtn = document.createElement('button');
+      addBtn.className = 'tl-addlayer-row';
+      addBtn.innerHTML = `${svg('<path d="M12 5v14M5 12h14"/>')}<span>layer</span>`;
+      addBtn.title = 'Add a layer';
+      addBtn.addEventListener('click', () => {
+        const nl = store.addAnimLayer(area.id);
+        if (nl) {
+          state.activeLayerId = nl.id;
+          state.activeFrameId = nl.frames[0]?.id ?? null;
+        }
+        renderTimeline();
+        invalidate();
+      });
+      addRow.appendChild(addBtn);
+      tracksEl.appendChild(addRow);
+    }
 
     const q = (sel: string) => tl.querySelector(sel) as HTMLElement;
     const on = (sel: string, fn: (e: Event) => void) =>

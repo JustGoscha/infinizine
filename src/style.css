@@ -1549,3 +1549,29 @@ body.presenting .popover { display: none; }
   box-shadow: 3px 3px 0 rgba(42, 36, 26, 0.35);
   z-index: 3;
 }
+
+/* timeline: inline add controls */
+.tl-frame-add {
+  width: 30px;
+  color: var(--ink-soft);
+  font-size: 16px;
+  font-weight: 700;
+  border-left: 1px dashed var(--line);
+}
+.tl-frame-add:hover { color: var(--ink); background: rgba(42,36,26,0.06); }
+.tl-track-add { min-height: 30px; }
+.tl-addlayer-row {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  border: none;
+  background: transparent;
+  color: var(--ink-soft);
+  font: inherit;
+  font-size: 11px;
+  font-weight: 600;
+  padding: 6px 10px;
+  cursor: pointer;
+}
+.tl-addlayer-row svg { width: 14px; height: 14px; }
+.tl-addlayer-row:hover { color: var(--ink); }
