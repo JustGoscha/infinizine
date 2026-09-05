@@ -67,12 +67,10 @@ export interface Stroke {
 }
 
 export type FillBlend = 'multiply' | 'source-over' | 'darken' | 'screen' | 'difference';
+// two ways a tone can sit on the page (the type keeps room for more)
 export const FILL_BLENDS: { id: FillBlend; label: string; hint: string }[] = [
-  { id: 'multiply', label: 'Overprint', hint: 'inks stack and darken (CMYK)' },
-  { id: 'source-over', label: 'Cover', hint: 'opaque, like paper cut-outs' },
-  { id: 'darken', label: 'Darken', hint: 'keeps the darker of the two' },
-  { id: 'screen', label: 'Screen', hint: 'light inks on dark paper' },
-  { id: 'difference', label: 'Difference', hint: 'inverting overlaps, riso-poster look' },
+  { id: 'multiply', label: 'Subtract', hint: 'ink on paper: overlapping tones mix and darken (CMYK)' },
+  { id: 'source-over', label: 'Normal', hint: 'opaque: covers what is underneath' },
 ];
 
 export interface FillShape {
