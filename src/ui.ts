@@ -5,7 +5,7 @@ import { Renderer } from './render';
 import { baseZoom as baseZoomFn } from './camera';
 import { Store } from './store';
 import { Camera, baseZoom, pxPerMm, setPxPerMm } from './camera';
-import { PALETTES, PALETTE_GROUPS, getPalette, shades } from './palettes';
+import { PALETTES, PALETTE_GROUPS, getPalette, shades, sortByLightness } from './palettes';
 import { isPattern, patternPreviewCSS, patternLabel, PATTERN_CATEGORIES } from './patterns';
 import { UNITS_PER_MM, uid, FORMAT_VERSION, FILL_BLENDS } from './types';
 import { type Fmt, PRIMARY_FORMATS, FORMAT_GROUPS, MORE_FORMATS, fitPage, customFormats, saveCustomFormat, mm } from './formats';
@@ -412,7 +412,7 @@ export function buildUI(
       const fly = document.createElement('div');
       fly.className = 'shade-flyout';
       // hardware palettes are exact: no derived shades, so no flyout
-      const hueList = preset.strict ? (preset.ramps?.[hue] ?? []) : shades(hue, preset.drama);
+      const hueList = preset.strict ? sortByLightness(preset.ramps?.[hue] ?? []) : shades(hue, preset.drama);
       for (const c of hueList) {
         const s = document.createElement('button');
         s.className = 'pal-shade';

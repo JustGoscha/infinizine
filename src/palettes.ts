@@ -244,3 +244,12 @@ export const PALETTE_GROUPS: { label: string; ids: string[] }[] = [
   { label: 'Nature', ids: ['ocean', 'forest', 'sunset', 'jungle'] },
   { label: 'Design', ids: ['bauhaus'] },
 ];
+
+/** light → dark by perceived luminance (for exact hardware ramps) */
+export function sortByLightness(colors: string[]): string[] {
+  const lum = (h: string) => {
+    const n = parseInt(h.slice(1), 16);
+    return ((n >> 16) & 255) * 0.299 + ((n >> 8) & 255) * 0.587 + (n & 255) * 0.114;
+  };
+  return [...colors].sort((a, b) => lum(b) - lum(a));
+}
