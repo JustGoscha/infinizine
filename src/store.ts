@@ -1,6 +1,6 @@
 // Document store: state, undo/redo, localStorage persistence, page placement.
 
-import { AnimArea, AnimFrame, AnimLayer, Doc, Element, Page, emptyDoc, uid, FORMAT_VERSION } from './types';
+import { AnimArea, AnimFrame, AnimLayer, Doc, Element, Layer, Page, emptyDoc, uid, FORMAT_VERSION } from './types';
 
 type TextContent = { text: string; w: number; h: number; font?: string; fontSize?: number };
 type TextMetrics = { x: number; w: number; h: number; fontSize: number; auto?: boolean };
@@ -31,7 +31,7 @@ type Op =
   | { type: 'move-frame'; areaId: string; layerId: string; from: number; to: number }
   | { type: 'recolor-elements'; items: { id: string; before: string; after: string }[] }
   | { type: 'retime-strokes'; items: { id: string; before: number; after: number }[] }
-  | { type: 'z-order'; prevOrder: string[]; nextOrder: string[] }
+  | { type: 'z-order'; prevOrder: string[]; nextOrder: string[]; layers?: { id: string; before?: Layer; after?: Layer }[] }
   | { type: 'frame-duration'; areaId: string; layerId: string; frameId: string; before: number; after: number }
   | { type: 'area-settings'; areaId: string; before: { fps: number; loop: boolean; clip: boolean }; after: { fps: number; loop: boolean; clip: boolean } }
   | { type: 'rename-area'; areaId: string; before: string; after: string }
@@ -517,6 +517,12 @@ export class Store {
           if (el) next.push(el);
         }
         if (next.length === d.elements.length) d.elements = next;
+        // send-to-back / bring-to-front also switch the paint layer, otherwise a
+        // front-layer element "at the back" still draws above every paint-behind one
+        for (const l of op.layers ?? []) {
+          const el = byId.get(l.id);
+          if (el) { if (l.after) el.layer = l.after; else delete el.layer; }
+        }
         break;
       }
       case 'retime-strokes': {
@@ -604,7 +610,13 @@ export class Store {
         return { ...op, items: op.items.map((it) => ({ ...it, before: it.after, after: it.before })) };
       case 'retime-strokes':
         return { ...op, items: op.items.map((it) => ({ ...it, before: it.after, after: it.before })) };
-      case 'z-order': return { ...op, prevOrder: op.nextOrder, nextOrder: op.prevOrder };
+      case 'z-order':
+        return {
+          ...op,
+          prevOrder: op.nextOrder,
+          nextOrder: op.prevOrder,
+          layers: op.layers?.map((l) => ({ id: l.id, before: l.after, after: l.before })),
+        };
       case 'frame-duration': return { ...op, before: op.after, after: op.before };
       case 'area-settings': return { ...op, before: op.after, after: op.before };
       case 'rename-area': return { ...op, before: op.after, after: op.before };
@@ -1012,8 +1024,12 @@ export class Store {
     const moved = prevOrder.filter((id) => idSet.has(id));
     const rest = prevOrder.filter((id) => !idSet.has(id));
     const nextOrder = to === 'back' ? [...moved, ...rest] : [...rest, ...moved];
-    if (nextOrder.join() === prevOrder.join()) return;
-    this.commit({ type: 'z-order', prevOrder, nextOrder });
+    const want: Layer | undefined = to === 'back' ? 'back' : undefined;
+    const layers = this.doc.elements
+      .filter((e) => idSet.has(e.id) && (e.layer ?? undefined) !== want)
+      .map((e) => ({ id: e.id, before: e.layer, after: want }));
+    if (nextOrder.join() === prevOrder.join() && !layers.length) return;
+    this.commit({ type: 'z-order', prevOrder, nextOrder, layers: layers.length ? layers : undefined });
   }
 
   recolorElements(ids: string[], after: string) {
