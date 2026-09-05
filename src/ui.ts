@@ -1882,6 +1882,7 @@ export function buildUI(
       // record = play with intent: lines drawn while it runs become live lines on the loop clock
       state.recording = !state.recording;
       state.playingAreas = state.recording;
+      if (state.recording) tlView = 'live'; // what you record lands in the live lines
       state.playEpoch = performance.now() / 1000;
       renderTimeline();
       invalidate();

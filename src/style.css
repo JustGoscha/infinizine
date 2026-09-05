@@ -1822,7 +1822,7 @@ body.presenting .pages-panel { z-index: 60; }
   background-position-x: var(--jog);
 }
 .tl-pos { position: relative; font-size: 12px; font-weight: 700; padding: 1px 8px; background: var(--card); border-radius: 2px; }
-.tl-nav-rec { color: #D6336C; }
+.tl-nav .tl-nav-rec { color: #D6336C; border-color: #D6336C; }
 .tl-nav-rec.on { background: #D6336C !important; color: #fff !important; border-color: #D6336C !important; animation: tl-rec-blink 1.2s ease-in-out infinite; }
 @keyframes tl-rec-blink { 50% { opacity: 0.55; } }
 .tl-frame-del {
