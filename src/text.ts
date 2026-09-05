@@ -81,21 +81,35 @@ export function fontFor(family: string, size: number, bold = false, italic = fal
   return `${italic ? 'italic ' : ''}${bold ? 700 : 400} ${size}px ${css}`;
 }
 
-export interface Seg { t: string; b: boolean; i: boolean }
+export interface Seg { t: string; b: boolean; i: boolean; u?: boolean; f?: string }
 export interface RichLine { segs: Seg[]; size: number }
 
-/** Inline markdown: **bold** and *italic*. */
-function parseInline(s: string): Seg[] {
-  const segs: Seg[] = [];
-  let bold = false;
-  for (const part of s.split('**')) {
-    let italic = false;
-    for (const p of part.split('*')) {
-      if (p) segs.push({ t: p, b: bold, i: italic });
-      italic = !italic;
-    }
-    bold = !bold;
+export const ROLE_IDS = ['franklin', 'serif', 'mono', 'comic', 'shout'] as const;
+const FONT_SPAN = /\{(franklin|serif|mono|comic|shout)\|([^}]*)\}/g;
+
+/** Inline marks inside one run: **bold**, *italic*, __underline__. */
+function parseMarks(s: string, f: string | undefined, segs: Seg[]) {
+  let b = false, i = false, u = false, buf = '';
+  const flush = () => { if (buf) { segs.push({ t: buf, b, i, u: u || undefined, f }); buf = ''; } };
+  for (let k = 0; k < s.length; k++) {
+    if (s.startsWith('**', k)) { flush(); b = !b; k++; continue; }
+    if (s.startsWith('__', k)) { flush(); u = !u; k++; continue; }
+    if (s[k] === '*') { flush(); i = !i; continue; }
+    buf += s[k];
   }
+  flush();
+}
+
+/** Inline markdown: **bold**, *italic*, __underline__, and {role|text} font spans. */
+export function parseInline(s: string): Seg[] {
+  const segs: Seg[] = [];
+  let last = 0;
+  for (const m of s.matchAll(FONT_SPAN)) {
+    if (m.index! > last) parseMarks(s.slice(last, m.index), undefined, segs);
+    parseMarks(m[2], m[1], segs);
+    last = m.index! + m[0].length;
+  }
+  if (last < s.length) parseMarks(s.slice(last), undefined, segs);
   return segs;
 }
 
@@ -120,12 +134,12 @@ export function layoutText(text: string, family: string, fontSize: number, maxW:
       const words = g.t.split(' ');
       words.forEach((wd, idx) => {
         const t = idx < words.length - 1 ? `${wd} ` : wd;
-        if (t) tokens.push({ t, b: g.b || forceBold, i: g.i });
+        if (t) tokens.push({ t, b: g.b || forceBold, i: g.i, u: g.u, f: g.f });
       });
     }
 
     const width = (seg: Seg) => {
-      mctx.font = fontFor(family, size, seg.b, seg.i);
+      mctx.font = fontFor(seg.f ?? family, size, seg.b, seg.i);
       return mctx.measureText(seg.t).width;
     };
     const lead: Seg[] = bullet ? [{ t: '•  ', b: false, i: false }] : [];
@@ -163,6 +177,6 @@ export function layoutWidth(lines: RichLine[], family: string): number {
 }
 
 export function segWidth(family: string, line: RichLine, seg: Seg): number {
-  mctx.font = fontFor(family, line.size, seg.b, seg.i);
+  mctx.font = fontFor(seg.f ?? family, line.size, seg.b, seg.i);
   return mctx.measureText(seg.t).width;
 }

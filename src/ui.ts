@@ -9,7 +9,7 @@ import { PALETTES, getPalette, shades } from './palettes';
 import { UNITS_PER_MM, uid } from './types';
 import { layoutText, layoutHeight, layoutWidth, FONTS, FACES, chosenFaces, setFace, type FontRole } from './text';
 import { pressure, savePressure, resetPressure, loadPressure, exportPressure, importPressure, easeP, curveAt, type Curve, type CurveNode } from './geometry';
-import { markdownToHtml, htmlToMarkdown, autoTransform, caretToEnd } from './richedit';
+import { markdownToHtml, htmlToMarkdown, autoTransform, caretToEnd, applyInlineFont } from './richedit';
 
 function toast(msg: string) {
   window.dispatchEvent(new CustomEvent('izine-toast', { detail: msg }));
@@ -742,14 +742,41 @@ export function buildUI(
       // keep the textarea focused — no blur/commit on picking a font
       b.addEventListener('pointerdown', (e) => e.preventDefault());
       b.addEventListener('click', () => {
+        // with a selection: typeface for just those words; otherwise the whole box
+        if (applyInlineFont(ta, key, f.css)) { place(); ta.focus(); return; }
         family = key;
         state.font = key;
-        bar.querySelectorAll('button').forEach((o) => o.classList.toggle('active', o === b));
+        bar.querySelectorAll('.fb-font').forEach((o) => o.classList.toggle('active', o === b));
         place();
         ta.focus();
       });
+      b.classList.add('fb-font');
       bar.appendChild(b);
     }
+    // B / I / U — applied as real styling, serialised to **, *, __ on commit
+    const markSep = document.createElement('span');
+    markSep.className = 'font-bar-sep';
+    bar.appendChild(markSep);
+    const marks: { cmd: string; label: string; cls: string; key: string }[] = [
+      { cmd: 'bold', label: 'B', cls: 'fb-b', key: 'b' },
+      { cmd: 'italic', label: 'I', cls: 'fb-i', key: 'i' },
+      { cmd: 'underline', label: 'U', cls: 'fb-u', key: 'u' },
+    ];
+    const markBtns: HTMLButtonElement[] = [];
+    for (const m of marks) {
+      const b = document.createElement('button');
+      b.textContent = m.label;
+      b.className = `fb-mark ${m.cls}`;
+      b.title = `${m.cmd[0].toUpperCase()}${m.cmd.slice(1)} (⌘${m.key.toUpperCase()})`;
+      b.addEventListener('pointerdown', (e) => e.preventDefault());
+      b.addEventListener('click', () => { document.execCommand(m.cmd); place(); ta.focus(); syncMarks(); });
+      markBtns.push(b);
+      bar.appendChild(b);
+    }
+    const syncMarks = () => {
+      marks.forEach((m, i) => markBtns[i].classList.toggle('active', document.queryCommandState(m.cmd)));
+    };
+    document.addEventListener('selectionchange', syncMarks);
     const sizeSep = document.createElement('span');
     sizeSep.className = 'font-bar-sep';
     bar.appendChild(sizeSep);
@@ -819,6 +846,7 @@ export function buildUI(
       if (done) return;
       done = true;
       state.onEditColor = null;
+      document.removeEventListener('selectionchange', syncMarks);
       ta.remove();
       bar.remove();
       if (target) state.hidden.delete(target.id);
@@ -856,10 +884,11 @@ export function buildUI(
     ta.addEventListener('keydown', (e) => {
       if (e.key === 'Escape') { e.preventDefault(); commit(); return; }
       // classic shortcuts, applied as real styling (serialized back to markdown on commit)
-      if ((e.metaKey || e.ctrlKey) && (e.key === 'b' || e.key === 'i')) {
+      if ((e.metaKey || e.ctrlKey) && (e.key === 'b' || e.key === 'i' || e.key === 'u')) {
         e.preventDefault();
-        document.execCommand(e.key === 'b' ? 'bold' : 'italic');
+        document.execCommand(e.key === 'b' ? 'bold' : e.key === 'i' ? 'italic' : 'underline');
         place();
+        syncMarks();
       }
     });
   };

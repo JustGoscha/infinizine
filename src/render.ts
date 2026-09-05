@@ -209,9 +209,11 @@ export class Renderer {
       for (const line of layoutText(el.text, family, el.fontSize, el.w)) {
         let tx = el.x;
         for (const seg of line.segs) {
-          ctx.font = fontFor(family, line.size, seg.b, seg.i);
+          ctx.font = fontFor(seg.f ?? family, line.size, seg.b, seg.i);
           ctx.fillText(seg.t, tx, ty);
-          tx += segWidth(family, line, seg);
+          const sw = segWidth(family, line, seg);
+          if (seg.u) ctx.fillRect(tx, ty + line.size * 1.02, sw, Math.max(0.5, line.size * 0.06));
+          tx += sw;
         }
         ty += line.size * LINE_HEIGHT;
       }

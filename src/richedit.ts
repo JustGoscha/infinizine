@@ -1,14 +1,31 @@
 // WYSIWYG editing helpers: markdown <-> contenteditable HTML, plus live
 // typing transforms so markdown converts the moment it's completed.
 
+import { FONTS } from './text';
+
 const escapeHtml = (s: string) =>
   s.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;');
 
-function inlineToHtml(s: string): string {
+function marksToHtml(s: string): string {
   let h = escapeHtml(s);
   h = h.replace(/\*\*([^*\n]+)\*\*/g, '<strong>$1</strong>');
+  h = h.replace(/__([^_\n]+)__/g, '<u>$1</u>');
   h = h.replace(/(^|[^*])\*([^*\n]+)\*(?!\*)/g, '$1<em>$2</em>');
-  return h || '<br>';
+  return h;
+}
+
+/** {role|text} font spans → <span data-font>, then the inline marks inside each run. */
+function inlineToHtml(s: string): string {
+  let out = '';
+  let last = 0;
+  for (const m of s.matchAll(/\{(franklin|serif|mono|comic|shout)\|([^}]*)\}/g)) {
+    out += marksToHtml(s.slice(last, m.index));
+    const css = FONTS[m[1]]?.css ?? 'inherit';
+    out += `<span data-font="${m[1]}" style="font-family:${css}">${marksToHtml(m[2])}</span>`;
+    last = m.index! + m[0].length;
+  }
+  out += marksToHtml(s.slice(last));
+  return out || '<br>';
 }
 
 export function markdownToHtml(md: string): string {
@@ -41,7 +58,13 @@ function inlineToMd(node: Node): string {
         case 'BR': break;
         case 'STRONG': case 'B': out += `**${inlineToMd(n)}**`; break;
         case 'EM': case 'I': out += `*${inlineToMd(n)}*`; break;
-        default: out += inlineToMd(n);
+        case 'U': out += `__${inlineToMd(n)}__`; break;
+        default: {
+          const role = n.dataset.font;
+          const inner = inlineToMd(n);
+          // per-word typeface: {role|…}; nested spans are flattened to the innermost role
+          out += role && inner ? `{${role}|${inner.replace(/\{[a-z]+\|([^}]*)\}/g, '$1')}}` : inner;
+        }
       }
     }
   });
@@ -136,8 +159,12 @@ export function autoTransform(root: HTMLElement): void {
   const mb = upto.match(/\*\*([^*\n]+)\*\*$/);
   if (mb) { full = mb[0]; inner = mb[1]; tag = 'strong'; }
   else {
-    const mi = upto.match(/(?:^|[^*])(\*([^*\n]+)\*)$/);
-    if (mi) { full = mi[1]; inner = mi[2]; tag = 'em'; }
+    const mu = upto.match(/__([^_\n]+)__$/);
+    if (mu) { full = mu[0]; inner = mu[1]; tag = 'u'; }
+    else {
+      const mi = upto.match(/(?:^|[^*])(\*([^*\n]+)\*)$/);
+      if (mi) { full = mi[1]; inner = mi[2]; tag = 'em'; }
+    }
   }
   if (!tag) return;
   const range = document.createRange();
@@ -150,4 +177,27 @@ export function autoTransform(root: HTMLElement): void {
   const after = document.createTextNode('​'); // caret lands outside the styling
   el.after(after);
   placeCaret(after, 1);
+}
+
+/** Wrap the editor's current (non-collapsed) selection in a font span for `role`.
+ * Returns false when nothing is selected (caller then applies to the whole box). */
+export function applyInlineFont(root: HTMLElement, role: string, css: string): boolean {
+  const sel = window.getSelection();
+  if (!sel || !sel.rangeCount || sel.isCollapsed) return false;
+  const range = sel.getRangeAt(0);
+  if (!root.contains(range.commonAncestorContainer)) return false;
+  const frag = range.extractContents();
+  // flatten font spans already inside the selection: innermost pick wins → ours
+  frag.querySelectorAll('span[data-font]').forEach((sp) => sp.replaceWith(...Array.from(sp.childNodes)));
+  const span = document.createElement('span');
+  span.dataset.font = role;
+  span.style.fontFamily = css;
+  span.appendChild(frag);
+  range.insertNode(span);
+  // keep the text selected so further styling stacks
+  const r = document.createRange();
+  r.selectNodeContents(span);
+  sel.removeAllRanges();
+  sel.addRange(r);
+  return true;
 }

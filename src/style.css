@@ -1612,3 +1612,10 @@ body.presenting .popover { display: none; }
   max-width: 190px;
 }
 .set-note { font-size: 11px; color: var(--ink-soft); }
+
+/* text editor bar: inline marks */
+.font-bar .fb-mark { min-width: 30px; font-family: 'Libre Franklin', sans-serif; }
+.font-bar .fb-b { font-weight: 800; }
+.font-bar .fb-i { font-style: italic; }
+.font-bar .fb-u { text-decoration: underline; }
+.text-editor u { text-decoration: underline; text-underline-offset: 0.08em; }
