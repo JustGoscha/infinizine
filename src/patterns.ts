@@ -86,6 +86,8 @@ export function patternLabel(id: string): string {
  * Every pixel family shares this grid, anchored at the world origin, so dithers
  * drawn next to each other line up pixel for pixel. */
 export const PIXEL_CELL = 1.2;
+/** the solid pixel fill (what the pixel brush paints) */
+export const PIXEL_FILL = 'pattern:pixfill-1';
 /** cells per repeat of the pixel tile (the LCM of every family's period) */
 const PIXEL_TILE_CELLS = 24;
 

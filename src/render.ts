@@ -8,7 +8,7 @@ import { layoutText, fontFor, segWidth, LINE_HEIGHT } from './text';
 import { moveHandleRect, moveAllHandleRect, deleteHandleRect, eyeHandleRect, type InputState } from './input';
 import { Store, ChangeInfo } from './store';
 import { formatLabel } from './formats';
-import { patternTile, patternTileSize, patternCellSize, cellPath, motifPath, isPixelPattern } from './patterns';
+import { patternTile, patternTileSize, patternCellSize, cellPath, motifPath, isPixelPattern, PIXEL_CELL, PIXEL_FILL } from './patterns';
 import { reportCrash } from './crash';
 
 type View = { x: number; y: number; w: number; h: number }; // camera viewport, world coords
@@ -887,9 +887,8 @@ export class Renderer {
           : live;
         const outline = strokeOutline(shown, 1, true).map(([x, y]) => ({ x, y }));
         const b = elementBBox({ ...shown, points: outline.map((q) => ({ ...q, p: 1, t: 0 })) });
-        const cell = patternCellSize(this.input.fillPattern!) ?? 1;
-        const work = ((b.maxX - b.minX) / cell) * ((b.maxY - b.minY) / cell) * outline.length;
-        const path = work < 4e6 ? cellPath(outline, this.input.fillPattern!) : null; // huge scribbles preview as vector
+        const work = ((b.maxX - b.minX) / PIXEL_CELL) * ((b.maxY - b.minY) / PIXEL_CELL) * outline.length;
+        const path = work < 4e6 ? cellPath(outline, PIXEL_FILL) : null; // huge scribbles preview as vector
         ctx.save();
         ctx.globalCompositeOperation = this.input.fillBlend;
         ctx.globalAlpha = live.opacity * this.input.inkDensity;
