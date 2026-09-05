@@ -37,6 +37,7 @@ type Op =
   | { type: 'rename-area'; areaId: string; before: string; after: string }
   | { type: 'rename-anim-layer'; areaId: string; layerId: string; before: string; after: string }
   | { type: 'doc-style'; field: 'palette' | 'paper' | 'pattern'; before: string; after: string }
+  | { type: 'doc-faces'; before: Record<string, string> | undefined; after: Record<string, string> | undefined }
   | { type: 'layer-flag'; areaId: string; layerId: string; field: 'hidden' | 'loop'; before: boolean; after: boolean }
   | { type: 'area-flag'; areaId: string; field: 'hideFrames' | 'hideLive'; before: boolean; after: boolean };
 
@@ -545,6 +546,9 @@ export class Store {
         if (l) l.name = op.after;
         break;
       }
+      case 'doc-faces':
+        if (op.after) d.faces = { ...op.after }; else delete d.faces;
+        break;
       case 'doc-style': {
         if (op.field === 'palette') d.palette = op.after;
         else if (op.field === 'paper') d.paper = op.after;
@@ -606,6 +610,7 @@ export class Store {
       case 'rename-area': return { ...op, before: op.after, after: op.before };
       case 'rename-anim-layer': return { ...op, before: op.after, after: op.before };
       case 'doc-style': return { ...op, before: op.after, after: op.before };
+      case 'doc-faces': return { ...op, before: op.after, after: op.before };
       case 'layer-flag': return { ...op, before: op.after, after: op.before };
       case 'area-flag': return { ...op, before: op.after, after: op.before };
     }
@@ -1056,6 +1061,13 @@ export class Store {
   setPalette(id: string) {
     if (id === this.doc.palette) return;
     this.commit({ type: 'doc-style', field: 'palette', before: this.doc.palette, after: id });
+  }
+
+  /** per-zine typeface overrides (undefined = follow the app-wide picks) */
+  setFaces(faces: Record<string, string> | undefined) {
+    const before = this.doc.faces;
+    if (JSON.stringify(before ?? null) === JSON.stringify(faces ?? null)) return;
+    this.commit({ type: 'doc-faces', before: before ? { ...before } : undefined, after: faces ? { ...faces } : undefined });
   }
 
   setPaper(color: string) {

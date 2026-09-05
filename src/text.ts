@@ -50,8 +50,10 @@ export const FACES: Record<FontRole, Face[]> = {
 };
 const ROLE_NAMES: Record<FontRole, string> = { franklin: 'Sans', serif: 'Serif', mono: 'Mono', comic: 'Comic', shout: 'Shout' };
 const FACES_KEY = 'infinizine-faces';
-export const chosenFaces: Record<FontRole, string> = (() => {
-  const d: Record<FontRole, string> = { franklin: 'hanken', serif: 'fraunces', mono: 'plexmono', comic: 'kalam', shout: 'bangers' };
+const DEFAULT_FACES: Record<FontRole, string> = { franklin: 'hanken', serif: 'fraunces', mono: 'plexmono', comic: 'kalam', shout: 'bangers' };
+/** app-wide picks (this device) */
+export const appFaces: Record<FontRole, string> = (() => {
+  const d = { ...DEFAULT_FACES };
   try {
     const saved = JSON.parse(localStorage.getItem(FACES_KEY) ?? '{}') as Partial<Record<FontRole, string>>;
     for (const r of Object.keys(d) as FontRole[]) {
@@ -60,19 +62,33 @@ export const chosenFaces: Record<FontRole, string> = (() => {
   } catch { /* ignore */ }
   return d;
 })();
+/** the open zine's overrides (saved in the document) */
+export let docFaces: Partial<Record<FontRole, string>> = {};
+/** effective picks: zine override, else app-wide */
+export const chosenFaces: Record<FontRole, string> = { ...appFaces };
 export function faceOf(role: FontRole): Face {
   return FACES[role].find((f) => f.id === chosenFaces[role]) ?? FACES[role][0];
 }
 /** role → { name, css } for the current picks (the editor's font bar and the renderer read this) */
 export const FONTS: Record<string, { name: string; css: string }> = {} as Record<string, { name: string; css: string }>;
 function refreshFonts() {
-  for (const r of Object.keys(FACES) as FontRole[]) FONTS[r] = { name: ROLE_NAMES[r], css: faceOf(r).css };
+  for (const r of Object.keys(FACES) as FontRole[]) {
+    const ov = docFaces[r];
+    chosenFaces[r] = ov && FACES[r].some((f) => f.id === ov) ? ov : appFaces[r];
+    FONTS[r] = { name: ROLE_NAMES[r], css: faceOf(r).css };
+  }
 }
 refreshFonts();
+/** app-wide pick (device setting) */
 export function setFace(role: FontRole, id: string) {
   if (!FACES[role].some((f) => f.id === id)) return;
-  chosenFaces[role] = id;
-  try { localStorage.setItem(FACES_KEY, JSON.stringify(chosenFaces)); } catch { /* ignore */ }
+  appFaces[role] = id;
+  try { localStorage.setItem(FACES_KEY, JSON.stringify(appFaces)); } catch { /* ignore */ }
+  refreshFonts();
+}
+/** install the open zine's overrides (call when a document loads/switches/changes) */
+export function setDocFaces(faces: Record<string, string> | undefined) {
+  docFaces = { ...(faces ?? {}) } as Partial<Record<FontRole, string>>;
   refreshFonts();
 }
 

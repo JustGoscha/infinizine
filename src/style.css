@@ -1681,3 +1681,6 @@ body.presenting .popover { display: none; }
 }
 .weight-pop button:hover { border-color: var(--ink); }
 .weight-note { font-size: 11px; color: var(--ink-soft); padding: 4px 6px; }
+
+.set-action.set-ghost { background: transparent; color: var(--ink); font-weight: 600; }
+.set-action[hidden] { display: none; }

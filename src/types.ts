@@ -128,6 +128,7 @@ export interface Doc {
   palette: string; // active palette preset id
   paper?: string; // canvas/paper background color (default warm cream)
   pattern?: 'blank' | 'dots' | 'grid' | 'lines'; // paper pattern (default dots)
+  faces?: Record<string, string>; // per-zine typeface picks by role (overrides the app-wide defaults)
   elements: Element[];
   pages: Page[];
   areas: AnimArea[];

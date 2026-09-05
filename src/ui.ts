@@ -8,7 +8,7 @@ import { Camera, baseZoom, pxPerMm, setPxPerMm } from './camera';
 import { PALETTES, getPalette, shades } from './palettes';
 import { UNITS_PER_MM, uid, FORMAT_VERSION } from './types';
 import { type Fmt, PRIMARY_FORMATS, FORMAT_GROUPS, MORE_FORMATS, fitPage, customFormats, saveCustomFormat, mm } from './formats';
-import { layoutText, layoutHeight, layoutWidth, FONTS, FACES, chosenFaces, setFace, weightRange, type FontRole } from './text';
+import { layoutText, layoutHeight, layoutWidth, FONTS, FACES, chosenFaces, appFaces, setFace, setDocFaces, weightRange, type FontRole } from './text';
 import { pressure, savePressure, resetPressure, loadPressure, exportPressure, importPressure, easeP, curveAt, type Curve, type CurveNode } from './geometry';
 import { markdownToHtml, htmlToMarkdown, autoTransform, caretToEnd, applyInlineStyle } from './richedit';
 
@@ -223,8 +223,10 @@ export function buildUI(
         <div class="seg" id="set-adaptive"><button data-v="0">Physical</button><button data-v="1">Adaptive</button></div></div>
       <div class="set-row"><span>Zoom</span>
         <div class="seg" id="set-lock"><button data-v="1">Locked</button><button data-v="0">Free</button></div></div>
-      <div class="set-title set-sub">Typefaces</div>
+      <div class="set-row set-sub"><span class="set-title">Typefaces</span>
+        <div class="seg" id="set-faces-scope"><button data-v="zine">This zine</button><button data-v="app">App-wide</button></div></div>
       <div class="set-fonts" id="set-fonts"></div>
+      <button class="set-action set-ghost" id="set-faces-reset">Zine follows app-wide typefaces</button>
       <div class="set-note">All fonts are bundled with the app (SIL Open Font Licence / Apache). Nothing is loaded from Google.</div>
       <button class="set-action" id="set-brushes">Brush settings…</button>
       <div class="set-note">InfiniZine v${__APP_VERSION__} · zine format ${FORMAT_VERSION}</div>
@@ -787,8 +789,11 @@ export function buildUI(
       ta.style.color = color;
       ta.style.width = `${curW() * z}px`; // drawn rectangle's width, or the content's when auto
       ta.style.minHeight = `${contentH() * z}px`; // grows downward with content
-      bar.style.left = `${r.left + s.x}px`;
-      bar.style.top = `${r.top + s.y - 46}px`;
+      // the bar sits above the text rect (measured, since it may wrap to two rows);
+      // if there's no room above, it goes below instead — never over the text
+      bar.style.left = `${Math.max(8, Math.min(r.left + s.x, window.innerWidth - bar.offsetWidth - 8))}px`;
+      const above = r.top + s.y - bar.offsetHeight - 8;
+      bar.style.top = `${above >= 60 ? above : r.top + s.y + contentH() * z + 8}px`;
     };
     place();
     ta.addEventListener('input', () => {
@@ -2584,19 +2589,40 @@ export function buildUI(
     comic: 'Whoa!! Did you see that?! Let\'s go!',
     shout: 'BAM! KAPOW! EXTRA! EXTRA!',
   };
+  // Typefaces have two layers: app-wide picks (this device) and per-zine
+  // overrides saved in the document. The scope toggle says which one you edit.
+  let facesScope: 'zine' | 'app' = 'zine';
   let openPicker: HTMLElement | null = null;
   const closePicker = () => { openPicker?.remove(); openPicker = null; };
+  const faceBtns: Partial<Record<FontRole, HTMLButtonElement>> = {};
+  const currentPick = (role: FontRole) => (facesScope === 'zine' ? chosenFaces[role] : appFaces[role]);
+  const syncFaceBtns = () => {
+    for (const role of Object.keys(FACES) as FontRole[]) {
+      const btn = faceBtns[role]!;
+      const f = FACES[role].find((x) => x.id === currentPick(role)) ?? FACES[role][0];
+      const overridden = !!store.doc.faces?.[role];
+      btn.textContent = f.name + (facesScope === 'zine' && overridden ? ' ·' : '');
+      btn.title = facesScope === 'zine'
+        ? overridden ? 'Set for this zine (dot = overrides the app-wide pick)' : 'Following the app-wide pick'
+        : 'App-wide default for zines without their own pick';
+      btn.style.fontFamily = f.css;
+    }
+    settingsPop.querySelectorAll<HTMLElement>('#set-faces-scope button').forEach((b) => b.classList.toggle('active', b.dataset.v === facesScope));
+    (settingsPop.querySelector('#set-faces-reset') as HTMLElement).hidden = facesScope !== 'zine' || !store.doc.faces;
+  };
+  const restyleFaces = () => {
+    setDocFaces(store.doc.faces);
+    const css = (Object.keys(FACES) as FontRole[]).map((r) => FONTS[r].css);
+    Promise.all(css.map((c) => document.fonts.load(`16px ${c}`).catch(() => []))).finally(() => window.dispatchEvent(new Event('izine-restyle')));
+    refresh();
+    syncFaceBtns();
+  };
   for (const role of Object.keys(FACES) as FontRole[]) {
     const row = document.createElement('div');
     row.className = 'set-row';
     const btn = document.createElement('button');
     btn.className = 'face-btn';
-    const syncBtn = () => {
-      const f = FACES[role].find((x) => x.id === chosenFaces[role])!;
-      btn.textContent = f.name;
-      btn.style.fontFamily = f.css;
-    };
-    syncBtn();
+    faceBtns[role] = btn;
     btn.addEventListener('click', (e) => {
       e.stopPropagation();
       if (openPicker?.dataset.role === role) { closePicker(); return; }
@@ -2607,15 +2633,14 @@ export function buildUI(
       pick.dataset.role = role;
       for (const f of FACES[role]) {
         const o = document.createElement('button');
-        o.className = `face-opt${f.id === chosenFaces[role] ? ' active' : ''}`;
+        o.className = `face-opt${f.id === currentPick(role) ? ' active' : ''}`;
         o.style.fontFamily = f.css;
         o.innerHTML = `<span class="face-name">${f.name}</span><span class="face-sample">${SAMPLE[role]}</span>`;
         o.addEventListener('click', () => {
-          setFace(role, f.id);
-          syncBtn();
+          if (facesScope === 'zine') store.setFaces({ ...(store.doc.faces ?? {}), [role]: f.id }); // saved in the zine, undoable
+          else setFace(role, f.id); // device default
           closePicker();
-          document.fonts.load(`16px ${f.css}`).finally(() => window.dispatchEvent(new Event('izine-restyle')));
-          refresh();
+          restyleFaces();
         });
         pick.appendChild(o);
       }
@@ -2628,10 +2653,23 @@ export function buildUI(
     row.append(Object.assign(document.createElement('span'), { textContent: ROLE_LABEL[role] }), btn);
     fontsBox.appendChild(row);
   }
+  settingsPop.querySelector('#set-faces-scope')!.addEventListener('click', (e) => {
+    const v = (e.target as HTMLElement).closest('button')?.dataset.v as 'zine' | 'app' | undefined;
+    if (!v) return;
+    facesScope = v;
+    closePicker();
+    syncFaceBtns();
+  });
+  (settingsPop.querySelector('#set-faces-reset') as HTMLButtonElement).addEventListener('click', () => {
+    store.setFaces(undefined);
+    restyleFaces();
+  });
+  syncFaceBtns();
   document.addEventListener('pointerdown', (e) => {
     if (!(e.target as HTMLElement).closest('.face-pick, .face-btn')) closePicker();
   });
   const syncSettings = () => {
+    syncFaceBtns();
     const left = document.body.classList.contains('left-hand');
     settingsPop.querySelectorAll<HTMLElement>('#set-hand button').forEach((b) => b.classList.toggle('active', b.dataset.v === (left ? 'left' : 'right')));
     settingsPop.querySelectorAll<HTMLElement>('#set-adaptive button').forEach((b) => b.classList.toggle('active', b.dataset.v === (state.adaptiveSize ? '1' : '0')));
@@ -2706,8 +2744,17 @@ export function buildUI(
   // the document arrives asynchronously (IndexedDB) and can switch (library):
   // rebuild the palette row whenever the active palette differs from what's shown
   let shownPalette = store.doc.palette;
+  let shownFaces = '';
+  const syncDocFaces = () => {
+    const key = JSON.stringify(store.doc.faces ?? null);
+    if (key === shownFaces) return;
+    shownFaces = key;
+    restyleFaces();
+  };
+  syncDocFaces();
   return {
     docChanged() {
+      syncDocFaces();
       if (store.doc.palette !== shownPalette) {
         shownPalette = store.doc.palette;
         buildPalRow();
