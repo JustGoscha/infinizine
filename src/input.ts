@@ -5,7 +5,7 @@
 import { Camera, baseZoom } from './camera';
 import { Store } from './store';
 import { AnimArea, Stroke, FillShape, Element, ImageBox, Page, TextBox, uid } from './types';
-import { hitElement, elementsInLasso, denoise, denoiseClosed, pressure } from './geometry';
+import { hitElement, elementsInLasso, denoise, denoiseClosed, pressure, strokeOutline } from './geometry';
 import { isPixelPattern, migratePatternId } from './patterns';
 import { layoutText, layoutHeight } from './text';
 
@@ -18,6 +18,7 @@ let memClip: string | null = null;
 const PEN_KEY = 'infinizine-pen-seen';
 const TOOL_MEM_KEY = 'infinizine-tool-memory';
 const REMEMBER_TOOLS = new Set(['pen', 'pencil', 'sketch', 'fineliner', 'marker', 'lasso-fill', 'text']);
+const BRUSH_TOOLS = new Set(['pen', 'pencil', 'sketch', 'fineliner', 'marker']);
 const FINGER_KEY = 'infinizine-finger-mode';
 export function readPref(k: string): string | null {
   try { return localStorage.getItem(k); } catch { return null; }
@@ -142,6 +143,9 @@ export class InputState {
   })();
   /** ink coverage for pattern fills (CMYK-style tint): 1 = solid ink, lower lets paper through so overlaps mix */
   inkDensity = (() => { const v = Number(readPref('infinizine-fill-opacity')); return v >= 0.3 && v <= 1 ? v : 1; })();
+  /** pixel brush: with a pixel pattern selected, the pens paint that pattern onto the
+   * shared grid — the stroke's outline becomes a pattern fill, so it edges in whole cells */
+  pixelInk(): boolean { return !!this.fillPattern && isPixelPattern(this.fillPattern) && BRUSH_TOOLS.has(this.tool); }
   /** every new tone fill gets its own random angle (off: all fills share angle 0) */
   toneRandom = readPref('infinizine-tone-random') !== '0';
   /** two-finger tap = undo, three = redo (off: fingers only pan/zoom) */
@@ -1007,6 +1011,18 @@ export function attachInput(
       if (s.area) {
         // live ink: every stroke gets its own live layer with its own cycle
         store.addLiveLayer(s.area, s, 'continuous');
+      } else if (state.pixelInk()) {
+        // pixel brush: commit the stroke's outline as a pattern fill (renders in whole grid cells)
+        const outline = strokeOutline(s, 1).map(([x, y]) => ({ x, y }));
+        if (outline.length >= 3) {
+          const fill: FillShape = {
+            id: uid('fl'), kind: 'fill', color: s.color, opacity: s.opacity,
+            pattern: state.fillPattern!, ink: state.inkDensity,
+            blend: state.fillBlend !== 'multiply' ? state.fillBlend : undefined,
+            layer: s.layer, frame: s.frame, alayer: s.alayer, points: outline,
+          };
+          store.addElement(fill);
+        }
       } else {
         store.addElement(s);
       }

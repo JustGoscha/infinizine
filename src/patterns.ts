@@ -2,7 +2,7 @@
 // (Bayer, scanlines). A pattern is a "colour" like `pattern:tone-3`; only the
 // fill tool paints it — strokes and text using a pattern swatch just get ink.
 
-import { pointInPolygon } from './geometry';
+import { pointInPolygonNZ as pointInPolygon } from './geometry';
 
 export const PATTERN_INK = '#1a1a1a';
 export const isPattern = (c: string) => c.startsWith('pattern:');

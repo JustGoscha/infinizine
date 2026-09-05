@@ -880,6 +880,24 @@ export class Renderer {
           return;
         }
       }
+      if (this.input.pixelInk()) {
+        // pixel brush preview: the outline snapped to grid cells, as it will commit
+        const shown: Stroke = live.points.length > 2
+          ? { ...live, points: this.liveSmooth.update(live.id, live.points, pressure[live.tool].smooth / this.camera.zoom) }
+          : live;
+        const outline = strokeOutline(shown, 1, true).map(([x, y]) => ({ x, y }));
+        const b = elementBBox({ ...shown, points: outline.map((q) => ({ ...q, p: 1, t: 0 })) });
+        const cell = patternCellSize(this.input.fillPattern!) ?? 1;
+        const work = ((b.maxX - b.minX) / cell) * ((b.maxY - b.minY) / cell) * outline.length;
+        const path = work < 4e6 ? cellPath(outline, this.input.fillPattern!) : null; // huge scribbles preview as vector
+        ctx.save();
+        ctx.globalCompositeOperation = this.input.fillBlend;
+        ctx.globalAlpha = live.opacity * this.input.inkDensity;
+        ctx.fillStyle = live.color;
+        ctx.fill(path ?? outlineToPath(strokeOutline(shown, this.detail(), true)));
+        ctx.restore();
+        return;
+      }
       if (live.tool === 'pencil') {
         this.drawLivePencil(live, vw, vh, dpr);
         return;

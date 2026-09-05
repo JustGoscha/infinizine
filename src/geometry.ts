@@ -828,6 +828,19 @@ function distSqToSegment(px: number, py: number, ax: number, ay: number, bx: num
   return ex * ex + ey * ey;
 }
 
+/** Non-zero winding test: a point covered by a fold of the polygon still counts as inside
+ * (the even-odd rule would punch holes where a stroke outline overlaps itself). */
+export function pointInPolygonNZ(x: number, y: number, poly: { x: number; y: number }[]): boolean {
+  let wn = 0;
+  for (let i = 0, j = poly.length - 1; i < poly.length; j = i++) {
+    const xi = poly[i].x, yi = poly[i].y, xj = poly[j].x, yj = poly[j].y;
+    if (yj <= y) {
+      if (yi > y && (xi - xj) * (y - yj) - (x - xj) * (yi - yj) > 0) wn++;
+    } else if (yi <= y && (xi - xj) * (y - yj) - (x - xj) * (yi - yj) < 0) wn--;
+  }
+  return wn !== 0;
+}
+
 export function pointInPolygon(x: number, y: number, poly: { x: number; y: number }[]): boolean {
   let inside = false;
   for (let i = 0, j = poly.length - 1; i < poly.length; j = i++) {
