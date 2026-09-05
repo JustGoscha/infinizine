@@ -40,6 +40,7 @@ type Op =
   | { type: 'doc-style'; field: 'palette' | 'paper' | 'pattern'; before: string; after: string }
   | { type: 'doc-faces'; before: Record<string, string> | undefined; after: Record<string, string> | undefined }
   | { type: 'pattern-angle'; items: { id: string; before: number; after: number }[] }
+  | { type: 'fill-ink'; items: { id: string; before: number | undefined; after: number }[] }
   | { type: 'layer-flag'; areaId: string; layerId: string; field: 'hidden' | 'loop'; before: boolean; after: boolean }
   | { type: 'area-flag'; areaId: string; field: 'hideFrames' | 'hideLive'; before: boolean; after: boolean };
 
@@ -65,6 +66,7 @@ function changeInfo(op: Op): ChangeInfo {
     case 'recolor-elements':
     case 'retime-strokes':
     case 'pattern-angle':
+    case 'fill-ink':
       return { ids: op.items.map((i) => i.id) };
     case 'add-area':
     case 'delete-area':
@@ -567,6 +569,12 @@ export class Store {
           if (el && el.kind === 'fill') el.patternAngle = it.after;
         }
         break;
+      case 'fill-ink':
+        for (const it of op.items) {
+          const el = d.elements.find((e) => e.id === it.id);
+          if (el && el.kind === 'fill') { if (it.after === undefined) delete el.ink; else el.ink = it.after; }
+        }
+        break;
       case 'doc-style': {
         if (op.field === 'palette') d.palette = op.after;
         else if (op.field === 'paper') d.paper = op.after;
@@ -640,6 +648,8 @@ export class Store {
       case 'doc-faces': return { ...op, before: op.after, after: op.before };
       case 'pattern-angle':
         return { ...op, items: op.items.map((it) => ({ ...it, before: it.after, after: it.before })) };
+      case 'fill-ink':
+        return { ...op, items: op.items.map((it) => ({ ...it, before: it.after, after: it.before as number })) };
       case 'layer-flag': return { ...op, before: op.after, after: op.before };
       case 'area-flag': return { ...op, before: op.after, after: op.before };
     }
@@ -1112,6 +1122,15 @@ export class Store {
       .filter((e): e is Extract<Element, { kind: 'fill' }> => !!e && e.kind === 'fill' && !!e.pattern && !isPixelPattern(e.pattern))
       .map((e) => ({ id: e.id, before: e.patternAngle ?? 0, after: ((e.patternAngle ?? 0) + delta + 360) % 360 }));
     if (items.length) this.commit({ type: 'pattern-angle', items });
+  }
+
+  /** ink coverage of pattern fills (undoable) */
+  setInk(ids: string[], ink: number) {
+    const items = ids
+      .map((id) => this.doc.elements.find((e) => e.id === id))
+      .filter((e): e is Extract<Element, { kind: 'fill' }> => !!e && e.kind === 'fill' && !!e.pattern && (e.ink ?? 1) !== ink)
+      .map((e) => ({ id: e.id, before: e.ink, after: ink }));
+    if (items.length) this.commit({ type: 'fill-ink', items });
   }
 
   /** per-zine typeface overrides (undefined = follow the app-wide picks) */

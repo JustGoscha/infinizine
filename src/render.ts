@@ -270,8 +270,13 @@ export class Renderer {
       ctx.fillStyle = patterned && !e.solid
         ? this.fillPattern(el.pattern!, el.color, isPixelPattern(el.pattern!) ? 0 : el.patternAngle ?? 0) // dithers never rotate
         : el.color;
-      // tones overprint like ink: overlapping patterns darken (multiply) instead of covering
-      if (patterned) { ctx.save(); ctx.globalCompositeOperation = 'multiply'; }
+      // tones overprint like process ink: multiply at the fill's ink coverage —
+      // paper × (1 − ink·(1 − colour)) — so overlaps mix and darken (CMYK-like)
+      if (patterned) {
+        ctx.save();
+        ctx.globalCompositeOperation = 'multiply';
+        ctx.globalAlpha = el.opacity * dim * (el.kind === 'fill' ? el.ink ?? 1 : 1);
+      }
       ctx.fill(e.path);
       if (patterned) ctx.restore();
     }
@@ -1078,7 +1083,7 @@ export class Renderer {
       ctx.strokeStyle = this.input.tool === 'lasso-fill' ? this.input.color : '#E8590C';
       if (this.input.tool === 'lasso-fill') {
         ctx.save();
-        ctx.globalAlpha = 0.25;
+        ctx.globalAlpha = 0.25 * (this.input.fillPattern ? this.input.inkDensity : 1);
         ctx.fillStyle = this.input.fillPattern ? this.fillPattern(this.input.fillPattern, this.input.color) : this.input.color;
         ctx.fill();
         ctx.restore();

@@ -569,7 +569,17 @@ export function buildUI(
               return `<button class="pat-sw${state.fillPattern === id ? ' active' : ''}" data-id="${id}" title="${f.label} ${k}" style="background:${patternPreviewCSS(id, state.color, 9)}"></button>`;
             }).join('')}</div>
           </div>`).join('')}`).join('')}
-      <div class="set-note">Patterns paint with the fill tool, in the current colour. Dot tones rotate randomly per fill (rotate from the selection menu); dithers stay pixel-aligned.</div>`;
+      <label class="pg-row pat-ink"><span>ink density</span><input type="range" id="pat-ink" min="0.3" max="1" step="0.05" value="${state.inkDensity}"><b>${Math.round(state.inkDensity * 100)}%</b></label>
+      <div class="set-note">Patterns paint with the fill tool, in the current colour, and overprint like process ink: below 100% the paper shows through, so overlapping tones mix and darken (red over yellow → orange-red). Dot tones rotate randomly per fill; dithers stay pixel-aligned.</div>`;
+    const inkSlider = patternPop.querySelector('#pat-ink') as HTMLInputElement;
+    inkSlider.addEventListener('input', () => {
+      state.inkDensity = Number(inkSlider.value);
+      (inkSlider.nextElementSibling as HTMLElement).textContent = `${Math.round(state.inkDensity * 100)}%`;
+      writePref('infinizine-ink-density', String(state.inkDensity));
+      const ids = store.doc.elements.filter((el) => el.kind === 'fill' && el.pattern && state.selection.has(el.id)).map((el) => el.id);
+      if (ids.length) store.setInk(ids, state.inkDensity);
+      invalidate();
+    });
     patternPop.querySelectorAll<HTMLElement>('.pat-sw').forEach((b) => b.addEventListener('click', () => pickPattern(b.dataset.id!)));
     (patternPop.querySelector('#pat-clear') as HTMLButtonElement).addEventListener('click', () => pickPattern(null));
   }

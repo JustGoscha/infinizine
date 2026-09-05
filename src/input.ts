@@ -133,6 +133,8 @@ export class InputState {
     const p = readPref('infinizine-fill-pattern');
     return p && p.startsWith('pattern:') ? p : null;
   })();
+  /** ink coverage for pattern fills (CMYK-style tint): 1 = solid ink, lower lets paper through so overlaps mix */
+  inkDensity = (() => { const v = Number(readPref('infinizine-ink-density')); return v >= 0.3 && v <= 1 ? v : 0.8; })();
   baseWidth = 1.6; // world units at 100% (2 per mm)
   adaptiveSize = readPref('infinizine-adaptive-size') === '1'; // keep on-screen size across zoom
   /** brush width in world units for a stroke started at this zoom */
@@ -1090,6 +1092,7 @@ export function attachInput(
         const fill: FillShape = {
           id: uid('fl'), kind: 'fill', color: state.color, opacity: 1,
           pattern: state.fillPattern ?? undefined,
+          ink: state.fillPattern ? state.inkDensity : undefined,
           // every tone fill gets its own angle so neighbouring fills don't line up like wallpaper
           patternAngle: state.fillPattern && !isPixelPattern(state.fillPattern) ? Math.floor(Math.random() * 36) * 5 : undefined,
           layer: state.paintBehind ? 'back' : 'front',
