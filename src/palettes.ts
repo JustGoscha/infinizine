@@ -14,7 +14,14 @@ export interface PalettePreset {
 import { isPattern, patternVariants } from './patterns';
 
 export const PALETTES: PalettePreset[] = [
-
+  {
+    // process inks: with pattern fills at <100% density these overprint like a real
+    // CMYK press — C over Y → green, M over Y → red, M over C → blue, all three → black
+    id: 'cmyk',
+    drama: 0.15,
+    name: 'Process CMYK',
+    hues: ['#FFFFFF', '#231F20', '#00AEEF', '#EC008C', '#FFF100'],
+  },
   {
     id: 'ink',
     drama: 0.3,
