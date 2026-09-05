@@ -79,6 +79,13 @@ const BAYER = [
   [3, 11, 1, 9],
   [15, 7, 13, 5],
 ];
+// 8×8 Bayer: the classic finer dispersed-dot ramp
+const BAYER8 = Array.from({ length: 8 }, (_, i) => Array.from({ length: 8 }, (_, j) => 4 * BAYER[i % 4][j % 4] + [[0, 2], [3, 1]][i >> 2][j >> 2]));
+// rank of a position within a period of 8 (bit-reversed): levels built on it nest —
+// every cell inked at a lighter level is inked at every darker one, so stacking
+// two shades of a family never invents new ink
+const RANK8 = [0, 4, 2, 6, 1, 5, 3, 7];
+const LEVELS8 = [1, 2, 4, 6, 7]; // cells (of 8) inked per level
 // clustered-dot ordered dither (4×4 spiral): dots grow from the centre like a halftone
 const CLUSTER = [
   [12, 5, 6, 13],
@@ -95,33 +102,29 @@ function cellRule(id: string): ((i: number, j: number) => boolean) | null {
   switch (fam) {
     case 'bayer': { const level = [2, 5, 8, 11, 14][k - 1]; return (i, j) => BAYER[mod(i, 4)][mod(j, 4)] < level; }
     case 'cluster': { const level = [2, 5, 8, 11, 14][k - 1]; return (i, j) => CLUSTER[mod(i, 4)][mod(j, 4)] < level; }
-    case 'pixdots':
-      // the classic 8-bit ramp: lone pixels every 4, 3, 2 → checker → everything but every other pixel
-      return [
-        (i: number, j: number) => mod(i, 4) === 0 && mod(j, 4) === 0,
-        (i: number, j: number) => mod(i, 3) === 0 && mod(j, 3) === 0,
-        (i: number, j: number) => mod(i, 2) === 0 && mod(j, 2) === 0,
-        (i: number, j: number) => mod(i + j, 2) === 0,
-        (i: number, j: number) => !(mod(i, 2) === 0 && mod(j, 2) === 0),
-      ][k - 1];
+    case 'pixdots': {
+      // the classic 8-bit ramp: lone pixels every 4 → every 2 → checker → 3/4 (8×8 Bayer thresholds)
+      const level = [4, 8, 16, 32, 48][k - 1];
+      return (i, j) => BAYER8[mod(i, 8)][mod(j, 8)] < level;
+    }
     case 'checker': { const s = [1, 2, 3, 4, 6][k - 1]; return (i, j) => mod(Math.floor(i / s) + Math.floor(j / s), 2) === 0; }
-    case 'scan': return [(i: number) => mod(i, 4) === 0, (i: number) => mod(i, 3) === 0, (i: number) => mod(i, 2) === 0, (i: number) => mod(i, 3) !== 0, (i: number) => mod(i, 4) !== 0][k - 1];
-    case 'vscan': return [(_: number, j: number) => mod(j, 4) === 0, (_: number, j: number) => mod(j, 3) === 0, (_: number, j: number) => mod(j, 2) === 0, (_: number, j: number) => mod(j, 3) !== 0, (_: number, j: number) => mod(j, 4) !== 0][k - 1];
-    case 'stairs': return [(i: number, j: number) => mod(i + j, 4) === 0, (i: number, j: number) => mod(i + j, 3) === 0, (i: number, j: number) => mod(i + j, 2) === 0, (i: number, j: number) => mod(i + j, 3) !== 0, (i: number, j: number) => mod(i + j, 4) !== 0][k - 1];
+    case 'scan': { const n = LEVELS8[k - 1]; return (i) => RANK8[mod(i, 8)] < n; }
+    case 'vscan': { const n = LEVELS8[k - 1]; return (_, j) => RANK8[mod(j, 8)] < n; }
+    case 'stairs': { const n = LEVELS8[k - 1]; return (i, j) => RANK8[mod(i + j, 8)] < n; }
     case 'xhatch': {
-      const P = [8, 6, 4, 3, 4][k - 1], thick = k === 5 ? 2 : 1;
-      return (i, j) => mod(i + j, P) < thick || mod(i - j, P) < thick;
+      // both diagonals, lines every 8 → 4 → … cells
+      const n = [1, 2, 3, 4, 6][k - 1];
+      return (i, j) => RANK8[mod(i + j, 8)] < n || RANK8[mod(i - j, 8)] < n;
     }
     case 'zigzag': {
-      // a pixel zigzag line (rise 3 over 3, fall 3 over 3) every S rows
-      const S = [8, 6, 5, 4, 3][k - 1];
-      return (i, j) => { const t = mod(j, 6); const h = t < 3 ? t : 6 - t; return mod(i - h, S) === 0; };
+      // a pixel zigzag (rise 3 over 3, fall 3 over 3); more lines per 8 rows each level
+      const n = [1, 2, 3, 4, 6][k - 1];
+      return (i, j) => { const t = mod(j, 6); const h = t < 3 ? t : 6 - t; return RANK8[mod(i - h, 8)] < n; };
     }
     case 'brick': {
-      // mortar lines of a staggered brick wall; level 5 is the wall itself with paper mortar
-      const [W, H] = [[8, 4], [6, 3], [4, 2], [3, 2], [6, 3]][k - 1];
-      const mortar = (i: number, j: number) => mod(i, H) === 0 || mod(j + (mod(Math.floor(i / H), 2) ? Math.floor(W / 2) : 0), W) === 0;
-      return k === 5 ? (i, j) => !mortar(i, j) : mortar;
+      // one brick wall (8×4 cells, staggered); darker levels hatch the bricks — nested like the others
+      const n = [0, 1, 2, 4, 6][k - 1];
+      return (i, j) => mod(i, 4) === 0 || mod(j + (mod(Math.floor(i / 4), 2) ? 4 : 0), 8) === 0 || RANK8[mod(i + j, 8)] < n;
     }
     case 'pixnoise': { const pr = [0.1, 0.22, 0.38, 0.55, 0.72][k - 1]; return (i, j) => hash2(i, j) < pr; }
     default: return null;
@@ -342,7 +345,7 @@ export const PATTERN_CATEGORIES: { label: string; families: { fam: string; label
     ],
   },
   {
-    label: 'Digital · one pixel grid',
+    label: 'Digital · one pixel grid · levels stack without adding ink',
     families: [
       { fam: 'bayer', label: 'Ordered' }, { fam: 'cluster', label: 'Halftone' }, { fam: 'pixdots', label: 'Pixel dots' },
       { fam: 'checker', label: 'Checker' }, { fam: 'scan', label: 'Scanlines' }, { fam: 'vscan', label: 'Vertical' },

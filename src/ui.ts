@@ -1,12 +1,13 @@
 // Toolbar, palette popover, page menu. Plain DOM, stationery-shop styling in style.css.
 
-import { InputState, Tool, CLIP_PENDING_KEY, FINGER_KEY, writePref, attachInput, setModalOpen } from './input';
+import { InputState, Tool, CLIP_PENDING_KEY, FINGER_KEY, writePref, readPref, attachInput, setModalOpen } from './input';
 import { Renderer } from './render';
 import { baseZoom as baseZoomFn } from './camera';
 import { Store } from './store';
 import { Camera, baseZoom, pxPerMm, setPxPerMm } from './camera';
 import { PALETTES, PALETTE_GROUPS, getPalette, shades, sortByLightness } from './palettes';
 import { isPattern, patternPreviewCSS, patternLabel, PATTERN_CATEGORIES } from './patterns';
+import type { ExportOptions } from './export';
 import { UNITS_PER_MM, uid, FORMAT_VERSION, FILL_BLENDS } from './types';
 import { type Fmt, PRIMARY_FORMATS, FORMAT_GROUPS, MORE_FORMATS, fitPage, customFormats, saveCustomFormat, mm } from './formats';
 import { layoutText, layoutHeight, layoutWidth, FONTS, FACES, chosenFaces, appFaces, setFace, setDocFaces, weightRange, type FontRole } from './text';
@@ -178,7 +179,11 @@ export function buildUI(
   store: Store,
   camera: Camera,
   invalidate: () => void,
-  actions: { copy: () => void; cut: () => void; paste: () => void; exportPages: () => Promise<void> },
+  actions: {
+    copy: () => void; cut: () => void; paste: () => void;
+    exportZine: (opts: ExportOptions) => Promise<void>;
+    pageThumb: (page: import('./types').Page, width: number) => HTMLCanvasElement;
+  },
 ) {
   root.innerHTML = `
     <header class="topbar">
@@ -201,6 +206,7 @@ export function buildUI(
         <button id="present-back">‹</button>
         <span id="present-counter"></span>
         <button id="present-fwd">›</button>
+        <button id="present-pages" title="All pages: reorder for presenting and export">${svg('<rect x="3" y="6" width="5" height="12"/><rect x="9.5" y="6" width="5" height="12"/><rect x="16" y="6" width="5" height="12"/>')}</button>
         <button id="present-exit">✕</button>
       </div>
     </div>
@@ -218,6 +224,23 @@ export function buildUI(
       <div class="popover hidden" id="pattern-popover"></div>
       <div class="divider"></div>
       <button class="add-page" id="add-page" title="New page">${svg('<path d="M7 3.5 H13.5 L18 8 V20.5 H7 Z"/><path d="M13.5 3.5 V8 H18"/><path d="M12.5 11.5 v5 M10 14 h5"/>')}</button>
+    </div>
+    <div class="popover top-pop hidden" id="export-popover">
+      <div class="set-title">Export</div>
+      <div class="set-row"><span>What</span>
+        <div class="seg" id="ex-scope"><button data-v="pages">Pages</button><button data-v="canvas">Whole canvas</button></div></div>
+      <div class="set-row"><span>Format</span>
+        <div class="seg" id="ex-format"><button data-v="png">PNG</button><button data-v="pdf">PDF</button><button data-v="gif">GIF</button><button data-v="html">HTML</button><button data-v="zine">.zine</button></div></div>
+      <div class="set-row"><span>Resolution</span>
+        <div class="seg" id="ex-dpi"><button data-v="150">150 dpi</button><button data-v="300">300 dpi</button></div></div>
+      <div class="set-row"><span>Paper pattern</span>
+        <div class="seg" id="ex-paper"><button data-v="1">Include</button><button data-v="0">Exclude</button></div></div>
+      <div class="set-note" id="ex-note"></div>
+      <button class="set-action" id="ex-go">Export</button>
+    </div>
+    <div class="pages-panel hidden" id="pages-panel">
+      <div class="pages-head"><span>Pages · reading order</span><span class="pages-hint">drag to reorder (hold on touch)</span><button id="pages-bypos" title="Left to right, top to bottom">By position</button><button id="pages-close">✕</button></div>
+      <div class="pages-strip" id="pages-strip"></div>
     </div>
     <div class="popover top-pop hidden" id="docs-popover"></div>
     <div class="popover top-pop hidden" id="settings-popover">
@@ -243,6 +266,7 @@ export function buildUI(
     <div class="page-menu hidden" id="page-menu">
       <button id="pm-move" title="Move page">${svg('<path d="M12 3 V21 M3 12 H21"/><path d="M12 3 L9.6 5.4 M12 3 L14.4 5.4 M12 21 L9.6 18.6 M12 21 L14.4 18.6 M3 12 L5.4 9.6 M3 12 L5.4 14.4 M21 12 L18.6 9.6 M21 12 L18.6 14.4"/>')}</button>
       <button id="pm-add" title="Add page (same size)">${svg('<path d="M12 5 V19 M5 12 H19"/>')}</button>
+      <button id="pm-order" title="Page order (presenting & export)">${svg('<rect x="3" y="6" width="5" height="12"/><rect x="9.5" y="6" width="5" height="12"/><rect x="16" y="6" width="5" height="12"/>')}</button>
       <button id="pm-delete" title="Delete page">${svg('<path d="M4 7 H20 M9 7 V5 A1 1 0 0 1 10 4 H14 A1 1 0 0 1 15 5 V7 M6.5 7 L7.5 20 H16.5 L17.5 7"/>')}</button>
       <span class="pm-sep"></span>
       <div class="pm-formats">
@@ -1893,8 +1917,7 @@ export function buildUI(
         .join('')}</div>
       <div class="docs-actions">
         <button id="doc-new">＋ New zine</button>
-        <button id="doc-export">Export</button>
-        <button id="doc-export-png" title="Every page as a 300 dpi PNG, zipped">Pages → PNG</button>
+        <button id="doc-export">Export…</button>
         <button id="doc-import">Import</button>
         <input id="doc-file" type="file" accept=".zine,.json,application/json" hidden>
       </div>
@@ -1932,19 +1955,11 @@ export function buildUI(
       invalidate();
     });
     (docsPop.querySelector('#doc-export') as HTMLButtonElement).addEventListener('click', () => {
-      const blob = new Blob([store.exportJSON()], { type: 'application/json' });
-      const a = document.createElement('a');
-      a.href = URL.createObjectURL(blob);
-      a.download = `${store.doc.name || 'zine'}.zine`;
-      a.click();
-      URL.revokeObjectURL(a.href);
+      docsPop.classList.add('hidden');
+      openExport();
     });
     const fileInput = docsPop.querySelector('#doc-file') as HTMLInputElement;
     (docsPop.querySelector('#doc-import') as HTMLButtonElement).addEventListener('click', () => fileInput.click());
-    (docsPop.querySelector('#doc-export-png') as HTMLButtonElement).addEventListener('click', () => {
-      docsPop.classList.add('hidden');
-      void actions.exportPages();
-    });
     fileInput.addEventListener('change', async () => {
       const f = fileInput.files?.[0];
       if (!f) return;
@@ -1973,13 +1988,97 @@ export function buildUI(
   let presenting = false;
   let presentIndex = 0;
 
-  /** Pages in spatial order: top-to-bottom rows, left-to-right within a row. */
-  function sortedPages() {
-    return [...store.doc.pages].sort((a, b) => {
-      if (Math.abs(a.y - b.y) < Math.min(a.h, b.h) * 0.5) return a.x - b.x;
-      return a.y - b.y;
+  /** Pages in reading order (the zine's page order; by position until reordered). */
+  const sortedPages = () => store.orderedPages();
+
+  // ---------- export dialog ----------
+  const exportPop = root.querySelector('#export-popover') as HTMLElement;
+  const exOpts: ExportOptions = (() => {
+    const d: ExportOptions = { scope: 'pages', format: 'png', dpi: 300, paperPattern: true };
+    try { return { ...d, ...JSON.parse(readPref('infinizine-export') ?? '{}') }; } catch { return d; }
+  })();
+  const EX_NOTES: Record<ExportOptions['format'], string> = {
+    png: 'One PNG per page (zipped when there are several).',
+    pdf: 'All pages in one PDF, in reading order, at the page size.',
+    gif: 'Animated pages only, as looping GIFs (up to 10 s, ≤1200 px).',
+    html: 'A single .html file that shows the zine in any browser — nothing to install. Animated pages play as GIFs.',
+    zine: 'The editable zine file (re-import it here).',
+  };
+  const syncExport = () => {
+    const set = (id: string, v: string) => exportPop.querySelectorAll<HTMLElement>(`#${id} button`).forEach((b) => b.classList.toggle('active', b.dataset.v === v));
+    set('ex-scope', exOpts.scope); set('ex-format', exOpts.format); set('ex-dpi', String(exOpts.dpi)); set('ex-paper', exOpts.paperPattern ? '1' : '0');
+    (exportPop.querySelector('#ex-note') as HTMLElement).textContent = EX_NOTES[exOpts.format];
+    const zine = exOpts.format === 'zine';
+    for (const id of ['ex-scope', 'ex-dpi', 'ex-paper']) (exportPop.querySelector(`#${id}`)!.parentElement as HTMLElement).hidden = zine;
+    writePref('infinizine-export', JSON.stringify(exOpts));
+  };
+  const openExport = () => { syncExport(); exportPop.classList.remove('hidden'); };
+  for (const [id, apply] of [
+    ['ex-scope', (v: string) => { exOpts.scope = v as ExportOptions['scope']; }],
+    ['ex-format', (v: string) => { exOpts.format = v as ExportOptions['format']; }],
+    ['ex-dpi', (v: string) => { exOpts.dpi = Number(v); }],
+    ['ex-paper', (v: string) => { exOpts.paperPattern = v === '1'; }],
+  ] as [string, (v: string) => void][]) {
+    exportPop.querySelector(`#${id}`)!.addEventListener('click', (e) => {
+      const v = (e.target as HTMLElement).closest('button')?.dataset.v;
+      if (v === undefined) return;
+      apply(v);
+      syncExport();
     });
   }
+  (exportPop.querySelector('#ex-go') as HTMLButtonElement).addEventListener('click', () => {
+    exportPop.classList.add('hidden');
+    void actions.exportZine({ ...exOpts });
+  });
+  document.addEventListener('pointerdown', (e) => {
+    const t = e.target as HTMLElement;
+    if (!t.closest?.('#export-popover') && !t.closest?.('#doc-export')) exportPop.classList.add('hidden');
+  });
+
+  // ---------- page order panel: thumbnails in reading order, drag to reorder ----------
+  const pagesPanel = root.querySelector('#pages-panel') as HTMLElement;
+  const pagesStrip = root.querySelector('#pages-strip') as HTMLElement;
+  function buildPagesPanel() {
+    pagesStrip.innerHTML = '';
+    const pages = store.orderedPages();
+    pages.forEach((p, i) => {
+      const item = document.createElement('div');
+      item.className = 'page-thumb';
+      item.dataset.id = p.id;
+      const c = actions.pageThumb(p, 96);
+      c.className = 'page-thumb-img';
+      const cap = document.createElement('span');
+      cap.textContent = `${i + 1}`;
+      item.append(c, cap);
+      pressDrag(item, {
+        onLift: () => item.classList.add('lifted'),
+        onMove: (ev) => {
+          // slide the thumb to where the pointer is among its siblings
+          const sibs = [...pagesStrip.children] as HTMLElement[];
+          const over = sibs.find((s) => s !== item && ev.clientX >= s.getBoundingClientRect().left && ev.clientX <= s.getBoundingClientRect().right);
+          if (!over) return;
+          const before = ev.clientX < over.getBoundingClientRect().left + over.offsetWidth / 2;
+          if (before) pagesStrip.insertBefore(item, over); else over.after(item);
+        },
+        onEnd: () => {
+          item.classList.remove('lifted');
+          store.reorderPages(([...pagesStrip.children] as HTMLElement[]).map((s) => s.dataset.id!));
+          buildPagesPanel();
+          if (state.presenting) showPage(presentIndex);
+        },
+        onTap: () => {
+          if (state.presenting) showPage(store.orderedPages().findIndex((x) => x.id === p.id));
+          else { camera.x = p.x + p.w / 2; camera.y = p.y + p.h / 2; invalidate(); }
+        },
+      });
+      pagesStrip.appendChild(item);
+    });
+  }
+  const openPagesPanel = () => { buildPagesPanel(); pagesPanel.classList.remove('hidden'); };
+  (root.querySelector('#pages-close') as HTMLButtonElement).addEventListener('click', () => pagesPanel.classList.add('hidden'));
+  (root.querySelector('#pages-bypos') as HTMLButtonElement).addEventListener('click', () => { store.sortPagesByPosition(); buildPagesPanel(); if (state.presenting) showPage(presentIndex); });
+  (root.querySelector('#present-pages') as HTMLButtonElement).addEventListener('click', openPagesPanel);
+  (root.querySelector('#pm-order') as HTMLButtonElement).addEventListener('click', () => { hidePageMenu(); openPagesPanel(); });
 
   let animId = 0;
   function flyTo(cx: number, cy: number, zoom: number) {

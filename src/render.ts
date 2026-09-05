@@ -2,7 +2,7 @@
 // culling + cached outlines), live stroke, lasso/selection overlays.
 
 import { Camera, baseZoom } from './camera';
-import { Element, FillShape, Page, Stroke, StrokePoint } from './types';
+import { AnimArea, Element, FillShape, Page, Stroke, StrokePoint } from './types';
 import { strokeOutline, pencilOutlines, markerPaths, outlineToPath, elementBBox, bboxIntersects, densify, filterPressure, easeP, easeTilt, LiveDenoiser, denoiseClosed, pressure, BBox } from './geometry';
 import { layoutText, fontFor, segWidth, LINE_HEIGHT } from './text';
 import { moveHandleRect, moveAllHandleRect, deleteHandleRect, eyeHandleRect, type InputState } from './input';
@@ -12,6 +12,15 @@ import { patternTile, patternTileSize, patternCellSize, cellPath, motifPath, isP
 import { reportCrash } from './crash';
 
 type View = { x: number; y: number; w: number; h: number }; // camera viewport, world coords
+export interface RegionOpts { time?: number; paperPattern?: boolean }
+/** the keyframe showing at `tick` (clamped to the track's end) */
+function frameAtTick(frames: { id: string; duration: number }[], tick: number): string | null {
+  const total = frames.reduce((a, f) => a + f.duration, 0);
+  if (!total) return null;
+  let t = Math.min(tick, total - 1);
+  for (const f of frames) { t -= f.duration; if (t < 0) return f.id; }
+  return frames[frames.length - 1].id;
+}
 interface CacheEntry { solid?: boolean; zoomFree?: boolean; path: Path2D; bbox: BBox; passes?: Path2D[]; core?: Path2D; detail: number }
 
 export class Renderer {
@@ -160,11 +169,17 @@ export class Renderer {
       this.focusAreaId() ?? '', d.paper ?? '', d.pattern ?? ''].join('|');
   }
 
-  /** Render one page to an offscreen canvas at `scale` px per world unit:
-   * paper, every still element, and the first keyframe of each animation
-   * layer (live ink is motion, so it's left out). Clipped to the page. */
-  renderPage(page: Page, scale: number): HTMLCanvasElement {
-    const w = Math.max(1, Math.round(page.w * scale)), h = Math.max(1, Math.round(page.h * scale));
+  /** Render one page to an offscreen canvas (see renderRegion). */
+  renderPage(page: Page, scale: number, opts: RegionOpts = {}): HTMLCanvasElement {
+    return this.renderRegion({ x: page.x, y: page.y, w: page.w, h: page.h }, scale, opts);
+  }
+
+  /** Render a world rectangle to an offscreen canvas at `scale` px per world
+   * unit: paper (optionally with its dot/grid pattern), every still element and
+   * the animations — at `time` seconds into playback, or, without a time, each
+   * layer's first keyframe with live ink drawn complete. */
+  renderRegion(rect: View, scale: number, opts: RegionOpts = {}): HTMLCanvasElement {
+    const w = Math.max(1, Math.round(rect.w * scale)), h = Math.max(1, Math.round(rect.h * scale));
     const c = document.createElement('canvas');
     c.width = w; c.height = h;
     const g = c.getContext('2d')!;
@@ -173,22 +188,38 @@ export class Renderer {
     this.ctx = g;
     this.detailOverride = Math.min(16, Math.max(0.25, 2 ** Math.round(Math.log2(scale / baseZoom()))));
     try {
-      g.fillStyle = this.store.doc.paper ?? '#F7F4EC';
+      const paper = this.store.doc.paper ?? '#F7F4EC';
+      g.fillStyle = paper;
       g.fillRect(0, 0, w, h);
       g.scale(scale, scale);
-      g.translate(-page.x, -page.y);
-      const view = { x: page.x, y: page.y, w: page.w, h: page.h };
-      const still = this.store.doc.elements.filter((el) => this.isStill(el));
+      g.translate(-rect.x, -rect.y);
+      if (opts.paperPattern) this.paintPaperPattern(g, rect, paper);
+      const view = rect;
+      const els = this.store.doc.elements;
+      const still = els.filter((el) => this.isStill(el));
       for (const el of still) if (el.layer === 'back') this.paintElement(el, view, scale, 1);
       for (const el of still) if (el.layer !== 'back') this.paintElement(el, view, scale, 1);
       for (const area of this.store.doc.areas) {
         if (!this.areaInView(area, view)) continue;
         if (area.clip) { g.save(); g.beginPath(); g.rect(area.x, area.y, area.w, area.h); g.clip(); }
+        const total = this.areaLength(area);
+        const raw = opts.time === undefined ? null : Math.floor(opts.time * area.fps);
+        const tick = raw === null ? null : area.loop ? ((raw % total) + total) % total : Math.min(raw, total - 1);
         for (const layer of area.layers) {
-          if (layer.hidden || layer.kind === 'live' || area.hideFrames) continue;
-          const first = layer.frames[0]?.id;
-          if (!first) continue;
-          for (const el of this.store.doc.elements) if (el.frame === first) this.paintElement(el, view, scale, 1);
+          if (layer.hidden) continue;
+          if (layer.kind === 'live') {
+            if (area.hideLive) continue;
+            for (const el of els) {
+              if (el.kind !== 'stroke' || el.alayer !== layer.id) continue;
+              if (raw === null) this.paintElement(el, view, scale, 1);
+              else this.paintTimed(el, { tick: tick!, raw, fps: area.fps, areaLoop: area.loop }, layer.loop !== false, view, scale);
+            }
+            continue;
+          }
+          if (area.hideFrames) continue;
+          const fid = tick === null ? layer.frames[0]?.id : frameAtTick(layer.frames, tick);
+          if (!fid) continue;
+          for (const el of els) if (el.frame === fid) this.paintElement(el, view, scale, 1);
         }
         if (area.clip) g.restore();
       }
@@ -201,6 +232,86 @@ export class Renderer {
       this.invalidate();
     }
     return c;
+  }
+
+  /** Playback length of an area in ticks: its longest keyframe track, and every
+   * non-looping live line's end (start + drawing + decay). Same rule as the screen. */
+  private areaLength(area: AnimArea): number {
+    let total = Math.max(1, ...area.layers.map((l) => l.frames.reduce((a, f) => a + f.duration, 0)));
+    for (const l of area.layers) {
+      if (l.kind !== 'live' || l.loop !== false) continue;
+      for (const el of this.store.doc.elements) {
+        if (el.kind !== 'stroke' || el.alayer !== l.id) continue;
+        const drawn = (el.points[el.points.length - 1]?.t ?? 0) * area.fps;
+        total = Math.max(total, Math.ceil((el.animStart ?? 0) + drawn + Math.max(1, el.animLife ?? 6)));
+      }
+    }
+    return total;
+  }
+
+  /** Animation inside a rectangle, for exports: frame rate and length in seconds (null = nothing moves there). */
+  animInfo(rect: View): { fps: number; seconds: number } | null {
+    const areas = this.store.doc.areas.filter((a) => this.areaInView(a, rect) && a.layers.some((l) => !l.hidden));
+    if (!areas.length) return null;
+    const fps = Math.max(...areas.map((a) => a.fps));
+    const seconds = Math.max(...areas.map((a) => this.areaLength(a) / a.fps));
+    return { fps, seconds };
+  }
+
+  /** A live-ink stroke at a moment of playback: each point lives `animLife`
+   * ticks after it was drawn (mirrors the screen's drawTimed). */
+  private paintTimed(
+    el: Stroke,
+    tk: { tick: number; raw: number; fps: number; areaLoop: boolean },
+    looping: boolean,
+    view: View,
+    scale: number,
+  ) {
+    const ctx = this.ctx;
+    const start = el.animStart ?? 0;
+    const life = Math.max(1, el.animLife ?? 6);
+    const drawnTicks = (el.points[el.points.length - 1]?.t ?? 0) * tk.fps;
+    const cycle = Math.max(1, Math.ceil(start + drawnTicks + life));
+    const r = looping ? (tk.areaLoop ? ((tk.raw % cycle) + cycle) % cycle : tk.raw) : tk.tick;
+    const ageOf = (t: number) => r - start - t * tk.fps;
+    if (!el.animTaper) {
+      if (el.points.some((pt) => { const a = ageOf(pt.t); return a >= 0 && a < life; })) this.paintElement(el, view, scale, 1);
+      return;
+    }
+    const pts: StrokePoint[] = [];
+    for (const pt of el.points) {
+      const age = ageOf(pt.t);
+      if (age >= 0 && age < life) pts.push({ ...pt, p: pt.p * (0.08 + 0.92 * (1 - age / life)) });
+    }
+    if (pts.length < 3 && !(el.points.length === 1 && pts.length === 1)) return;
+    if (el.tool === 'pencil') { this.stampStroke(ctx, { ...el, points: pts }, el.opacity); return; }
+    ctx.globalAlpha = el.opacity;
+    ctx.fillStyle = this.inkStyle(el, scale);
+    if (el.tool === 'marker') ctx.fill(markerPaths(pts, el.baseWidth, this.detail()).fill);
+    else ctx.fill(outlineToPath(strokeOutline({ ...el, points: pts }, this.detail())));
+    ctx.globalAlpha = 1;
+  }
+
+  /** The paper's dot/grid/lines pattern in world space (exports): 5 mm cells, anchored at the origin. */
+  private paintPaperPattern(g: CanvasRenderingContext2D, rect: View, paper: string) {
+    const pattern = this.store.doc.pattern ?? 'dots';
+    if (pattern === 'blank') return;
+    const n = parseInt(paper.slice(1), 16);
+    const lum = ((n >> 16) & 255) * 0.299 + ((n >> 8) & 255) * 0.587 + (n & 255) * 0.114;
+    const dark = lum < 128;
+    const s = 10; // 5 mm
+    const x0 = Math.floor(rect.x / s) * s, y0 = Math.floor(rect.y / s) * s;
+    if (pattern === 'dots') {
+      g.fillStyle = dark ? 'rgba(255,255,255,0.14)' : 'rgba(120,105,80,0.18)';
+      for (let x = x0; x <= rect.x + rect.w; x += s) for (let y = y0; y <= rect.y + rect.h; y += s) g.fillRect(x - 0.25, y - 0.25, 0.5, 0.5);
+      return;
+    }
+    g.strokeStyle = dark ? 'rgba(255,255,255,0.07)' : 'rgba(120,105,80,0.1)';
+    g.lineWidth = 0.25;
+    g.beginPath();
+    if (pattern === 'grid') for (let x = x0; x <= rect.x + rect.w; x += s) { g.moveTo(x, rect.y); g.lineTo(x, rect.y + rect.h); }
+    for (let y = y0; y <= rect.y + rect.h; y += s) { g.moveTo(rect.x, y); g.lineTo(rect.x + rect.w, y); }
+    g.stroke();
   }
 
   /** Rebuild the static layers for the current camera. */

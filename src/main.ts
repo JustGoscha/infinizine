@@ -6,7 +6,7 @@ import { InputState, attachInput } from './input';
 import { Renderer } from './render';
 import { buildUI } from './ui';
 import { installCrashScreen } from './crash';
-import { exportPagesPNG } from './export';
+import { exportZine } from './export';
 
 installCrashScreen();
 
@@ -25,7 +25,8 @@ const uiHooks = buildUI(ui, state, store, camera, () => renderer.invalidate(), {
   copy: () => input.copySelection(),
   cut: () => input.cutSelection(),
   paste: () => void input.pasteSmart(),
-  exportPages: () => exportPagesPNG(store, renderer),
+  exportZine: (opts) => exportZine(store, renderer, opts),
+  pageThumb: (page, width) => renderer.renderPage(page, width / page.w),
 });
 
 store.onChange = (info) => {
@@ -94,3 +95,5 @@ document.fonts?.ready.then(() => { renderer.clearCache(); renderer.invalidate();
 // pressure playground changed the curves: every cached outline is stale
 window.addEventListener('izine-restyle', () => { renderer.clearCache(); renderer.invalidate(); });
 canvas.addEventListener('contextmenu', (e) => e.preventDefault());
+// dev hook: poke at the live app from the console
+(window as unknown as { __izine: unknown }).__izine = { store, renderer, camera, state };

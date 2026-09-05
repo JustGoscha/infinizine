@@ -19,7 +19,7 @@ const PEN_KEY = 'infinizine-pen-seen';
 const TOOL_MEM_KEY = 'infinizine-tool-memory';
 const REMEMBER_TOOLS = new Set(['pen', 'pencil', 'sketch', 'fineliner', 'marker', 'lasso-fill', 'text']);
 const FINGER_KEY = 'infinizine-finger-mode';
-function readPref(k: string): string | null {
+export function readPref(k: string): string | null {
   try { return localStorage.getItem(k); } catch { return null; }
 }
 export function writePref(k: string, v: string) {
@@ -1651,6 +1651,8 @@ export function attachInput(
       const moved = Math.hypot(e.clientX - panStart.x, e.clientY - panStart.y);
       if (moved < 10 && performance.now() - panStart.t < 300) {
         const w = toWorld(e);
+        const pg = pageLabelAt(w);
+        if (pg) { state.onPageMenu(pg, e.clientX, e.clientY); panStart = null; return; }
         const editable = store.doc.elements.filter((el) => frameEditable(el, state));
         const hit = [...editable].reverse().find((el) => hitElement(el, w.x, w.y, 8 / camera.zoom));
         state.selection = hit ? new Set([hit.id]) : new Set();

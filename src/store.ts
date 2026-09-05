@@ -17,6 +17,7 @@ type Op =
   | { type: 'add-page'; page: Page }
   | { type: 'delete-page'; page: Page }
   | { type: 'move-page'; id: string; dx: number; dy: number }
+  | { type: 'reorder-pages'; before: string[]; after: string[] } // page ids in reading order
   | { type: 'move-page-content'; id: string; ids: string[]; areaIds: string[]; dx: number; dy: number }
   | { type: 'pages-format'; before: { id: string; w: number; h: number; format?: string }[]; after: { id: string; w: number; h: number; format?: string }[] }
   | { type: 'add-area'; area: AnimArea; elements: Element[] }
@@ -190,6 +191,13 @@ function idbGetAll<T>(store: string, range: IDBKeyRange): Promise<T[]> {
 }
 const elRange = (docId: string) => IDBKeyRange.bound([docId, ''], [docId, '\uffff']);
 type DocMetaRecord = Omit<Doc, 'elements'> & { order: string[] };
+/** pages by position: rows top→bottom (a page is in the same row when its top is within half a page height), left→right within a row */
+export function spatialPageOrder(pages: Page[]): Page[] {
+  return [...pages].sort((a, b) => {
+    if (Math.abs(a.y - b.y) < Math.min(a.h, b.h) * 0.5) return a.x - b.x;
+    return a.y - b.y;
+  });
+}
 function toast(msg: string) {
   window.dispatchEvent(new CustomEvent('izine-toast', { detail: msg }));
 }
@@ -453,6 +461,17 @@ export class Store {
   }
 
   private apply(op: Op) {
+    this.applyOp(op);
+    // pages read left→right, top→bottom: moving one on the canvas re-reads the layout
+    // (an explicit reorder holds until the next page move)
+    if (op.type === 'move-page' || op.type === 'move-page-content' || op.type === 'add-page' || op.type === 'delete-page') {
+      this.setPageOrder(spatialPageOrder(this.doc.pages).map((p) => p.id));
+    }
+  }
+  private setPageOrder(ids: string[]) {
+    ids.forEach((id, i) => { const p = this.doc.pages.find((x) => x.id === id); if (p) p.order = i; });
+  }
+  private applyOp(op: Op) {
     const d = this.doc;
     switch (op.type) {
       case 'add-elements':
@@ -511,6 +530,7 @@ export class Store {
         break;
       }
       case 'add-page': d.pages.push(op.page); break;
+      case 'reorder-pages': this.setPageOrder(op.after); break;
       case 'delete-page': d.pages = d.pages.filter((p) => p.id !== op.page.id); break;
       case 'move-page': {
         const pg = d.pages.find((p) => p.id === op.id);
@@ -712,6 +732,7 @@ export class Store {
       case 'add-page': return { type: 'delete-page', page: op.page };
       case 'delete-page': return { type: 'add-page', page: op.page };
       case 'move-page': return { ...op, dx: -op.dx, dy: -op.dy };
+      case 'reorder-pages': return { ...op, before: op.after, after: op.before };
       case 'move-page-content': return { ...op, dx: -op.dx, dy: -op.dy };
       case 'pages-format': return { ...op, before: op.after, after: op.before };
       case 'add-area': return { ...op, type: 'delete-area' };
@@ -817,6 +838,15 @@ export class Store {
     if (dx || dy) this.commit({ type: 'move-page', id, dx, dy });
   }
   deletePage(page: Page) { this.commit({ type: 'delete-page', page }); }
+  /** pages in reading order (export, presenting) */
+  orderedPages(): Page[] { return [...this.doc.pages].sort((a, b) => a.order - b.order); }
+  /** explicit reading order (undoable); holds until a page is moved on the canvas */
+  reorderPages(ids: string[]) {
+    const before = this.orderedPages().map((p) => p.id);
+    if (ids.length !== before.length || ids.every((id, i) => id === before[i])) return;
+    this.commit({ type: 'reorder-pages', before, after: ids });
+  }
+  sortPagesByPosition() { this.reorderPages(spatialPageOrder(this.doc.pages).map((p) => p.id)); }
 
   /** Untagged elements whose center lies inside the page rect. */
   pageContentIds(pageId: string): string[] {
