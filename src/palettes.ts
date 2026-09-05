@@ -11,21 +11,10 @@ export interface PalettePreset {
 // Each palette: 5–6 colors — whitish, blackish, neutralish, then 2–3 accents.
 // Accents are curated per palette, not derived from shared hues.
 // Lighter/darker gradations of each color live in the hover/long-press flyout.
-import { MANGA_HUES, DIGITAL_HUES, isPattern, patternVariants } from './patterns';
+import { isPattern, patternVariants } from './patterns';
 
 export const PALETTES: PalettePreset[] = [
-  {
-    id: 'manga',
-    drama: 0,
-    name: 'Manga (screentones)',
-    hues: MANGA_HUES,
-  },
-  {
-    id: 'digital',
-    drama: 0,
-    name: 'Digital (dither)',
-    hues: DIGITAL_HUES,
-  },
+
   {
     id: 'ink',
     drama: 0.3,

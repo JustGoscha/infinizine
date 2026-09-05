@@ -1,7 +1,7 @@
 // Document store: state, undo/redo, localStorage persistence, page placement.
 
 import { AnimArea, AnimFrame, AnimLayer, Doc, Element, Layer, Page, emptyDoc, uid, FORMAT_VERSION } from './types';
-import { inkOf, isPattern, isPixelPattern } from './patterns';
+import { isPixelPattern } from './patterns';
 
 type TextContent = { text: string; w: number; h: number; font?: string; fontSize?: number };
 type TextMetrics = { x: number; w: number; h: number; fontSize: number; auto?: boolean };
@@ -1049,19 +1049,20 @@ export class Store {
     this.commit({ type: 'z-order', prevOrder, nextOrder, layers: layers.length ? layers : undefined });
   }
 
-  recolorElements(ids: string[], pick: string) {
-    // a pattern swatch: fills take the pattern (in ink), everything else just the ink
-    const pattern = isPattern(pick) ? pick : undefined;
-    const after = inkOf(pick);
+  recolorElements(ids: string[], after: string) {
     const items = ids
       .map((id) => this.doc.elements.find((e) => e.id === id))
-      .filter((e): e is Exclude<Element, { kind: 'image' }> => !!e && e.kind !== 'image')
-      .filter((e) => e.color !== after || (e.kind === 'fill' && (e.pattern ?? undefined) !== pattern))
-      .map((e) => ({
-        id: e.id, before: e.color, after,
-        beforePattern: e.kind === 'fill' ? e.pattern : undefined,
-        afterPattern: e.kind === 'fill' ? pattern : undefined,
-      }));
+      .filter((e): e is Exclude<Element, { kind: 'image' }> => !!e && e.kind !== 'image' && e.color !== after)
+      .map((e) => ({ id: e.id, before: e.color, after, beforePattern: e.kind === 'fill' ? e.pattern : undefined, afterPattern: e.kind === 'fill' ? e.pattern : undefined }));
+    if (items.length) this.commit({ type: 'recolor-elements', items });
+  }
+
+  /** set (or clear) the fill pattern on the given fills, colour unchanged (undoable) */
+  setPatterns(ids: string[], pattern: string | null) {
+    const items = ids
+      .map((id) => this.doc.elements.find((e) => e.id === id))
+      .filter((e): e is Extract<Element, { kind: 'fill' }> => !!e && e.kind === 'fill' && (e.pattern ?? null) !== pattern)
+      .map((e) => ({ id: e.id, before: e.color, after: e.color, beforePattern: e.pattern, afterPattern: pattern ?? undefined }));
     if (items.length) this.commit({ type: 'recolor-elements', items });
   }
 

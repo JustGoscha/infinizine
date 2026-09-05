@@ -6,7 +6,7 @@ import { Camera, baseZoom } from './camera';
 import { Store } from './store';
 import { AnimArea, Stroke, FillShape, Element, ImageBox, Page, TextBox, uid } from './types';
 import { hitElement, elementsInLasso, denoise, denoiseClosed, pressure } from './geometry';
-import { inkOf, isPattern, isPixelPattern } from './patterns';
+import { isPixelPattern } from './patterns';
 import { layoutText, layoutHeight } from './text';
 
 const CLIP_KEY = 'infinizine-clipboard';
@@ -128,6 +128,11 @@ export class InputState {
     writePref(TOOL_MEM_KEY, JSON.stringify(this.toolMem));
   }
   color = '#1a1a1a';
+  /** fill tool: active pattern (screentone, dither, …) drawn in `color`; null = solid */
+  fillPattern: string | null = (() => {
+    const p = readPref('infinizine-fill-pattern');
+    return p && p.startsWith('pattern:') ? p : null;
+  })();
   baseWidth = 1.6; // world units at 100% (2 per mm)
   adaptiveSize = readPref('infinizine-adaptive-size') === '1'; // keep on-screen size across zoom
   /** brush width in world units for a stroke started at this zoom */
@@ -571,7 +576,7 @@ export function attachInput(
         }
         state.live = {
           id: uid('st'), kind: 'stroke', tool: activeTool as import('./types').ToolKind,
-          color: inkOf(state.color), // pattern swatches paint ink when stroking
+          color: state.color,
           baseWidth: state.effectiveWidth(camera.zoom) / (activeTool === 'fineliner' ? 1.4 : 1),
           opacity: activeTool === 'marker' ? 0.45 : 1,
           layer: state.paintBehind ? 'back' : 'front',
@@ -1083,10 +1088,10 @@ export function attachInput(
         state.selection = new Set(elementsInLasso(store.doc.elements, lasso).map((e) => e.id));
       } else if (state.tool === 'lasso-fill' && lasso.length > 2) {
         const fill: FillShape = {
-          id: uid('fl'), kind: 'fill', color: inkOf(state.color), opacity: 1,
-          pattern: isPattern(state.color) ? state.color : undefined,
+          id: uid('fl'), kind: 'fill', color: state.color, opacity: 1,
+          pattern: state.fillPattern ?? undefined,
           // every tone fill gets its own angle so neighbouring fills don't line up like wallpaper
-          patternAngle: isPattern(state.color) && !isPixelPattern(state.color) ? Math.floor(Math.random() * 36) * 5 : undefined,
+          patternAngle: state.fillPattern && !isPixelPattern(state.fillPattern) ? Math.floor(Math.random() * 36) * 5 : undefined,
           layer: state.paintBehind ? 'back' : 'front',
           frame: state.activeFrameId ?? undefined,
           alayer: state.activeLayerId ?? undefined,
@@ -1192,7 +1197,7 @@ export function attachInput(
       y: camera.y - h / 2,
       w: wBox,
       h,
-      color: inkOf(state.color),
+      color: state.color,
       fontSize: state.textSize,
       font: state.font,
       text,

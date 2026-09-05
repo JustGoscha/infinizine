@@ -1686,3 +1686,39 @@ body.presenting .popover { display: none; }
 
 .set-action.set-ghost { background: transparent; color: var(--ink); font-weight: 600; }
 .set-action[hidden] { display: none; }
+
+/* ---------- fill pattern selector ---------- */
+.tb-sep { width: 1px; height: 26px; background: var(--line); margin: 0 4px; }
+.pat-btn {
+  width: 28px;
+  height: 28px;
+  border-radius: 3px; /* square: it's a pattern, not a colour */
+  border: 1.5px solid var(--line);
+  background: transparent;
+  color: var(--ink-soft);
+  display: grid;
+  place-items: center;
+  cursor: pointer;
+  padding: 0;
+}
+.pat-btn svg { width: 18px; height: 18px; }
+.pat-btn.on { border-color: var(--ink); }
+#pattern-popover { width: min(420px, calc(100vw - 20px)); max-height: 60vh; overflow-y: auto; display: flex; flex-direction: column; gap: 6px; }
+#pattern-popover.hidden { display: none; }
+.pat-head { display: flex; justify-content: space-between; align-items: center; font-weight: 700; font-size: 13px; }
+.pat-none {
+  display: inline-flex; align-items: center; gap: 5px;
+  border: 1.5px solid var(--line); background: transparent; color: var(--ink);
+  border-radius: 2px; padding: 3px 8px; font: inherit; font-size: 11px; font-weight: 600; cursor: pointer;
+}
+.pat-none svg { width: 14px; height: 14px; }
+.pat-none.active { background: var(--ink); color: var(--card); border-color: var(--ink); }
+.pat-cat { font-size: 11px; font-weight: 700; letter-spacing: 0.06em; text-transform: uppercase; color: var(--ink-soft); margin-top: 6px; }
+.pat-fam { display: grid; grid-template-columns: 90px 1fr; align-items: center; gap: 8px; }
+.pat-fam-name { font-size: 12px; }
+.pat-swatches { display: flex; gap: 6px; }
+.pat-sw {
+  width: 34px; height: 34px; border-radius: 3px;
+  border: 1.5px solid var(--line); cursor: pointer; padding: 0;
+}
+.pat-sw.active { border: 2.5px solid var(--ink); }

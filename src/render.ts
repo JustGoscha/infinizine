@@ -8,7 +8,7 @@ import { layoutText, fontFor, segWidth, LINE_HEIGHT } from './text';
 import { moveHandleRect, moveAllHandleRect, deleteHandleRect, eyeHandleRect, type InputState } from './input';
 import { Store, ChangeInfo } from './store';
 import { formatLabel } from './formats';
-import { patternTile, patternTileSize, patternCellSize, snapPolygonToCells, motifPath, isPixelPattern, inkOf } from './patterns';
+import { patternTile, patternTileSize, patternCellSize, snapPolygonToCells, motifPath, isPixelPattern } from './patterns';
 import { reportCrash } from './crash';
 
 type View = { x: number; y: number; w: number; h: number }; // camera viewport, world coords
@@ -1071,11 +1071,11 @@ export class Renderer {
       for (const p of lasso) ctx.lineTo(p.x, p.y);
       ctx.setLineDash([6 / z, 5 / z]);
       ctx.lineWidth = 1.5 / z;
-      ctx.strokeStyle = this.input.tool === 'lasso-fill' ? inkOf(this.input.color) : '#E8590C';
+      ctx.strokeStyle = this.input.tool === 'lasso-fill' ? this.input.color : '#E8590C';
       if (this.input.tool === 'lasso-fill') {
         ctx.save();
         ctx.globalAlpha = 0.25;
-        ctx.fillStyle = this.input.color.startsWith('pattern:') ? this.fillPattern(this.input.color, inkOf(this.input.color)) : this.input.color;
+        ctx.fillStyle = this.input.fillPattern ? this.fillPattern(this.input.fillPattern, this.input.color) : this.input.color;
         ctx.fill();
         ctx.restore();
       }

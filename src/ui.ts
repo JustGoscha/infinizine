@@ -6,7 +6,7 @@ import { baseZoom as baseZoomFn } from './camera';
 import { Store } from './store';
 import { Camera, baseZoom, pxPerMm, setPxPerMm } from './camera';
 import { PALETTES, getPalette, shades } from './palettes';
-import { isPattern, inkOf, patternPreviewCSS, patternLabel } from './patterns';
+import { isPattern, patternPreviewCSS, patternLabel, PATTERN_CATEGORIES } from './patterns';
 import { UNITS_PER_MM, uid, FORMAT_VERSION } from './types';
 import { type Fmt, PRIMARY_FORMATS, FORMAT_GROUPS, MORE_FORMATS, fitPage, customFormats, saveCustomFormat, mm } from './formats';
 import { layoutText, layoutHeight, layoutWidth, FONTS, FACES, chosenFaces, appFaces, setFace, setDocFaces, weightRange, type FontRole } from './text';
@@ -212,6 +212,9 @@ export function buildUI(
       <div class="divider"></div>
       <div class="pal-row" id="pal-row"></div>
       <button class="pal-more" id="pal-more" title="Palettes">···</button>
+      <span class="tb-sep"></span>
+      <button class="pat-btn" id="pat-btn" title="Fill pattern (fill tool): screentones, hatching, dithers…"></button>
+      <div class="popover hidden" id="pattern-popover"></div>
       <div class="divider"></div>
       <button class="add-page" id="add-page" title="New page">${svg('<path d="M7 3.5 H13.5 L18 8 V20.5 H7 Z"/><path d="M13.5 3.5 V8 H18"/><path d="M12.5 11.5 v5 M10 14 h5"/>')}</button>
     </div>
@@ -384,7 +387,7 @@ export function buildUI(
   /** Picking a color while textboxes are selected recolors them. */
   function applyColor(c: string) {
     state.color = c;
-    state.onEditColor?.(inkOf(c)); // text being edited follows the palette (patterns → ink)
+    state.onEditColor?.(c); // text being edited follows the palette
     writePref(`infinizine-color-${store.docId}`, c);
     writePref('infinizine-last-color', c);
     state.rememberTool();
@@ -393,6 +396,7 @@ export function buildUI(
       .filter((el) => el.kind !== 'image' && state.selection.has(el.id))
       .map((el) => el.id);
     if (ids.length) store.recolorElements(ids, c);
+    syncPatBtn();
     refresh();
     invalidate();
   }
@@ -470,7 +474,7 @@ export function buildUI(
             .join('')}</span>
         </button>`,
       ).join('')}</div>
-      <label class="pal-custom">custom <input type="color" id="custom-color" value="${inkOf(state.color)}"></label>
+      <label class="pal-custom">custom <input type="color" id="custom-color" value="${state.color}"></label>
       <div class="paper-row">
         <span class="paper-label">pattern</span>
         ${['blank', 'dots', 'grid', 'lines']
@@ -525,9 +529,61 @@ export function buildUI(
 
   palMore.addEventListener('click', () => {
     pagePop.classList.add('hidden');
+    patternPop.classList.add('hidden');
     buildPalettePopover();
     palettePop.classList.toggle('hidden');
   });
+
+  // ---- fill pattern selector: square swatch next to the colours; categories × densities ----
+  const patBtn = root.querySelector('#pat-btn') as HTMLButtonElement;
+  const patternPop = root.querySelector('#pattern-popover') as HTMLElement;
+  const syncPatBtn = () => {
+    const pat = state.fillPattern;
+    patBtn.style.background = pat ? patternPreviewCSS(pat, state.color, 9) : '';
+    patBtn.classList.toggle('none', !pat);
+    patBtn.classList.toggle('on', !!pat);
+    patBtn.title = pat ? `${patternLabel(pat)} — fills use it (tap to change)` : 'Fill pattern: solid (tap to pick a screentone / dither)';
+    patBtn.innerHTML = pat ? '' : svg('<rect x="4.5" y="4.5" width="15" height="15"/><path d="M6 18 L18 6"/>');
+  };
+  const pickPattern = (pat: string | null) => {
+    state.fillPattern = pat;
+    writePref('infinizine-fill-pattern', pat ?? '');
+    // selected fills take the pattern right away
+    const ids = store.doc.elements.filter((el) => el.kind === 'fill' && state.selection.has(el.id)).map((el) => el.id);
+    if (ids.length) store.setPatterns(ids, pat);
+    if (pat && state.tool !== 'lasso-fill') { state.tool = 'lasso-fill'; state.onToolChange(); }
+    syncPatBtn();
+    buildPatternPopover();
+    invalidate();
+  };
+  function buildPatternPopover() {
+    patternPop.innerHTML = `
+      <div class="pat-head"><span>Fill pattern</span>
+        <button class="pat-none${state.fillPattern ? '' : ' active'}" id="pat-clear">${svg('<rect x="4.5" y="4.5" width="15" height="15"/><path d="M6 18 L18 6"/>')}<span>Solid</span></button></div>
+      ${PATTERN_CATEGORIES.map((cat) => `
+        <div class="pat-cat">${cat.label}</div>
+        ${cat.families.map((f) => `
+          <div class="pat-fam"><span class="pat-fam-name">${f.label}</span>
+            <div class="pat-swatches">${[1, 2, 3, 4, 5].map((k) => {
+              const id = `pattern:${f.fam}-${k}`;
+              return `<button class="pat-sw${state.fillPattern === id ? ' active' : ''}" data-id="${id}" title="${f.label} ${k}" style="background:${patternPreviewCSS(id, state.color, 9)}"></button>`;
+            }).join('')}</div>
+          </div>`).join('')}`).join('')}
+      <div class="set-note">Patterns paint with the fill tool, in the current colour. Dot tones rotate randomly per fill (rotate from the selection menu); dithers stay pixel-aligned.</div>`;
+    patternPop.querySelectorAll<HTMLElement>('.pat-sw').forEach((b) => b.addEventListener('click', () => pickPattern(b.dataset.id!)));
+    (patternPop.querySelector('#pat-clear') as HTMLButtonElement).addEventListener('click', () => pickPattern(null));
+  }
+  patBtn.addEventListener('click', () => {
+    pagePop.classList.add('hidden');
+    palettePop.classList.add('hidden');
+    buildPatternPopover();
+    patternPop.classList.toggle('hidden');
+  });
+  document.addEventListener('pointerdown', (e) => {
+    const t = e.target as HTMLElement;
+    if (!t.closest?.('#pattern-popover') && !t.closest?.('#pat-btn')) patternPop.classList.add('hidden');
+  });
+  syncPatBtn();
 
   // tap anywhere else closes touch flyouts
   document.addEventListener('pointerdown', (e) => {
@@ -2050,7 +2106,7 @@ export function buildUI(
     });
     // Layer symbol: current-color stroke over / behind a white square
     const sq = '<rect x="8" y="8" width="10" height="10" fill="#fdfcf8" stroke="rgba(90,75,50,0.5)" stroke-width="1"/>';
-    const st = `<path d="M4 20 C6 13 10 18 12 12 C14 6 18 11 20 4" fill="none" stroke="${inkOf(state.color)}" stroke-width="2.6" stroke-linecap="round"/>`;
+    const st = `<path d="M4 20 C6 13 10 18 12 12 C14 6 18 11 20 4" fill="none" stroke="${state.color}" stroke-width="2.6" stroke-linecap="round"/>`;
     layerToggle.innerHTML = `<svg viewBox="0 0 24 24">${state.paintBehind ? st + sq : sq + st}</svg>`;
     layerToggle.title = state.paintBehind
       ? 'Painting behind existing ink (tap for in front)'

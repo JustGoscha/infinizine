@@ -254,6 +254,25 @@ export function patternPreviewCSS(id: string, color = PATTERN_INK, px = 14): str
   return `url(${url}) 0 0 / ${px}px ${px}px repeat, #FDFCF8`;
 }
 
+/** Catalogue for the pattern picker: categories → families (5 densities each). */
+export const PATTERN_CATEGORIES: { label: string; families: { fam: string; label: string }[] }[] = [
+  {
+    label: 'Manga',
+    families: [
+      { fam: 'tone', label: 'Screentone' }, { fam: 'hatch', label: 'Hatching' }, { fam: 'cross', label: 'Cross-hatch' },
+      { fam: 'lines', label: 'Ruled lines' }, { fam: 'grid', label: 'Grid' }, { fam: 'sand', label: 'Sand' },
+      { fam: 'waves', label: 'Waves' }, { fam: 'scales', label: 'Scales' },
+    ],
+  },
+  {
+    label: 'Digital',
+    families: [
+      { fam: 'bayer', label: 'Dither' }, { fam: 'scan', label: 'Scanlines' }, { fam: 'checker', label: 'Checker' },
+      { fam: 'pixnoise', label: 'Pixel noise' }, { fam: 'stairs', label: 'Pixel stairs' },
+    ],
+  },
+];
+
 /** Hues for the two pattern palettes (ink, paper, then swatches per family). */
 export const MANGA_HUES = [
   PATTERN_INK, '#FDFCF8',
