@@ -39,6 +39,7 @@ type Op =
   | { type: 'rename-anim-layer'; areaId: string; layerId: string; before: string; after: string }
   | { type: 'doc-style'; field: 'palette' | 'paper' | 'pattern'; before: string; after: string }
   | { type: 'doc-faces'; before: Record<string, string> | undefined; after: Record<string, string> | undefined }
+  | { type: 'pattern-angle'; items: { id: string; before: number; after: number }[] }
   | { type: 'layer-flag'; areaId: string; layerId: string; field: 'hidden' | 'loop'; before: boolean; after: boolean }
   | { type: 'area-flag'; areaId: string; field: 'hideFrames' | 'hideLive'; before: boolean; after: boolean };
 
@@ -63,6 +64,7 @@ function changeInfo(op: Op): ChangeInfo {
       return { ids: [op.id] };
     case 'recolor-elements':
     case 'retime-strokes':
+    case 'pattern-angle':
       return { ids: op.items.map((i) => i.id) };
     case 'add-area':
     case 'delete-area':
@@ -559,6 +561,12 @@ export class Store {
       case 'doc-faces':
         if (op.after) d.faces = { ...op.after }; else delete d.faces;
         break;
+      case 'pattern-angle':
+        for (const it of op.items) {
+          const el = d.elements.find((e) => e.id === it.id);
+          if (el && el.kind === 'fill') el.patternAngle = it.after;
+        }
+        break;
       case 'doc-style': {
         if (op.field === 'palette') d.palette = op.after;
         else if (op.field === 'paper') d.paper = op.after;
@@ -630,6 +638,8 @@ export class Store {
       case 'rename-anim-layer': return { ...op, before: op.after, after: op.before };
       case 'doc-style': return { ...op, before: op.after, after: op.before };
       case 'doc-faces': return { ...op, before: op.after, after: op.before };
+      case 'pattern-angle':
+        return { ...op, items: op.items.map((it) => ({ ...it, before: it.after, after: it.before })) };
       case 'layer-flag': return { ...op, before: op.after, after: op.before };
       case 'area-flag': return { ...op, before: op.after, after: op.before };
     }
@@ -1092,6 +1102,15 @@ export class Store {
   setPalette(id: string) {
     if (id === this.doc.palette) return;
     this.commit({ type: 'doc-style', field: 'palette', before: this.doc.palette, after: id });
+  }
+
+  /** rotate the pattern of the given fills by `delta` degrees (undoable) */
+  rotatePatterns(ids: string[], delta: number) {
+    const items = ids
+      .map((id) => this.doc.elements.find((e) => e.id === id))
+      .filter((e): e is Extract<Element, { kind: 'fill' }> => !!e && e.kind === 'fill' && !!e.pattern)
+      .map((e) => ({ id: e.id, before: e.patternAngle ?? 0, after: ((e.patternAngle ?? 0) + delta + 360) % 360 }));
+    if (items.length) this.commit({ type: 'pattern-angle', items });
   }
 
   /** per-zine typeface overrides (undefined = follow the app-wide picks) */

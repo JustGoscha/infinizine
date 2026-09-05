@@ -181,8 +181,7 @@ export function patternPreviewCSS(id: string, color = PATTERN_INK, px = 14): str
 /** Hues for the two pattern palettes (ink, paper, then swatches per family). */
 export const MANGA_HUES = [
   PATTERN_INK, '#FDFCF8',
-  'pattern:tone-3', 'pattern:hatch-2', 'pattern:cross-2', 'pattern:lines-2',
-  'pattern:sand-3', 'pattern:waves-2', 'pattern:scales-2', 'pattern:grid-2',
+  'pattern:tone-3', 'pattern:hatch-2', 'pattern:sand-3', 'pattern:waves-2', 'pattern:scales-2', 'pattern:grid-2',
 ];
 export const DIGITAL_HUES = [
   PATTERN_INK, '#FDFCF8',

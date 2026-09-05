@@ -35,7 +35,7 @@ export class Renderer {
   private rastersPending = false;
   private fillPatterns = new Map<string, CanvasPattern>();
   /** world-anchored fill pattern (screentone / dither) at the current zoom bucket */
-  private fillPattern(id: string, color: string): CanvasPattern | string {
+  private fillPattern(id: string, color: string, angle = 0): CanvasPattern | string {
     const T = patternTileSize(id);
     const dpr = window.devicePixelRatio || 1;
     const px = Math.max(8, Math.min(512, Math.round(T * this.detail() * baseZoom() * dpr)));
@@ -44,10 +44,11 @@ export class Renderer {
     if (!pat) {
       const made = this.ctx.createPattern(patternTile(id, color, px), 'repeat');
       if (!made) return color;
-      made.setTransform(new DOMMatrix().scale(T / px)); // px tile → T world units, anchored to the world origin
       pat = made;
       this.fillPatterns.set(key, pat);
     }
+    // px tile → T world units, rotated, anchored to the world origin (set per use: the object is shared)
+    pat.setTransform(new DOMMatrix().rotate(angle).scale(T / px));
     return pat;
   }
   private liveSmooth = new LiveDenoiser(); // vector live stroke
@@ -265,7 +266,7 @@ export class Renderer {
       ctx.restore();
     } else {
       ctx.globalAlpha = el.opacity * dim;
-      ctx.fillStyle = el.kind === 'fill' && el.pattern ? this.fillPattern(el.pattern, el.color) : el.color;
+      ctx.fillStyle = el.kind === 'fill' && el.pattern ? this.fillPattern(el.pattern, el.color, el.patternAngle ?? 0) : el.color;
       ctx.fill(e.path);
     }
     return true;

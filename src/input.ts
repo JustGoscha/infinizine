@@ -1085,6 +1085,8 @@ export function attachInput(
         const fill: FillShape = {
           id: uid('fl'), kind: 'fill', color: inkOf(state.color), opacity: 1,
           pattern: isPattern(state.color) ? state.color : undefined,
+          // every tone fill gets its own angle so neighbouring fills don't line up like wallpaper
+          patternAngle: isPattern(state.color) ? Math.floor(Math.random() * 36) * 5 : undefined,
           layer: state.paintBehind ? 'back' : 'front',
           frame: state.activeFrameId ?? undefined,
           alayer: state.activeLayerId ?? undefined,

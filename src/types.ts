@@ -75,6 +75,7 @@ export interface FillShape {
   frame?: string;
   alayer?: string;
   pattern?: string; // fill pattern id (see patterns.ts) drawn in `color` — manga tones, dithers
+  patternAngle?: number; // rotation of the pattern in degrees (randomised per fill; rotate from the selection menu)
   points: { x: number; y: number }[]; // closed polygon, world coords
 }
 

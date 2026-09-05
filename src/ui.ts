@@ -2101,6 +2101,7 @@ export function buildUI(
     <button id="sm-cut" title="Cut (⌘X)">${svg('<circle cx="6" cy="6" r="2.5"/><circle cx="6" cy="18" r="2.5"/><path d="M8.1 7.6 L20 19 M8.1 16.4 L20 5 M12 12 l2.5 2.4"/>')}</button>
     <button id="sm-paste" title="Paste (⌘V)">${svg('<rect x="5" y="4" width="14" height="17" rx="1.5"/><path d="M9 4 A3 3 0 0 1 15 4"/><path d="M9 12 h6 M9 16 h6"/>')}</button>
     <button id="sm-back" title="Send to back">${svg('<rect x="8" y="8" width="12" height="12" rx="1"/><path d="M4 12 V5.5 A1.5 1.5 0 0 1 5.5 4 H12"/><path d="M14 11 L14 17 M11.5 14.5 L14 17 L16.5 14.5"/>')}</button>
+    <button id="sm-rot" title="Rotate pattern 15° (shift-click: 45°)">${svg('<path d="M19 12 a7 7 0 1 1 -2.05 -4.95"/><path d="M19 4 v4 h-4"/><circle cx="12" cy="12" r="2"/>')}</button>
     <button id="sm-front" title="Bring to front">${svg('<rect x="4" y="4" width="12" height="12" rx="1"/><path d="M20 12 V18.5 A1.5 1.5 0 0 1 18.5 20 H12"/><path d="M10 13 L10 7 M7.5 9.5 L10 7 L12.5 9.5"/>')}</button>
     <button id="sm-del" title="Delete">${svg('<path d="M4 7 H20 M9 7 V5 A1 1 0 0 1 10 4 H14 A1 1 0 0 1 15 5 V7 M6.5 7 L7.5 20 H16.5 L17.5 7"/>')}</button>
   `;
@@ -2110,6 +2111,10 @@ export function buildUI(
   (selMenu.querySelector('#sm-paste') as HTMLButtonElement).addEventListener('click', actions.paste);
   (selMenu.querySelector('#sm-back') as HTMLButtonElement).addEventListener('click', () => {
     store.reorder([...state.selection], 'back');
+    invalidate();
+  });
+  (selMenu.querySelector('#sm-rot') as HTMLButtonElement).addEventListener('click', (e) => {
+    store.rotatePatterns([...state.selection], (e as MouseEvent).shiftKey ? 45 : 15);
     invalidate();
   });
   (selMenu.querySelector('#sm-front') as HTMLButtonElement).addEventListener('click', () => {
@@ -2140,6 +2145,8 @@ export function buildUI(
     (selMenu.querySelector('#sm-cut') as HTMLButtonElement).hidden = !(hasSel || hasArea);
     (selMenu.querySelector('#sm-del') as HTMLButtonElement).hidden = !hasSel;
     (selMenu.querySelector('#sm-back') as HTMLButtonElement).hidden = !hasSel;
+    const hasPatternFill = hasSel && store.doc.elements.some((el) => el.kind === 'fill' && el.pattern && state.selection.has(el.id));
+    (selMenu.querySelector('#sm-rot') as HTMLButtonElement).hidden = !hasPatternFill;
     (selMenu.querySelector('#sm-front') as HTMLButtonElement).hidden = !hasSel;
     const pasteBtn = selMenu.querySelector('#sm-paste') as HTMLButtonElement;
     pasteBtn.hidden = !hasClip;
