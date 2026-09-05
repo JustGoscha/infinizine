@@ -1703,7 +1703,16 @@ body.presenting .popover { display: none; }
 }
 .pat-btn svg { width: 18px; height: 18px; }
 .pat-btn.on { border-color: var(--ink); }
-#pattern-popover { width: min(420px, calc(100vw - 20px)); max-height: 60vh; overflow-y: auto; display: flex; flex-direction: column; gap: 6px; }
+#pattern-popover { width: min(420px, calc(100vw - 20px)); max-height: 60vh; overflow-y: auto; display: flex; flex-direction: column; gap: 6px; padding-top: 0; }
+/* title, blend and opacity stay put while the swatches scroll underneath */
+.pat-sticky {
+  position: sticky; top: 0; z-index: 2;
+  margin: 0 -14px 4px; padding: 12px 14px 8px;
+  background: var(--card);
+  border-bottom: 1px solid var(--line);
+  display: flex; flex-direction: column; gap: 8px;
+}
+.pat-row { margin-top: 8px; }
 #pattern-popover.hidden { display: none; }
 .pat-head { display: flex; justify-content: space-between; align-items: center; font-weight: 700; font-size: 13px; }
 .pat-none {

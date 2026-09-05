@@ -109,7 +109,7 @@ export class InputState {
     return t && REMEMBER_TOOLS.has(t) ? (t as Tool) : 'pen'; // drawing tools only; never boot into eraser/anim
   })();
   /** per-tool colour + size memory: switching tools brings back what you last used with each */
-  private toolMem: Partial<Record<Tool, { color: string; baseWidth: number }>> = (() => {
+  private toolMem: Partial<Record<Tool, { color: string; baseWidth: number; behind?: boolean }>> = (() => {
     try { return JSON.parse(readPref(TOOL_MEM_KEY) ?? '{}'); } catch { return {}; }
   })();
   get tool(): Tool { return this._tool; }
@@ -119,12 +119,13 @@ export class InputState {
     this._tool = t;
     const m = this.toolMem[t];
     if (m) { this.color = m.color; this.baseWidth = m.baseWidth; }
-    if (REMEMBER_TOOLS.has(t)) writePref('infinizine-last-tool', t);
+    // paint-behind is remembered per tool too; the marker highlights behind ink by default
+    if (REMEMBER_TOOLS.has(t)) { this.paintBehind = m?.behind ?? t === 'marker'; writePref('infinizine-last-tool', t); }
   }
   /** store the current colour/size under the current tool (called on switch and on edits) */
   rememberTool() {
     if (!REMEMBER_TOOLS.has(this._tool)) return;
-    this.toolMem[this._tool] = { color: this.color, baseWidth: this.baseWidth };
+    this.toolMem[this._tool] = { color: this.color, baseWidth: this.baseWidth, behind: this.paintBehind };
     writePref(TOOL_MEM_KEY, JSON.stringify(this.toolMem));
   }
   color = '#1a1a1a';
@@ -134,7 +135,11 @@ export class InputState {
     return p && p.startsWith('pattern:') ? p : null;
   })();
   /** ink coverage for pattern fills (CMYK-style tint): 1 = solid ink, lower lets paper through so overlaps mix */
-  inkDensity = (() => { const v = Number(readPref('infinizine-ink-density')); return v >= 0.3 && v <= 1 ? v : 0.8; })();
+  inkDensity = (() => { const v = Number(readPref('infinizine-fill-opacity')); return v >= 0.3 && v <= 1 ? v : 1; })();
+  /** every new tone fill gets its own random angle (off: all fills share angle 0) */
+  toneRandom = readPref('infinizine-tone-random') !== '0';
+  /** two-finger tap = undo, three = redo (off: fingers only pan/zoom) */
+  fingerUndo = readPref('infinizine-finger-undo') !== '0';
   /** how pattern fills composite with what's below */
   fillBlend: import('./types').FillBlend = (() => {
     const v = readPref('infinizine-fill-blend');
@@ -146,7 +151,7 @@ export class InputState {
   effectiveWidth(zoom: number): number {
     return this.adaptiveSize ? this.baseWidth * (baseZoom() / zoom) : this.baseWidth;
   }
-  paintBehind = false; // 'back' layer toggle for new strokes/fills
+  paintBehind: boolean = this.toolMem[this._tool]?.behind ?? this._tool === 'marker'; // 'back' layer toggle for new strokes/fills
   font = 'franklin'; // typeface for new textboxes
   textSize = 8; // world units; Title 18 / Heading 12 / Body 8 / Sub 6
   live: Stroke | null = null;
@@ -201,7 +206,7 @@ export class InputState {
   ) => void = () => {};
 }
 
-interface TouchInfo { x: number; y: number }
+interface TouchInfo { x: number; y: number; t: number; big: boolean }
 
 // A modal drawing surface (pressure playground) owns the keyboard/wheel while
 // it's open; the main canvas' global handlers stand down.
@@ -227,6 +232,13 @@ export function attachInput(
   const SCRUB_STEP_PX = 36;
   const TAP_MAX_MS = 320;
   const TAP_MAX_PX = 14;
+  // palm rejection for the finger gestures: no gesture while the pen is down or
+  // just lifted, when a contact is palm-sized, or when the two fingers didn't
+  // arrive together (a resting palm + a finger is not a two-finger tap)
+  const PEN_QUIET_MS = 700;
+  const TOGETHER_MS = 150;
+  const PALM_PX = 30;
+  let lastPenAt = -1e9;
   function armScrub() {
     window.clearTimeout(scrubTimer);
     scrubTimer = window.setTimeout(() => {
@@ -1100,7 +1112,7 @@ export function attachInput(
           ink: state.fillPattern ? state.inkDensity : undefined,
           blend: state.fillPattern && state.fillBlend !== 'multiply' ? state.fillBlend : undefined,
           // every tone fill gets its own angle so neighbouring fills don't line up like wallpaper
-          patternAngle: state.fillPattern && !isPixelPattern(state.fillPattern) ? Math.floor(Math.random() * 36) * 5 : undefined,
+          patternAngle: state.fillPattern && !isPixelPattern(state.fillPattern) && state.toneRandom ? Math.floor(Math.random() * 36) * 5 : undefined,
           layer: state.paintBehind ? 'back' : 'front',
           frame: state.activeFrameId ?? undefined,
           alayer: state.activeLayerId ?? undefined,
@@ -1375,6 +1387,7 @@ export function attachInput(
   canvas.addEventListener('pointerdown', (e) => {
     e.preventDefault();
     canvas.setPointerCapture(e.pointerId);
+    if (e.pointerType === 'pen') lastPenAt = performance.now();
     if (e.pointerType === 'pen' && !state.penDetected) {
       state.penDetected = true;
       state.fingerMode = 'pan';
@@ -1384,7 +1397,8 @@ export function attachInput(
       state.onToolChange();
     }
     if (e.pointerType === 'touch') {
-      touches.set(e.pointerId, { x: e.clientX, y: e.clientY });
+      const now = performance.now();
+      touches.set(e.pointerId, { x: e.clientX, y: e.clientY, t: now, big: e.width > PALM_PX || e.height > PALM_PX });
       if (touches.size === 2) {
         // Second finger: cancel any in-progress touch action, start pinch
         if (state.live && drawingPointer !== null) state.live = null;
@@ -1394,9 +1408,10 @@ export function attachInput(
         const [a, b] = [...touches.values()];
         pinchDist = Math.hypot(a.x - b.x, a.y - b.y);
         pinchMid = { x: (a.x + b.x) / 2, y: (a.y + b.y) / 2 };
-        gesture = { fingers: 2, t: performance.now(), moved: 0, mid: { ...pinchMid } };
+        const palm = a.big || b.big || now - a.t > TOGETHER_MS || now - lastPenAt < PEN_QUIET_MS;
+        gesture = state.fingerUndo && !palm ? { fingers: 2, t: now, moved: 0, mid: { ...pinchMid } } : null;
         scrub = null;
-        armScrub();
+        if (gesture) armScrub();
         invalidate();
         return;
       }
@@ -1571,8 +1586,10 @@ export function attachInput(
     if (e.pointerType === 'mouse' && e.buttons !== 0 && (dragSelection || dragPage)) {
       canvas.style.cursor = 'grabbing';
     }
+    if (e.pointerType === 'pen') lastPenAt = performance.now();
     if (e.pointerType === 'touch' && touches.has(e.pointerId)) {
-      touches.set(e.pointerId, { x: e.clientX, y: e.clientY });
+      const ti = touches.get(e.pointerId)!;
+      ti.x = e.clientX; ti.y = e.clientY;
       if (touches.size === 2) {
         const [a, b] = [...touches.values()];
         const dist = Math.hypot(a.x - b.x, a.y - b.y);
@@ -1613,6 +1630,7 @@ export function attachInput(
   });
 
   const finish = (e: PointerEvent) => {
+    if (e.pointerType === 'pen') lastPenAt = performance.now();
     touches.delete(e.pointerId);
     if (touches.size < 2) { pinchDist = 0; pinchMid = null; }
     if (e.pointerType === 'touch' && gesture && touches.size === 0) {
@@ -1621,7 +1639,8 @@ export function attachInput(
       gesture = null;
       const wasScrub = !!scrub;
       scrub = null;
-      if (!wasScrub && performance.now() - g.t < TAP_MAX_MS && g.moved < TAP_MAX_PX && !state.presenting) {
+      const penMeanwhile = lastPenAt > g.t; // the pen touched down during the "tap": it was a palm
+      if (!wasScrub && !penMeanwhile && performance.now() - g.t < TAP_MAX_MS && g.moved < TAP_MAX_PX && !state.presenting) {
         if (g.fingers === 2) { store.undo(); toast('Undo'); }
         else if (g.fingers >= 3) { store.redo(); toast('Redo'); }
         invalidate();

@@ -41,8 +41,8 @@ export const PALETTES: PalettePreset[] = [
     name: 'NES',
     hues: ['#FCFCFC', '#000000', '#E40058', '#F8B800', '#00A800', '#0078F8'],
     ramps: {
-      '#FCFCFC': ['#FCFCFC', '#F8F8F8', '#BCBCBC', '#7C7C7C', '#787878', '#000000'],
-      '#000000': ['#FCFCFC', '#F8F8F8', '#BCBCBC', '#7C7C7C', '#787878', '#000000'],
+      '#FCFCFC': ['#FCFCFC', '#F8F8F8', '#BCBCBC', '#7C7C7C'],
+      '#000000': ['#787878', '#000000'],
       // reds, pinks, oranges and purples share the warm swatch
       '#E40058': ['#F8A4C0', '#F878F8', '#F85898', '#F87858', '#F83800', '#E40058', '#D800CC', '#A81000', '#A80020', '#940084', '#881400'],
       '#F8B800': ['#FCE0A8', '#F8D878', '#F0D0B0', '#FCA044', '#F8B800', '#E45C10', '#AC7C00', '#503000'],
@@ -244,11 +244,13 @@ export const PALETTE_GROUPS: { label: string; ids: string[] }[] = [
   { label: 'Design', ids: ['bauhaus'] },
 ];
 
-/** light → dark by perceived luminance (for exact hardware ramps) */
+/** light → dark by CIE luminance (linear light, so saturated hues land where
+ * the eye puts them — used for exact hardware ramps) */
 export function sortByLightness(colors: string[]): string[] {
+  const lin = (c: number) => { c /= 255; return c <= 0.04045 ? c / 12.92 : ((c + 0.055) / 1.055) ** 2.4; };
   const lum = (h: string) => {
     const n = parseInt(h.slice(1), 16);
-    return ((n >> 16) & 255) * 0.299 + ((n >> 8) & 255) * 0.587 + (n & 255) * 0.114;
+    return 0.2126 * lin((n >> 16) & 255) + 0.7152 * lin((n >> 8) & 255) + 0.0722 * lin(n & 255);
   };
   return [...colors].sort((a, b) => lum(b) - lum(a));
 }

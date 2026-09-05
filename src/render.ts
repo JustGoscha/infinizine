@@ -37,7 +37,7 @@ export class Renderer {
   private fillPatterns = new Map<string, CanvasPattern>();
   /** world-anchored fill pattern (screentone / dither) at the current zoom bucket */
   private fillPattern(id: string, color: string, angle = 0): CanvasPattern | string {
-    const T = patternTileSize(id) * this.toneScale();
+    const T = patternTileSize(id) * (isPixelPattern(id) ? 1 : this.toneScale()); // pixel grids never step with zoom
     const dpr = window.devicePixelRatio || 1;
     const px = Math.max(8, Math.min(1024, Math.round(T * this.detail() * baseZoom() * dpr)));
     const key = `${id}|${color}|${px}`;
@@ -367,8 +367,9 @@ export class Renderer {
   }
   /** Tone/dither scale for the current zoom: patterns are world-anchored, so
    * zoomed far out the dots would shrink to dust and zoomed in they'd be
-   * boulders — every ~4× of zoom the grid steps by 4× instead, staying within
-   * a legible band on screen. 1 at 100% (and for exports). */
+   * boulders — every ~4× of zoom the tone steps by 4× instead, staying within
+   * a legible band on screen. 1 at 100% (and for exports). Manga tones only:
+   * pixel dithers keep their 100% grid at every zoom. */
   private toneOverride: number | null = null;
   toneScale(): number {
     if (this.toneOverride !== null) return this.toneOverride;
@@ -390,9 +391,9 @@ export class Renderer {
       } else if (el.kind === 'fill' && el.pattern && patternCellSize(el.pattern)) {
         // pixel patterns: solid geometry of the "on" cells inside the shape — whole cells,
         // no repeating tile, so no seams between pixels (zoom-independent)
-        const cells = cellPath(el.points, el.pattern, tone);
+        const cells = cellPath(el.points, el.pattern); // the pixel grid is fixed: what you see at 100% is what it is
         path = cells ?? polygonPath(el.points);
-        e = { path, bbox: elementBBox(el), detail, zoomFree: true, solid: !!cells, tone };
+        e = { path, bbox: elementBBox(el), detail, zoomFree: true, solid: !!cells };
         this.cache.set(el.id, e);
         return e;
       } else if (el.kind === 'fill' && el.pattern && (path = motifPath(el.points, el.pattern, el.patternAngle ?? 0, tone)!)) {
@@ -402,7 +403,7 @@ export class Renderer {
         return e;
       } else if (el.kind === 'fill') {
         path = polygonPath(el.points);
-        e = { path, bbox: elementBBox(el), detail, zoomFree: true, tone: el.pattern ? tone : undefined };
+        e = { path, bbox: elementBBox(el), detail, zoomFree: true, tone: el.pattern && !isPixelPattern(el.pattern) ? tone : undefined };
         this.cache.set(el.id, e);
         return e;
       } else {

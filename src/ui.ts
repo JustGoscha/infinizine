@@ -190,6 +190,7 @@ export function buildUI(
         <button class="chip" id="zoom-lock" title="Zoom lock"></button>
         <button class="chip chip-text" id="zoom-100" title="Back to 100% (⌘0)">1:1</button>
         <button class="chip" id="playground" title="Pressure playground">${svg('<path d="M21.42 10.13 L21.42 13.87 L19.26 13.44 L18.15 16.11 L19.98 17.33 L17.33 19.98 L16.11 18.15 L13.44 19.26 L13.87 21.42 L10.13 21.42 L10.56 19.26 L7.89 18.15 L6.67 19.98 L4.02 17.33 L5.85 16.11 L4.74 13.44 L2.58 13.87 L2.58 10.13 L4.74 10.56 L5.85 7.89 L4.02 6.67 L6.67 4.02 L7.89 5.85 L10.56 4.74 L10.13 2.58 L13.87 2.58 L13.44 4.74 L16.11 5.85 L17.33 4.02 L19.98 6.67 L18.15 7.89 L19.26 10.56 Z"/><circle cx="12" cy="12" r="3.2"/>')}</button>
+        <button class="chip" id="fullscreen" title="Full screen (hide the browser)">${svg('<path d="M4 9V5h4 M20 9V5h-4 M4 15v4h4 M20 15v4h-4"/>')}</button>
         <button class="chip" id="present" title="Present">${svg('<path d="M8 5.5 L18 12 L8 18.5 Z"/>')}</button>
       </div>
     </header>
@@ -227,6 +228,8 @@ export function buildUI(
         <div class="seg" id="set-adaptive"><button data-v="0">Physical</button><button data-v="1">Adaptive</button></div></div>
       <div class="set-row"><span>Zoom</span>
         <div class="seg" id="set-lock"><button data-v="1">Locked</button><button data-v="0">Free</button></div></div>
+      <div class="set-row"><span>Two-finger tap</span>
+        <div class="seg" id="set-fundo"><button data-v="1">Undo · redo</button><button data-v="0">Off</button></div></div>
       <div class="set-row set-sub"><span class="set-title">Typefaces</span>
         <div class="seg" id="set-faces-scope"><button data-v="zine">This zine</button><button data-v="app">App-wide</button></div></div>
       <div class="set-fonts" id="set-fonts"></div>
@@ -434,7 +437,8 @@ export function buildUI(
       dot.addEventListener('pointerdown', (e) => { if (state.onEditColor) e.preventDefault(); }); // keep the text editor focused
       let lp = 0;
       let longPressed = false;
-      const hueShades = hueList.map((c) => c.toLowerCase());
+      const tops = preset.hues.slice(0, 6).map((h) => h.toLowerCase());
+      const hueShades = hueList.map((c) => c.toLowerCase()).filter((c) => c === hue.toLowerCase() || !tops.includes(c));
       dot.addEventListener('click', () => {
         if (longPressed) { longPressed = false; return; }
         // tapping the hue that's already active opens/closes its shades (touch has no hover)
@@ -566,8 +570,11 @@ export function buildUI(
   };
   function buildPatternPopover() {
     patternPop.innerHTML = `
-      <div class="pat-head"><span>Fill pattern</span>
-        <div class="seg pat-blend" id="pat-blend">${FILL_BLENDS.map((b) => `<button data-v="${b.id}" class="${state.fillBlend === b.id ? 'active' : ''}" title="${b.hint}">${b.label}</button>`).join('')}</div></div>
+      <div class="pat-sticky">
+        <div class="pat-head"><span>Fill pattern</span>
+          <div class="seg pat-blend" id="pat-blend">${FILL_BLENDS.map((b) => `<button data-v="${b.id}" class="${state.fillBlend === b.id ? 'active' : ''}" title="${b.hint}">${b.label}</button>`).join('')}</div></div>
+        <label class="pg-row pat-ink"><span>opacity</span><input type="range" id="pat-ink" min="0.3" max="1" step="0.05" value="${state.inkDensity}"><b>${Math.round(state.inkDensity * 100)}%</b></label>
+      </div>
       <div class="pat-fam"><span class="pat-fam-name">Solid</span>
         <div class="pat-swatches"><button class="pat-sw pat-solid${state.fillPattern ? '' : ' active'}" id="pat-clear" title="Solid fill" style="background:${state.color}"></button></div></div>
       ${PATTERN_CATEGORIES.map((cat) => `
@@ -579,8 +586,16 @@ export function buildUI(
               return `<button class="pat-sw${state.fillPattern === id ? ' active' : ''}" data-id="${id}" title="${f.label} ${k}" style="background:${patternPreviewCSS(id, state.color, 3)}"></button>`;
             }).join('')}</div>
           </div>`).join('')}`).join('')}
-      <label class="pg-row pat-ink"><span>ink density</span><input type="range" id="pat-ink" min="0.3" max="1" step="0.05" value="${state.inkDensity}"><b>${Math.round(state.inkDensity * 100)}%</b></label>
-      <div class="set-note">Patterns paint with the fill tool, in the current colour, and overprint like process ink: below 100% the paper shows through, so overlapping tones mix and darken (red over yellow → orange-red). Dot tones rotate randomly per fill; dithers stay pixel-aligned.</div>`;
+      <div class="set-row pat-row"><span>Tone angle</span>
+        <div class="seg" id="pat-rand"><button data-v="1" class="${state.toneRandom ? 'active' : ''}">Random per fill</button><button data-v="0" class="${state.toneRandom ? '' : 'active'}">Fixed</button></div></div>
+      <div class="set-note">Patterns paint with the fill tool, in the current colour. With Subtract they overprint like process ink: below 100% opacity the paper shows through, so overlapping tones mix and darken (red over yellow → orange-red). Manga tones can be rotated on a selected fill; dithers stay on one fixed pixel grid at every zoom.</div>`;
+    patternPop.querySelector('#pat-rand')!.addEventListener('click', (e) => {
+      const v = (e.target as HTMLElement).closest('button')?.dataset.v;
+      if (!v) return;
+      state.toneRandom = v === '1';
+      writePref('infinizine-tone-random', v);
+      patternPop.querySelectorAll<HTMLElement>('#pat-rand button').forEach((b) => b.classList.toggle('active', b.dataset.v === v));
+    });
     patternPop.querySelector('#pat-blend')!.addEventListener('click', (e) => {
       const v = (e.target as HTMLElement).closest('button')?.dataset.v as import('./types').FillBlend | undefined;
       if (!v) return;
@@ -595,7 +610,7 @@ export function buildUI(
     inkSlider.addEventListener('input', () => {
       state.inkDensity = Number(inkSlider.value);
       (inkSlider.nextElementSibling as HTMLElement).textContent = `${Math.round(state.inkDensity * 100)}%`;
-      writePref('infinizine-ink-density', String(state.inkDensity));
+      writePref('infinizine-fill-opacity', String(state.inkDensity));
       const ids = store.doc.elements.filter((el) => el.kind === 'fill' && el.pattern && state.selection.has(el.id)).map((el) => el.id);
       if (ids.length) store.setInk(ids, state.inkDensity);
       invalidate();
@@ -705,6 +720,13 @@ export function buildUI(
     pagePop.classList.remove('hidden');
   }
 
+  // a fresh page comes into view with its top edge a little below the top bar
+  const showNewPage = (page: import('./types').Page) => {
+    const vh = (document.getElementById('canvas') as HTMLCanvasElement).clientHeight || window.innerHeight;
+    camera.x = page.x + page.w / 2;
+    camera.y = page.y - 76 / camera.zoom + vh / camera.zoom / 2;
+    invalidate();
+  };
   const createFirstPage = (f: Fmt) => {
     const page = store.addPage({ w: f.w, h: f.h }, { x: camera.x, y: camera.y }, f.label);
     camera.x = page.x + page.w / 2;
@@ -717,10 +739,7 @@ export function buildUI(
     if (pages.length) {
       // All pages share one size: new pages copy it, no format picker
       const last = pages.reduce((a, b) => (b.order > a.order ? b : a));
-      const page = store.addPageAfter(last);
-      camera.x = page.x + page.w / 2;
-      camera.y = page.y + page.h / 2;
-      invalidate();
+      showNewPage(store.addPageAfter(last));
       return;
     }
     openFormatPanel(createFirstPage);
@@ -913,6 +932,7 @@ export function buildUI(
       if (done) return;
       done = true;
       state.onEditColor = null;
+      document.removeEventListener('pointerdown', outside, true);
       document.removeEventListener('selectionchange', syncMarks);
       weightPop.remove();
       ta.remove();
@@ -949,6 +969,14 @@ export function buildUI(
       invalidate();
     };
     ta.addEventListener('blur', commit);
+    // the canvas swallows pointer events (no blur on touch): a tap anywhere that
+    // isn't the editor or its controls finishes editing
+    const outside = (e: PointerEvent) => {
+      const t = e.target as HTMLElement | null;
+      if (!t || t === ta || ta.contains(t) || t.closest?.('.font-bar, .weight-pop, .toolbar, .shade-flyout, .popover')) return;
+      commit();
+    };
+    document.addEventListener('pointerdown', outside, true);
     ta.addEventListener('keydown', (e) => {
       if (e.key === 'Escape') { e.preventDefault(); commit(); return; }
       // classic shortcuts, applied as real styling (serialized back to markdown on commit)
@@ -982,7 +1010,7 @@ export function buildUI(
     hidePageMenu();
   });
   (root.querySelector('#pm-add') as HTMLButtonElement).addEventListener('click', () => {
-    if (menuPage) store.addPageAfter(menuPage);
+    if (menuPage) showNewPage(store.addPageAfter(menuPage));
     hidePageMenu();
     invalidate();
   });
@@ -2038,6 +2066,7 @@ export function buildUI(
   const layerToggle = root.querySelector('#layer-toggle') as HTMLButtonElement;
   layerToggle.addEventListener('click', () => {
     state.paintBehind = !state.paintBehind;
+    state.rememberTool(); // per tool: the marker can stay behind while the pen paints in front
     refresh();
   });
 
@@ -2132,13 +2161,17 @@ export function buildUI(
     sizeDot.style.height = `${d}px`;
     (root.querySelector('#size-fader') as HTMLInputElement).value = String(state.baseWidth);
     const drama = getPalette(store.doc.palette).drama;
+    const pr = getPalette(store.doc.palette);
+    const tops = pr.hues.slice(0, 6).map((h) => h.toLowerCase());
+    const cur = state.color.toLowerCase();
     palRow.querySelectorAll<HTMLElement>('.pal-main').forEach((d) => {
       const hue = d.dataset.hue!;
-      const pr = getPalette(store.doc.palette);
-      const sh = pr.strict ? (pr.ramps?.[hue] ?? []) : shades(hue, drama);
-      d.classList.toggle('active', hue === state.color || sh.includes(state.color));
-      if (sh.includes(state.color) && hue !== state.color) d.style.background = isPattern(state.color) ? patternPreviewCSS(state.color, undefined, 4.5) : state.color;
-      else d.style.background = hue;
+      const sh = (pr.strict ? (pr.ramps?.[hue] ?? []) : shades(hue, drama)).map((c) => c.toLowerCase());
+      // a swatch lights up for its own colour or one of its shades — but a colour that is
+      // itself a top-level swatch belongs to that swatch alone (hardware ramps share greys)
+      const viaShade = hue.toLowerCase() !== cur && sh.includes(cur) && !tops.includes(cur);
+      d.classList.toggle('active', hue.toLowerCase() === cur || viaShade);
+      d.style.background = viaShade ? (isPattern(state.color) ? patternPreviewCSS(state.color, undefined, 4.5) : state.color) : hue;
     });
     // Layer symbol: current-color stroke over / behind a white square
     const sq = '<rect x="8" y="8" width="10" height="10" fill="#fdfcf8" stroke="rgba(90,75,50,0.5)" stroke-width="1"/>';
@@ -2241,9 +2274,12 @@ export function buildUI(
     (selMenu.querySelector('#sm-rot') as HTMLButtonElement).hidden = !hasPatternFill;
     (selMenu.querySelector('#sm-front') as HTMLButtonElement).hidden = !hasSel;
     const pasteBtn = selMenu.querySelector('#sm-paste') as HTMLButtonElement;
-    pasteBtn.hidden = !hasClip;
+    // touch devices can't peek at the system clipboard (a screenshot, say): with a
+    // selection tool active the paste button is always offered; tapping it asks iOS
+    const offerPaste = hasClip || (navigator.maxTouchPoints > 0 && (state.tool === 'cursor' || state.tool === 'lasso-select'));
+    pasteBtn.hidden = !offerPaste;
     pasteBtn.classList.toggle('badged', hasClip);
-    selMenu.classList.toggle('hidden', !(hasSel || hasArea || hasClip));
+    selMenu.classList.toggle('hidden', !(hasSel || hasArea || offerPaste));
   }, 300);
 
   // ---------- pressure playground: a modal with its own scratch canvas ----------
@@ -2778,7 +2814,29 @@ export function buildUI(
     settingsPop.querySelectorAll<HTMLElement>('#set-hand button').forEach((b) => b.classList.toggle('active', b.dataset.v === (left ? 'left' : 'right')));
     settingsPop.querySelectorAll<HTMLElement>('#set-adaptive button').forEach((b) => b.classList.toggle('active', b.dataset.v === (state.adaptiveSize ? '1' : '0')));
     settingsPop.querySelectorAll<HTMLElement>('#set-lock button').forEach((b) => b.classList.toggle('active', b.dataset.v === (state.zoomLocked ? '1' : '0')));
+    settingsPop.querySelectorAll<HTMLElement>('#set-fundo button').forEach((b) => b.classList.toggle('active', b.dataset.v === (state.fingerUndo ? '1' : '0')));
   };
+  settingsPop.querySelector('#set-fundo')!.addEventListener('click', (e) => {
+    const v = (e.target as HTMLElement).closest('button')?.dataset.v;
+    if (!v) return;
+    state.fingerUndo = v === '1';
+    writePref('infinizine-finger-undo', v);
+    syncSettings();
+  });
+  // full screen: the browser chrome goes away (not offered where the API is missing, e.g. iPhone or an installed web app)
+  const fsBtn = root.querySelector('#fullscreen') as HTMLButtonElement;
+  type FsDoc = Document & { webkitFullscreenElement?: Element | null; webkitExitFullscreen?: () => void };
+  type FsEl = HTMLElement & { webkitRequestFullscreen?: () => void };
+  const fsDoc = document as FsDoc, fsRoot = document.documentElement as FsEl;
+  const standalone = matchMedia('(display-mode: standalone)').matches || (navigator as Navigator & { standalone?: boolean }).standalone === true;
+  if ((!fsRoot.requestFullscreen && !fsRoot.webkitRequestFullscreen) || standalone) fsBtn.hidden = true;
+  const syncFs = () => fsBtn.classList.toggle('on', !!(document.fullscreenElement || fsDoc.webkitFullscreenElement));
+  fsBtn.addEventListener('click', () => {
+    if (document.fullscreenElement || fsDoc.webkitFullscreenElement) (document.exitFullscreen?.bind(document) ?? fsDoc.webkitExitFullscreen?.bind(document))?.();
+    else (fsRoot.requestFullscreen?.bind(fsRoot) ?? fsRoot.webkitRequestFullscreen?.bind(fsRoot))?.();
+  });
+  document.addEventListener('fullscreenchange', syncFs);
+  document.addEventListener('webkitfullscreenchange', syncFs);
   settingsPop.querySelector('#set-hand')!.addEventListener('click', (e) => {
     const v = (e.target as HTMLElement).closest('button')?.dataset.v;
     if (!v) return;
