@@ -6,7 +6,7 @@ import { Camera, baseZoom } from './camera';
 import { Store } from './store';
 import { AnimArea, Stroke, FillShape, Element, ImageBox, Page, TextBox, uid } from './types';
 import { hitElement, elementsInLasso, denoise, denoiseClosed, pressure } from './geometry';
-import { isPixelPattern } from './patterns';
+import { isPixelPattern, migratePatternId } from './patterns';
 import { layoutText, layoutHeight } from './text';
 
 const CLIP_KEY = 'infinizine-clipboard';
@@ -131,7 +131,13 @@ export class InputState {
   color = '#1a1a1a';
   /** fill tool: active pattern (screentone, dither, …) drawn in `color`; null = solid */
   fillPattern: string | null = (() => {
-    const p = readPref('infinizine-fill-pattern');
+    let p = readPref('infinizine-fill-pattern3');
+    if (p === null) {
+      // pre-format-3 preference: five levels per family → the finer ramp
+      const old = readPref('infinizine-fill-pattern');
+      p = old ? migratePatternId(old) : '';
+      writePref('infinizine-fill-pattern3', p);
+    }
     return p && p.startsWith('pattern:') ? p : null;
   })();
   /** ink coverage for pattern fills (CMYK-style tint): 1 = solid ink, lower lets paper through so overlaps mix */

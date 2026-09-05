@@ -1703,7 +1703,7 @@ body.presenting .popover { display: none; }
 }
 .pat-btn svg { width: 18px; height: 18px; }
 .pat-btn.on { border-color: var(--ink); }
-#pattern-popover { width: min(420px, calc(100vw - 20px)); max-height: 60vh; overflow-y: auto; display: flex; flex-direction: column; gap: 6px; padding-top: 0; }
+#pattern-popover { width: min(460px, calc(100vw - 20px)); max-height: 60vh; overflow-y: auto; display: flex; flex-direction: column; gap: 6px; padding-top: 0; }
 /* title, blend and opacity stay put while the swatches scroll underneath */
 .pat-sticky {
   position: sticky; top: 0; z-index: 2;
@@ -1723,11 +1723,11 @@ body.presenting .popover { display: none; }
 .pat-none svg { width: 14px; height: 14px; }
 .pat-none.active { background: var(--ink); color: var(--card); border-color: var(--ink); }
 .pat-cat { font-size: 11px; font-weight: 700; letter-spacing: 0.06em; text-transform: uppercase; color: var(--ink-soft); margin-top: 6px; }
-.pat-fam { display: grid; grid-template-columns: 90px 1fr; align-items: center; gap: 8px; }
+.pat-fam { display: grid; grid-template-columns: 84px 1fr; align-items: center; gap: 6px; }
 .pat-fam-name { font-size: 12px; }
-.pat-swatches { display: flex; gap: 6px; }
+.pat-swatches { display: flex; gap: 4px; flex-wrap: wrap; }
 .pat-sw {
-  width: 34px; height: 34px; border-radius: 3px;
+  width: 29px; height: 29px; border-radius: 3px;
   border: 1.5px solid var(--line); cursor: pointer; padding: 0;
 }
 .pat-sw.active { border: 2.5px solid var(--ink); }
@@ -1775,3 +1775,9 @@ body.presenting .popover { display: none; }
 body.presenting .pages-panel { z-index: 60; }
 #export-popover .set-row[hidden] { display: none; }
 #ex-format button { padding: 4px 8px; }
+
+/* pattern swatch flyout: the family's levels, square like the swatch */
+.pat-fly { gap: 5px; }
+.pat-shade { border-radius: 3px; }
+.pat-shade.active { outline: 2px solid var(--ink); outline-offset: 1px; }
+.pat-more { background: transparent; font-weight: 700; letter-spacing: 0.05em; color: var(--ink); }

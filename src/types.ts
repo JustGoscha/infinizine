@@ -149,9 +149,11 @@ export interface Doc {
  *  1 — original (strokes/fills/text/images, pages, areas; many optional fields
  *      were added compatibly over time: layers, live ink, tilt/azimuth, text.auto).
  *  2 — explicit format/app stamps; inline text spans {role|…}/{w600|…}/__u__.
+ *  3 — pattern families have 6–9 levels instead of 5; fill.pattern ids are remapped
+ *      onto the level with the same look (migratePatternId).
  * Loading an OLDER version runs the migration chain in store.ts; a NEWER one is
  * refused with a message rather than silently mangled. */
-export const FORMAT_VERSION = 2;
+export const FORMAT_VERSION = 3;
 
 // World units are ~2 per mm (A4 → 420×594)
 export const UNITS_PER_MM = 2;

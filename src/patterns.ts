@@ -17,17 +17,58 @@ const FAMILIES: Family[] = [
   'pixfill', 'bayer', 'cluster', 'pixdots', 'checker', 'scan', 'vscan', 'stairs', 'xhatch', 'zigzag', 'brick', 'pixnoise',
 ];
 const PIXEL: Set<string> = new Set(['pixfill', 'bayer', 'cluster', 'pixdots', 'checker', 'scan', 'vscan', 'stairs', 'xhatch', 'zigzag', 'brick', 'pixnoise']);
-const parse = (id: string): { fam: Family; k: number } | null => {
-  const m = /^pattern:([a-z]+)-([1-5])$/.exec(id);
-  if (!m || !FAMILIES.includes(m[1] as Family)) return null;
-  return { fam: m[1] as Family, k: Number(m[2]) };
+// Every family is a ramp: level k uses LEVELS[fam][k-1]. Within a family the
+// levels nest (a lighter level's ink is a subset of a darker one's), so stacking
+// two shades of one pattern never invents new ink.
+const LEVELS: Record<Family, number[]> = {
+  tone: [0.04, 0.08, 0.13, 0.18, 0.24, 0.3, 0.37, 0.45, 0.62], // dot coverage
+  hatch: [0.15, 0.22, 0.29, 0.36, 0.45, 0.55, 0.67, 0.8, 1.15], // line width (world units)
+  cross: [0.15, 0.22, 0.29, 0.36, 0.45, 0.55, 0.67, 0.8, 1.15],
+  lines: [0.1, 0.15, 0.2, 0.25, 0.32, 0.4, 0.5, 0.6, 0.9],
+  grid: [0.08, 0.12, 0.16, 0.2, 0.25, 0.3, 0.37, 0.45, 0.65],
+  sand: [6, 10, 15, 22, 30, 40, 52, 65, 100], // grains per 16 units²
+  waves: [0.1, 0.14, 0.18, 0.22, 0.27, 0.32, 0.38, 0.45, 0.62],
+  scales: [0.08, 0.12, 0.16, 0.2, 0.25, 0.3, 0.36, 0.42, 0.58],
+  pixfill: [1],
+  bayer: [1, 2, 4, 5, 8, 11, 14, 15], // of 16 thresholds
+  cluster: [1, 2, 4, 5, 8, 11, 14, 15],
+  pixdots: [2, 4, 8, 12, 16, 24, 32, 48], // of 64
+  checker: [1, 2, 3, 4, 6, 8], // square size in cells (sizes are different patterns, not a ramp)
+  scan: [1, 2, 3, 4, 5, 6, 7], // of 8 rows
+  vscan: [1, 2, 3, 4, 5, 6, 7],
+  stairs: [1, 2, 3, 4, 5, 6, 7],
+  xhatch: [1, 2, 3, 4, 5, 6, 7],
+  zigzag: [1, 2, 3, 4, 5, 6, 7],
+  brick: [0, 1, 2, 3, 4, 6, 7],
+  pixnoise: [0.06, 0.1, 0.16, 0.22, 0.3, 0.38, 0.47, 0.55, 0.72],
 };
-/** how many levels a family has (most: 5 densities; the pixel fill is just one) */
-export const patternLevels = (fam: string) => (fam === 'pixfill' ? 1 : 5);
+const parse = (id: string): { fam: Family; k: number } | null => {
+  const m = /^pattern:([a-z]+)-(\d+)$/.exec(id);
+  if (!m || !FAMILIES.includes(m[1] as Family)) return null;
+  const k = Number(m[2]);
+  if (k < 1 || k > LEVELS[m[1] as Family].length) return null;
+  return { fam: m[1] as Family, k };
+};
+const lv = (fam: Family, k: number) => LEVELS[fam][k - 1];
+/** how many levels a family has */
+export const patternLevels = (fam: string) => LEVELS[fam as Family]?.length ?? 0;
 /** the densities of a pattern's family, lightest → heaviest (its "shades") */
 export function patternVariants(id: string): string[] {
   const p = parse(id);
   return p ? Array.from({ length: patternLevels(p.fam) }, (_, i) => `pattern:${p.fam}-${i + 1}`) : [];
+}
+/** Zine format 2 had five levels per family; map a v2 id onto the level with the same look. */
+export function migratePatternId(id: string): string {
+  const m = /^pattern:([a-z]+)-([1-5])$/.exec(id);
+  if (!m || !FAMILIES.includes(m[1] as Family)) return id;
+  const fam = m[1] as Family;
+  const map: Partial<Record<Family, number[]>> = {
+    bayer: [2, 4, 5, 6, 7], cluster: [2, 4, 5, 6, 7], pixdots: [2, 3, 5, 7, 8], checker: [1, 2, 3, 4, 5],
+    scan: [1, 2, 4, 6, 7], vscan: [1, 2, 4, 6, 7], stairs: [1, 2, 4, 6, 7], xhatch: [1, 2, 3, 4, 6], zigzag: [1, 2, 3, 4, 6],
+    brick: [1, 2, 3, 5, 6], pixfill: [1, 1, 1, 1, 1],
+  };
+  const to = (map[fam] ?? [2, 4, 6, 8, 9])[Number(m[2]) - 1]; // manga tones: the old five sit at 2,4,6,8,9
+  return `pattern:${fam}-${to}`;
 }
 const NAMES: Record<Family, string> = {
   tone: 'Screentone', hatch: 'Hatching', cross: 'Cross-hatch', lines: 'Ruled lines', grid: 'Grid',
@@ -87,7 +128,6 @@ const BAYER8 = Array.from({ length: 8 }, (_, i) => Array.from({ length: 8 }, (_,
 // every cell inked at a lighter level is inked at every darker one, so stacking
 // two shades of a family never invents new ink
 const RANK8 = [0, 4, 2, 6, 1, 5, 3, 7];
-const LEVELS8 = [1, 2, 4, 6, 7]; // cells (of 8) inked per level
 // clustered-dot ordered dither (4×4 spiral): dots grow from the centre like a halftone
 const CLUSTER = [
   [12, 5, 6, 13],
@@ -103,33 +143,33 @@ function cellRule(id: string): ((i: number, j: number) => boolean) | null {
   const { fam, k } = p;
   switch (fam) {
     case 'pixfill': return () => true; // solid ink, but the edge steps along the pixel grid
-    case 'bayer': { const level = [2, 5, 8, 11, 14][k - 1]; return (i, j) => BAYER[mod(i, 4)][mod(j, 4)] < level; }
-    case 'cluster': { const level = [2, 5, 8, 11, 14][k - 1]; return (i, j) => CLUSTER[mod(i, 4)][mod(j, 4)] < level; }
+    case 'bayer': { const level = lv(fam, k); return (i, j) => BAYER[mod(i, 4)][mod(j, 4)] < level; }
+    case 'cluster': { const level = lv(fam, k); return (i, j) => CLUSTER[mod(i, 4)][mod(j, 4)] < level; }
     case 'pixdots': {
       // the classic 8-bit ramp: lone pixels every 4 → every 2 → checker → 3/4 (8×8 Bayer thresholds)
-      const level = [4, 8, 16, 32, 48][k - 1];
+      const level = lv(fam, k);
       return (i, j) => BAYER8[mod(i, 8)][mod(j, 8)] < level;
     }
-    case 'checker': { const s = [1, 2, 3, 4, 6][k - 1]; return (i, j) => mod(Math.floor(i / s) + Math.floor(j / s), 2) === 0; }
-    case 'scan': { const n = LEVELS8[k - 1]; return (i) => RANK8[mod(i, 8)] < n; }
-    case 'vscan': { const n = LEVELS8[k - 1]; return (_, j) => RANK8[mod(j, 8)] < n; }
-    case 'stairs': { const n = LEVELS8[k - 1]; return (i, j) => RANK8[mod(i + j, 8)] < n; }
+    case 'checker': { const s = lv(fam, k); return (i, j) => mod(Math.floor(i / s) + Math.floor(j / s), 2) === 0; }
+    case 'scan': { const n = lv(fam, k); return (i) => RANK8[mod(i, 8)] < n; }
+    case 'vscan': { const n = lv(fam, k); return (_, j) => RANK8[mod(j, 8)] < n; }
+    case 'stairs': { const n = lv(fam, k); return (i, j) => RANK8[mod(i + j, 8)] < n; }
     case 'xhatch': {
       // both diagonals, lines every 8 → 4 → … cells
-      const n = [1, 2, 3, 4, 6][k - 1];
+      const n = lv(fam, k);
       return (i, j) => RANK8[mod(i + j, 8)] < n || RANK8[mod(i - j, 8)] < n;
     }
     case 'zigzag': {
       // a pixel zigzag (rise 3 over 3, fall 3 over 3); more lines per 8 rows each level
-      const n = [1, 2, 3, 4, 6][k - 1];
+      const n = lv(fam, k);
       return (i, j) => { const t = mod(j, 6); const h = t < 3 ? t : 6 - t; return RANK8[mod(i - h, 8)] < n; };
     }
     case 'brick': {
       // one brick wall (8×4 cells, staggered); darker levels hatch the bricks — nested like the others
-      const n = [0, 1, 2, 4, 6][k - 1];
+      const n = lv(fam, k);
       return (i, j) => mod(i, 4) === 0 || mod(j + (mod(Math.floor(i / 4), 2) ? 4 : 0), 8) === 0 || RANK8[mod(i + j, 8)] < n;
     }
-    case 'pixnoise': { const pr = [0.1, 0.22, 0.38, 0.55, 0.72][k - 1]; return (i, j) => hash2(i, j) < pr; }
+    case 'pixnoise': { const pr = lv(fam, k); return (i, j) => hash2(i, j) < pr; }
     default: return null;
   }
 }
@@ -208,8 +248,8 @@ export function motifPath(points: { x: number; y: number }[], id: string, angleD
   const j0 = Math.floor(pv0 / T) - 1, j1 = Math.ceil(pv1 / T) + 1;
   const motifs: [number, number][] = p.fam === 'tone'
     ? [[0, 0], [T / 2, T / 2]]
-    : Array.from({ length: Math.round([10, 22, 40, 65, 100][p.k - 1] * (T * T) / 16 / (m * m)) }, (_, i) => [rnd(i, 1) * T, rnd(i, 2) * T] as [number, number]);
-  const r = p.fam === 'tone' ? Math.sqrt(([0.08, 0.18, 0.3, 0.45, 0.62][p.k - 1] * T * T) / 2 / Math.PI) : 0.13 * m;
+    : Array.from({ length: Math.round(lv('sand', p.k) * (T * T) / 16 / (m * m)) }, (_, i) => [rnd(i, 1) * T, rnd(i, 2) * T] as [number, number]);
+  const r = p.fam === 'tone' ? Math.sqrt((lv('tone', p.k) * T * T) / 2 / Math.PI) : 0.13 * m;
   if ((i1 - i0) * (j1 - j0) * motifs.length > 400_000) return null; // too many dots: clip the pattern instead
   const path = new Path2D();
   for (let i = i0; i < i1; i++) for (let j = j0; j < j1; j++) {
@@ -257,13 +297,12 @@ export function patternTile(id: string, color: string, px: number): HTMLCanvasEl
       }
     }
   } else if (fam === 'tone') {
-    const d = [0.08, 0.18, 0.3, 0.45, 0.62][k - 1];
-    const r = Math.sqrt((d * T * T) / 2 / Math.PI);
+    const r = Math.sqrt((lv('tone', k) * T * T) / 2 / Math.PI);
     for (const [x, y] of [[0, 0], [T, 0], [0, T], [T, T], [T / 2, T / 2]]) {
       g.beginPath(); g.arc(x, y, r, 0, Math.PI * 2); g.fill();
     }
   } else if (fam === 'hatch' || fam === 'cross') {
-    g.lineWidth = [0.22, 0.36, 0.55, 0.8, 1.15][k - 1];
+    g.lineWidth = lv(fam, k);
     g.lineCap = 'butt';
     // lines run far past the tile: the canvas edge clips them, not a butt cap,
     // so the repeat is seamless (a cap on the border leaves a notch)
@@ -279,14 +318,14 @@ export function patternTile(id: string, color: string, px: number): HTMLCanvasEl
     if (fam === 'cross') diag(-1);
   } else if (fam === 'lines') {
     // horizontal ruled lines (one per tile), thicker with each level
-    g.fillRect(-1, T / 2 - [0.15, 0.25, 0.4, 0.6, 0.9][k - 1] / 2, T + 2, [0.15, 0.25, 0.4, 0.6, 0.9][k - 1]);
+    g.fillRect(-1, T / 2 - lv(fam, k) / 2, T + 2, lv(fam, k));
   } else if (fam === 'grid') {
-    const w = [0.12, 0.2, 0.3, 0.45, 0.65][k - 1];
+    const w = lv(fam, k);
     g.fillRect(-1, T / 2 - w / 2, T + 2, w);
     g.fillRect(T / 2 - w / 2, -1, w, T + 2);
   } else if (fam === 'sand') {
     // stipple: seeded scatter, more grains per level; drawn also wrapped so the tile is seamless
-    const n = Math.round([10, 22, 40, 65, 100][k - 1] * (T * T) / 16); // same grain density as before, over the bigger tile
+    const n = Math.round(lv(fam, k) * (T * T) / 16); // grains per 16 units², over the big tile
     const r = 0.13;
     for (let i = 0; i < n; i++) {
       const x = rnd(i, 1) * T, y = rnd(i, 2) * T;
@@ -296,7 +335,7 @@ export function patternTile(id: string, color: string, px: number): HTMLCanvasEl
     }
   } else if (fam === 'waves') {
     // two wavy rows per tile, one full period across → seamless
-    g.lineWidth = [0.14, 0.22, 0.32, 0.45, 0.62][k - 1];
+    g.lineWidth = lv(fam, k);
     for (const y0 of [T / 4, (3 * T) / 4]) {
       g.beginPath();
       for (let i = -4; i <= 44; i++) {
@@ -308,7 +347,7 @@ export function patternTile(id: string, color: string, px: number): HTMLCanvasEl
     }
   } else if (fam === 'scales') {
     // fish scales: staggered semicircles; heavier = thicker outline
-    g.lineWidth = [0.12, 0.2, 0.3, 0.42, 0.58][k - 1];
+    g.lineWidth = lv(fam, k);
     const R = T / 4;
     for (let row = -1; row <= 2; row++) {
       const y = row * (T / 2);
@@ -337,7 +376,7 @@ export function patternPreviewCSS(id: string, color = PATTERN_INK, scale = 3): s
   return `url(${url}) 0 0 / ${px}px ${px}px repeat, #FDFCF8`;
 }
 
-/** Catalogue for the pattern picker: categories → families (5 densities each). */
+/** Catalogue for the pattern picker: categories → families (a ramp of levels each). */
 export const PATTERN_CATEGORIES: { label: string; families: { fam: string; label: string }[] }[] = [
   {
     label: 'Manga',
@@ -361,9 +400,9 @@ export const PATTERN_CATEGORIES: { label: string; families: { fam: string; label
 /** Hues for the two pattern palettes (ink, paper, then swatches per family). */
 export const MANGA_HUES = [
   PATTERN_INK, '#FDFCF8',
-  'pattern:tone-3', 'pattern:hatch-2', 'pattern:sand-3', 'pattern:waves-2', 'pattern:scales-2', 'pattern:grid-2',
+  'pattern:tone-6', 'pattern:hatch-4', 'pattern:sand-6', 'pattern:waves-4', 'pattern:scales-4', 'pattern:grid-4',
 ];
 export const DIGITAL_HUES = [
   PATTERN_INK, '#FDFCF8',
-  'pattern:bayer-3', 'pattern:scan-3', 'pattern:checker-2', 'pattern:pixnoise-3', 'pattern:stairs-2',
+  'pattern:bayer-5', 'pattern:scan-4', 'pattern:checker-2', 'pattern:pixnoise-6', 'pattern:stairs-2',
 ];

@@ -6,7 +6,7 @@ import { baseZoom as baseZoomFn } from './camera';
 import { Store } from './store';
 import { Camera, baseZoom, pxPerMm, setPxPerMm } from './camera';
 import { PALETTES, PALETTE_GROUPS, getPalette, shades, sortByLightness } from './palettes';
-import { isPattern, patternPreviewCSS, patternLabel, patternLevels, PATTERN_CATEGORIES } from './patterns';
+import { isPattern, patternPreviewCSS, patternLabel, patternLevels, patternVariants, PATTERN_CATEGORIES } from './patterns';
 import type { ExportOptions } from './export';
 import { UNITS_PER_MM, uid, FORMAT_VERSION, FILL_BLENDS } from './types';
 import { type Fmt, PRIMARY_FORMATS, FORMAT_GROUPS, MORE_FORMATS, fitPage, customFormats, saveCustomFormat, mm } from './formats';
@@ -220,7 +220,10 @@ export function buildUI(
       <div class="pal-row" id="pal-row"></div>
       <button class="pal-more" id="pal-more" title="Palettes">···</button>
       <span class="tb-sep"></span>
-      <button class="pat-btn" id="pat-btn" title="Fill pattern (fill tool): screentones, hatching, dithers…"></button>
+      <div class="pal-wrap pat-wrap" id="pat-wrap">
+        <div class="shade-flyout pat-fly" id="pat-fly"></div>
+        <button class="pat-btn" id="pat-btn" title="Fill pattern (fill tool): screentones, hatching, dithers…"></button>
+      </div>
       <div class="popover hidden" id="pattern-popover"></div>
       <div class="divider"></div>
       <button class="add-page" id="add-page" title="New page">${svg('<path d="M7 3.5 H13.5 L18 8 V20.5 H7 Z"/><path d="M13.5 3.5 V8 H18"/><path d="M12.5 11.5 v5 M10 14 h5"/>')}</button>
@@ -408,7 +411,7 @@ export function buildUI(
   }
 
   function closeFlyouts() {
-    palRow.querySelectorAll('.pal-wrap.open').forEach((w) => w.classList.remove('open'));
+    root.querySelectorAll('.pal-wrap.open').forEach((w) => w.classList.remove('open'));
   }
 
   /** Picking a color while textboxes are selected recolors them. */
@@ -583,7 +586,7 @@ export function buildUI(
   };
   const pickPattern = (pat: string | null) => {
     state.fillPattern = pat;
-    writePref('infinizine-fill-pattern', pat ?? '');
+    writePref('infinizine-fill-pattern3', pat ?? '');
     // selected fills take the pattern right away
     const ids = store.doc.elements.filter((el) => el.kind === 'fill' && state.selection.has(el.id)).map((el) => el.id);
     if (ids.length) store.setPatterns(ids, pat);
@@ -642,12 +645,56 @@ export function buildUI(
     patternPop.querySelectorAll<HTMLElement>('.pat-sw').forEach((b) => b.addEventListener('click', () => pickPattern(b.dataset.id!)));
     (patternPop.querySelector('#pat-clear') as HTMLButtonElement).addEventListener('click', () => pickPattern(null));
   }
-  patBtn.addEventListener('click', () => {
+  const openPatternPopover = () => {
     pagePop.classList.add('hidden');
     palettePop.classList.add('hidden');
+    closeFlyouts();
     buildPatternPopover();
     patternPop.classList.toggle('hidden');
+  };
+  // the pattern swatch behaves like a colour: with a pattern active, hover
+  // (desktop) or a tap (touch) shows the family's other levels; "···" opens everything
+  const patWrap = root.querySelector('#pat-wrap') as HTMLElement;
+  const patFly = root.querySelector('#pat-fly') as HTMLElement;
+  const buildPatFly = () => {
+    patFly.innerHTML = '';
+    const pat = state.fillPattern;
+    if (!pat) return;
+    for (const v of patternVariants(pat)) {
+      const b = document.createElement('button');
+      b.className = `pal-shade pat-shade${v === pat ? ' active' : ''}`;
+      b.title = patternLabel(v);
+      b.style.background = patternPreviewCSS(v, state.color, 3);
+      b.addEventListener('pointerdown', (e) => e.preventDefault());
+      b.addEventListener('click', (e) => { e.stopPropagation(); closeFlyouts(); pickPattern(v); });
+      patFly.appendChild(b);
+    }
+    const more = document.createElement('button');
+    more.className = 'pal-shade pat-shade pat-more';
+    more.textContent = '···';
+    more.title = 'All patterns';
+    more.addEventListener('click', (e) => { e.stopPropagation(); openPatternPopover(); });
+    patFly.appendChild(more);
+  };
+  let patLongPressed = false;
+  let patLp = 0;
+  patBtn.addEventListener('click', () => {
+    if (patLongPressed) { patLongPressed = false; return; }
+    if (state.fillPattern && patternVariants(state.fillPattern).length > 1) {
+      const wasOpen = patWrap.classList.contains('open');
+      closeFlyouts();
+      if (!wasOpen) { buildPatFly(); patWrap.classList.add('open'); }
+      return;
+    }
+    openPatternPopover();
   });
+  patBtn.addEventListener('pointerdown', (e) => {
+    if (e.pointerType === 'mouse' || !state.fillPattern) return;
+    patLp = window.setTimeout(() => { patLongPressed = true; closeFlyouts(); buildPatFly(); patWrap.classList.add('open'); }, 320);
+  });
+  patBtn.addEventListener('pointerup', () => clearTimeout(patLp));
+  patBtn.addEventListener('pointerleave', () => clearTimeout(patLp));
+  patWrap.addEventListener('pointerenter', (e) => { if (e.pointerType === 'mouse') buildPatFly(); });
   document.addEventListener('pointerdown', (e) => {
     const t = e.target as HTMLElement;
     if (!t.closest?.('#pattern-popover') && !t.closest?.('#pat-btn')) patternPop.classList.add('hidden');

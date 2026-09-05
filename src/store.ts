@@ -1,7 +1,7 @@
 // Document store: state, undo/redo, localStorage persistence, page placement.
 
 import { AnimArea, AnimFrame, AnimLayer, Doc, Element, Layer, Page, FillBlend, emptyDoc, uid, FORMAT_VERSION } from './types';
-import { isPixelPattern } from './patterns';
+import { isPixelPattern, migratePatternId } from './patterns';
 
 type TextContent = { text: string; w: number; h: number; font?: string; fontSize?: number };
 type TextMetrics = { x: number; w: number; h: number; fontSize: number; auto?: boolean };
@@ -105,6 +105,10 @@ export function migrateDoc(raw: unknown): Doc | null {
       case 1:
         // 1 → 2: no structural change; optional fields are handled by normalizeDoc.
         // (older text used only **/*/# markdown, which format 2 still parses)
+        break;
+      case 2:
+        // 2 → 3: five pattern levels became a finer ramp; keep every fill's look
+        for (const el of doc.elements) if (el.kind === 'fill' && el.pattern) el.pattern = migratePatternId(el.pattern);
         break;
     }
     v++;
