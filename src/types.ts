@@ -120,7 +120,9 @@ export interface Page {
 }
 
 export interface Doc {
-  version: 1;
+  version: number; // zine FORMAT version (see FORMAT_VERSION); bumped only when the schema changes
+  app?: string; // InfiniZine app version that last saved it (informational)
+  savedAt?: number; // epoch ms of the last save
   name: string;
   palette: string; // active palette preset id
   paper?: string; // canvas/paper background color (default warm cream)
@@ -129,6 +131,14 @@ export interface Doc {
   pages: Page[];
   areas: AnimArea[];
 }
+
+/** Zine file format version. History:
+ *  1 — original (strokes/fills/text/images, pages, areas; many optional fields
+ *      were added compatibly over time: layers, live ink, tilt/azimuth, text.auto).
+ *  2 — explicit format/app stamps; inline text spans {role|…}/{w600|…}/__u__.
+ * Loading an OLDER version runs the migration chain in store.ts; a NEWER one is
+ * refused with a message rather than silently mangled. */
+export const FORMAT_VERSION = 2;
 
 // World units are ~2 per mm (A4 → 420×594)
 export const UNITS_PER_MM = 2;
@@ -140,5 +150,5 @@ export function uid(prefix: string): string {
 }
 
 export function emptyDoc(): Doc {
-  return { version: 1, name: 'Untitled', palette: 'ink', elements: [], pages: [], areas: [] };
+  return { version: FORMAT_VERSION, name: 'Untitled', palette: 'ink', elements: [], pages: [], areas: [] };
 }

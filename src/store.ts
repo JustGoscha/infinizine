@@ -1,6 +1,6 @@
 // Document store: state, undo/redo, localStorage persistence, page placement.
 
-import { AnimArea, AnimFrame, AnimLayer, Doc, Element, Page, emptyDoc, uid } from './types';
+import { AnimArea, AnimFrame, AnimLayer, Doc, Element, Page, emptyDoc, uid, FORMAT_VERSION } from './types';
 
 type TextContent = { text: string; w: number; h: number; font?: string; fontSize?: number };
 type TextMetrics = { x: number; w: number; h: number; fontSize: number; auto?: boolean };
@@ -81,6 +81,27 @@ const DOC_PREFIX = 'infinizine-doc-';
 const CURRENT_KEY = 'infinizine-current';
 
 export interface DocMeta { id: string; name: string; updated: number }
+
+/** Bring a loaded zine up to the current format. Returns null when it comes
+ * from a NEWER InfiniZine than this one (we'd rather not guess). */
+export function migrateDoc(raw: unknown): Doc | null {
+  const doc = raw as Doc;
+  if (!doc || typeof doc !== 'object' || !Array.isArray(doc.elements)) return null;
+  let v = typeof doc.version === 'number' ? doc.version : 1;
+  if (v > FORMAT_VERSION) return null;
+  while (v < FORMAT_VERSION) {
+    switch (v) {
+      case 1:
+        // 1 → 2: no structural change; optional fields are handled by normalizeDoc.
+        // (older text used only **/*/# markdown, which format 2 still parses)
+        break;
+    }
+    v++;
+  }
+  doc.version = FORMAT_VERSION;
+  doc.pages ??= [];
+  return normalizeDoc(doc);
+}
 
 function normalizeDoc(doc: Doc): Doc {
   doc.areas ??= []; // older saves predate animation areas
@@ -196,9 +217,12 @@ export class Store {
         }
       }
       if (!raw) return null;
-      const doc = JSON.parse(raw) as Doc;
-      if (doc.version !== 1) return null;
-      return normalizeDoc(doc);
+      const parsed = JSON.parse(raw) as Doc;
+      const doc = migrateDoc(parsed);
+      if (!doc && typeof parsed?.version === 'number' && parsed.version > FORMAT_VERSION) {
+        toast(`This zine was saved by a newer InfiniZine (format ${parsed.version}) — please update`);
+      }
+      return doc;
     } catch {
       return null;
     }
@@ -218,6 +242,9 @@ export class Store {
     const id = this.docId;
     // serialise synchronously (switchTo swaps the doc right after), round
     // coordinates to 1/1000 unit — sub-micron, and a third smaller on disk
+    this.doc.version = FORMAT_VERSION;
+    this.doc.app = __APP_VERSION__;
+    this.doc.savedAt = Date.now();
     const json = JSON.stringify(this.doc, (_k, v) => (typeof v === 'number' ? Math.round(v * 1000) / 1000 : v));
     idbPut(id, json).then(
       () => { this.saveFailed = false; },
@@ -292,15 +319,23 @@ export class Store {
 
   /** Self-contained export: plain JSON, the whole document. */
   exportJSON(): string {
-    return JSON.stringify({ ...this.doc, app: 'infinizine' }, null, 2);
+    return JSON.stringify(
+      { ...this.doc, version: FORMAT_VERSION, app: __APP_VERSION__, savedAt: Date.now(), format: 'infinizine' },
+      null,
+      2,
+    );
   }
 
   importJSON(text: string): boolean {
     try {
-      const doc = JSON.parse(text) as Doc;
-      if (doc.version !== 1 || !Array.isArray(doc.elements)) return false;
-      normalizeDoc(doc);
-      doc.pages ??= [];
+      const parsed = JSON.parse(text) as Doc;
+      const doc = migrateDoc(parsed);
+      if (!doc) {
+        if (typeof parsed?.version === 'number' && parsed.version > FORMAT_VERSION) {
+          toast(`Made with a newer InfiniZine (format ${parsed.version}) — please update to open it`);
+        }
+        return false;
+      }
       doc.name ||= 'Imported zine';
       this.switchTo(uid('doc'), doc);
       return true;

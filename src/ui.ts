@@ -6,7 +6,7 @@ import { baseZoom as baseZoomFn } from './camera';
 import { Store } from './store';
 import { Camera, baseZoom, pxPerMm, setPxPerMm } from './camera';
 import { PALETTES, getPalette, shades } from './palettes';
-import { UNITS_PER_MM, uid } from './types';
+import { UNITS_PER_MM, uid, FORMAT_VERSION } from './types';
 import { layoutText, layoutHeight, layoutWidth, FONTS, FACES, chosenFaces, setFace, weightRange, type FontRole } from './text';
 import { pressure, savePressure, resetPressure, loadPressure, exportPressure, importPressure, easeP, curveAt, type Curve, type CurveNode } from './geometry';
 import { markdownToHtml, htmlToMarkdown, autoTransform, caretToEnd, applyInlineStyle } from './richedit';
@@ -302,6 +302,7 @@ export function buildUI(
       <div class="set-fonts" id="set-fonts"></div>
       <div class="set-note">All fonts are bundled with the app (SIL Open Font Licence / Apache). Nothing is loaded from Google.</div>
       <button class="set-action" id="set-brushes">Brush settings…</button>
+      <div class="set-note">InfiniZine v${__APP_VERSION__} · zine format ${FORMAT_VERSION}</div>
     </div>
     <div class="popover hidden" id="palette-popover"></div>
     <div class="popover hidden" id="page-popover"></div>
