@@ -889,6 +889,36 @@ body.tl-docked-side .topbar { z-index: 40; }
   z-index: 24;
 }
 .sel-menu.hidden { display: none; }
+/* floating undo/redo, thumb-reach on the drawing-hand side */
+.hist-bar {
+  position: fixed;
+  right: 14px;
+  bottom: 112px;
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  background: var(--panel);
+  border: var(--panel-border);
+  border-radius: 3px;
+  box-shadow: var(--shadow);
+  padding: 5px;
+  z-index: 24;
+}
+.hist-bar[hidden] { display: none; }
+.hist-bar button {
+  width: 46px;
+  height: 46px;
+  border: 1.5px solid transparent;
+  border-radius: 2px;
+  background: transparent;
+  color: var(--ink);
+  display: grid;
+  place-items: center;
+  cursor: pointer;
+}
+.hist-bar button svg { width: 24px; height: 24px; }
+.hist-bar button:active { background: var(--ink); color: var(--card); }
+body.left-hand .hist-bar, body.left-hand .sel-menu { right: auto; left: 14px; }
 .sel-menu button {
   width: 40px;
   height: 40px;
@@ -1476,7 +1506,7 @@ body.presenting .popover { display: none; }
 .crash-hint { font-size: 12px; color: var(--ink-soft); }
 
 /* ---------- frosted panels: slight blur of whatever sits behind the UI ---------- */
-.toolbar, .popover, .timeline, .sel-menu, .page-menu, .toast, .chip, .tool-flyout,
+.toolbar, .popover, .timeline, .sel-menu, .hist-bar, .page-menu, .toast, .chip, .tool-flyout,
 .pg-side, .pg-curve-wrap, .pg-stage-bar, .pg-close-big, .crash-box, .cal-card, .text-bar, .docs-pop {
   -webkit-backdrop-filter: blur(10px) saturate(1.1);
   backdrop-filter: blur(10px) saturate(1.1);

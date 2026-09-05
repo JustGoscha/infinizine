@@ -15,6 +15,8 @@ export const CLIP_PENDING_KEY = 'infinizine-clip-pending'; // '1' while the clip
 let memClip: string | null = null;
 
 const PEN_KEY = 'infinizine-pen-seen';
+const TOOL_MEM_KEY = 'infinizine-tool-memory';
+const REMEMBER_TOOLS = new Set(['pen', 'pencil', 'sketch', 'fineliner', 'marker', 'lasso-fill', 'text']);
 const FINGER_KEY = 'infinizine-finger-mode';
 function readPref(k: string): string | null {
   try { return localStorage.getItem(k); } catch { return null; }
@@ -101,7 +103,25 @@ export function textHandleRect(el: TextBox, zoom: number) {
 }
 
 export class InputState {
-  tool: Tool = 'pen';
+  private _tool: Tool = 'pen';
+  /** per-tool colour + size memory: switching tools brings back what you last used with each */
+  private toolMem: Partial<Record<Tool, { color: string; baseWidth: number }>> = (() => {
+    try { return JSON.parse(readPref(TOOL_MEM_KEY) ?? '{}'); } catch { return {}; }
+  })();
+  get tool(): Tool { return this._tool; }
+  set tool(t: Tool) {
+    if (t === this._tool) return;
+    this.rememberTool();
+    this._tool = t;
+    const m = this.toolMem[t];
+    if (m) { this.color = m.color; this.baseWidth = m.baseWidth; }
+  }
+  /** store the current colour/size under the current tool (called on switch and on edits) */
+  rememberTool() {
+    if (!REMEMBER_TOOLS.has(this._tool)) return;
+    this.toolMem[this._tool] = { color: this.color, baseWidth: this.baseWidth };
+    writePref(TOOL_MEM_KEY, JSON.stringify(this.toolMem));
+  }
   color = '#1a1a1a';
   baseWidth = 1.6; // world units at 100% (2 per mm)
   adaptiveSize = readPref('infinizine-adaptive-size') === '1'; // keep on-screen size across zoom

@@ -196,8 +196,6 @@ export function buildUI(
       <div class="wordmark">INFINI<span class="zine"><i>Z</i><i>I</i><i>N</i><i>E</i></span></div>
       <div class="top-actions">
         <button class="chip" id="docs" title="My zines">${svg('<path d="M4 7 V19 A1.5 1.5 0 0 0 5.5 20.5 H18.5 A1.5 1.5 0 0 0 20 19 V9.5 A1.5 1.5 0 0 0 18.5 8 H12 L10 5.5 H5.5 A1.5 1.5 0 0 0 4 7 Z"/>')}</button>
-        <button class="chip" id="undo" title="Undo (⌘Z)">${svg('<path d="M9 7 L4.5 11.5 L9 16"/><path d="M4.5 11.5 H14.5 a5 5 0 0 1 0 10 H11"/>')}</button>
-        <button class="chip" id="redo" title="Redo (⇧⌘Z)">${svg('<path d="M15 7 L19.5 11.5 L15 16"/><path d="M19.5 11.5 H9.5 a5 5 0 0 0 0 10 H13"/>')}</button>
         <button class="chip" id="finger-toggle" title="Finger mode"></button>
         <button class="chip" id="eagle" title="Eagle view: fit everything, tap again to return">${svg('<path d="M4 9V4h5 M20 9V4h-5 M4 15v5h5 M20 15v5h-5"/><rect x="9.5" y="9.5" width="5" height="5"/>')}</button>
         <button class="chip" id="zoom-lock" title="Zoom lock"></button>
@@ -333,6 +331,7 @@ export function buildUI(
   sizesEl.querySelectorAll('.size').forEach((b) =>
     b.addEventListener('click', () => {
       state.baseWidth = Number((b as HTMLElement).dataset.w);
+      state.rememberTool();
       closeToolFlyouts();
       refresh();
     }),
@@ -340,6 +339,7 @@ export function buildUI(
   const sizeFader = sizesEl.querySelector('#size-fader') as HTMLInputElement;
   sizeFader.addEventListener('input', () => {
     state.baseWidth = Number(sizeFader.value);
+    state.rememberTool();
     refresh();
   });
   const adaptiveBtn = sizesEl.querySelector('#size-adaptive') as HTMLButtonElement;
@@ -381,6 +381,7 @@ export function buildUI(
     state.color = c;
     writePref(`infinizine-color-${store.docId}`, c);
     writePref('infinizine-last-color', c);
+    state.rememberTool();
     const textIds = store.doc.elements
       .filter((el) => el.kind === 'text' && state.selection.has(el.id))
       .map((el) => el.id);
@@ -1755,8 +1756,24 @@ export function buildUI(
     if (e.key === 'ArrowLeft') showPage(presentIndex - 1);
   });
 
-  (root.querySelector('#undo') as HTMLButtonElement).addEventListener('click', () => store.undo());
-  (root.querySelector('#redo') as HTMLButtonElement).addEventListener('click', () => store.redo());
+  // floating history bar on the drawing-hand side (thumb reach), with the
+  // selection menu; handedness is a setting (playground → interface)
+  const hist = document.createElement('div');
+  hist.className = 'hist-bar';
+  hist.innerHTML = `
+    <button id="undo" title="Undo (⌘Z)">${svg('<path d="M9 7 L4.5 11.5 L9 16"/><path d="M4.5 11.5 H14.5 a5 5 0 0 1 0 10 H11"/>')}</button>
+    <button id="redo" title="Redo (⇧⌘Z)">${svg('<path d="M15 7 L19.5 11.5 L15 16"/><path d="M19.5 11.5 H9.5 a5 5 0 0 0 0 10 H13"/>')}</button>`;
+  document.body.appendChild(hist);
+  (hist.querySelector('#undo') as HTMLButtonElement).addEventListener('click', () => store.undo());
+  (hist.querySelector('#redo') as HTMLButtonElement).addEventListener('click', () => store.redo());
+  const HAND_KEY = 'infinizine-hand';
+  const applyHand = () => {
+    let hand = 'right';
+    try { hand = localStorage.getItem(HAND_KEY) ?? 'right'; } catch { /* ignore */ }
+    document.body.classList.toggle('left-hand', hand === 'left');
+  };
+  applyHand();
+  setInterval(() => { hist.hidden = state.presenting; }, 300);
 
   const layerToggle = root.querySelector('#layer-toggle') as HTMLButtonElement;
   layerToggle.addEventListener('click', () => {
@@ -1998,6 +2015,7 @@ export function buildUI(
         <div class="pg-tools">${PG_TOOLS.map((o) => `<button class="pg-tool" data-t="${o.t}">${ICONS[o.t]}<span>${o.label}</span></button>`).join('')}</div>
         ${SLIDERS.map((sl) => `<label class="pg-row" data-k="${sl.k}"><span>${sl.label}</span><input type="range" data-k="${sl.k}" min="${sl.min}" max="${sl.max}" step="${sl.step}"><b></b></label>`).join('')}
         <div class="pg-actions" id="pg-nib-row"><button id="pg-nib-mode"></button></div>
+        <div class="pg-actions"><button id="pg-hand" title="Which side the undo/redo and selection bars sit on"></button></div>
         <div class="pg-actions">
           <button id="pg-save" class="pg-primary">Save</button>
           <button id="pg-reset">Reset to default</button>
@@ -2339,6 +2357,17 @@ export function buildUI(
   (pg.querySelector('#pg-reset') as HTMLButtonElement).addEventListener('click', () => {
     resetPressure(pgTool);
     restyle();
+  });
+  const handBtn = pg.querySelector('#pg-hand') as HTMLButtonElement;
+  const syncHand = () => {
+    handBtn.textContent = document.body.classList.contains('left-hand') ? 'Left-handed UI · tap for right' : 'Right-handed UI · tap for left';
+  };
+  syncHand();
+  handBtn.addEventListener('click', () => {
+    const left = !document.body.classList.contains('left-hand');
+    writePref('infinizine-hand', left ? 'left' : 'right');
+    document.body.classList.toggle('left-hand', left);
+    syncHand();
   });
   (pg.querySelector('#pg-nib-mode') as HTMLButtonElement).addEventListener('click', () => {
     pressure.marker.nibMode = pressure.marker.nibMode === 'azimuth' ? 'travel' : 'azimuth';
