@@ -178,7 +178,7 @@ export function buildUI(
   store: Store,
   camera: Camera,
   invalidate: () => void,
-  actions: { copy: () => void; cut: () => void; paste: () => void },
+  actions: { copy: () => void; cut: () => void; paste: () => void; exportPages: () => Promise<void> },
 ) {
   root.innerHTML = `
     <header class="topbar">
@@ -1866,6 +1866,7 @@ export function buildUI(
       <div class="docs-actions">
         <button id="doc-new">＋ New zine</button>
         <button id="doc-export">Export</button>
+        <button id="doc-export-png" title="Every page as a 300 dpi PNG, zipped">Pages → PNG</button>
         <button id="doc-import">Import</button>
         <input id="doc-file" type="file" accept=".zine,.json,application/json" hidden>
       </div>
@@ -1912,6 +1913,10 @@ export function buildUI(
     });
     const fileInput = docsPop.querySelector('#doc-file') as HTMLInputElement;
     (docsPop.querySelector('#doc-import') as HTMLButtonElement).addEventListener('click', () => fileInput.click());
+    (docsPop.querySelector('#doc-export-png') as HTMLButtonElement).addEventListener('click', () => {
+      docsPop.classList.add('hidden');
+      void actions.exportPages();
+    });
     fileInput.addEventListener('change', async () => {
       const f = fileInput.files?.[0];
       if (!f) return;

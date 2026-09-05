@@ -157,6 +157,49 @@ export class Renderer {
       this.focusAreaId() ?? '', d.paper ?? '', d.pattern ?? ''].join('|');
   }
 
+  /** Render one page to an offscreen canvas at `scale` px per world unit:
+   * paper, every still element, and the first keyframe of each animation
+   * layer (live ink is motion, so it's left out). Clipped to the page. */
+  renderPage(page: Page, scale: number): HTMLCanvasElement {
+    const w = Math.max(1, Math.round(page.w * scale)), h = Math.max(1, Math.round(page.h * scale));
+    const c = document.createElement('canvas');
+    c.width = w; c.height = h;
+    const g = c.getContext('2d')!;
+    const saved = this.ctx;
+    const savedDetail = this.detailOverride;
+    this.ctx = g;
+    this.detailOverride = Math.min(16, Math.max(0.25, 2 ** Math.round(Math.log2(scale / baseZoom()))));
+    try {
+      g.fillStyle = this.store.doc.paper ?? '#F7F4EC';
+      g.fillRect(0, 0, w, h);
+      g.scale(scale, scale);
+      g.translate(-page.x, -page.y);
+      const view = { x: page.x, y: page.y, w: page.w, h: page.h };
+      const still = this.store.doc.elements.filter((el) => this.isStill(el));
+      for (const el of still) if (el.layer === 'back') this.paintElement(el, view, scale, 1);
+      for (const el of still) if (el.layer !== 'back') this.paintElement(el, view, scale, 1);
+      for (const area of this.store.doc.areas) {
+        if (!this.areaInView(area, view)) continue;
+        if (area.clip) { g.save(); g.beginPath(); g.rect(area.x, area.y, area.w, area.h); g.clip(); }
+        for (const layer of area.layers) {
+          if (layer.hidden || layer.kind === 'live' || area.hideFrames) continue;
+          const first = layer.frames[0]?.id;
+          if (!first) continue;
+          for (const el of this.store.doc.elements) if (el.frame === first) this.paintElement(el, view, scale, 1);
+        }
+        if (area.clip) g.restore();
+      }
+      g.globalAlpha = 1;
+    } finally {
+      this.ctx = saved;
+      this.detailOverride = savedDetail;
+      // caches were built at the export detail: let them rebuild for the screen
+      this.clearCache();
+      this.invalidate();
+    }
+    return c;
+  }
+
   /** Rebuild the static layer for the current camera. */
   private buildStatic(vw: number, vh: number, dpr: number) {
     const st = this.staticLayer;
@@ -313,7 +356,9 @@ export class Renderer {
   /** Outline detail bucket for the current zoom: 1 at 100%, doubling per
    * zoom octave. Cached outlines are rebuilt when the bucket changes so a
    * stroke has the same screen-space smoothness at every zoom level. */
+  private detailOverride: number | null = null; // set while rendering an export
   private detail(): number {
+    if (this.detailOverride !== null) return this.detailOverride;
     const rel = this.camera.zoom / baseZoom();
     return Math.min(16, Math.max(0.25, 2 ** Math.round(Math.log2(rel))));
   }

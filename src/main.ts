@@ -6,6 +6,7 @@ import { InputState, attachInput } from './input';
 import { Renderer } from './render';
 import { buildUI } from './ui';
 import { installCrashScreen } from './crash';
+import { exportPagesPNG } from './export';
 
 installCrashScreen();
 
@@ -24,6 +25,7 @@ const uiHooks = buildUI(ui, state, store, camera, () => renderer.invalidate(), {
   copy: () => input.copySelection(),
   cut: () => input.cutSelection(),
   paste: () => void input.pasteSmart(),
+  exportPages: () => exportPagesPNG(store, renderer),
 });
 
 store.onChange = (info) => {
