@@ -36,17 +36,55 @@ store.ready.then(() => {
   if (store.doc.pages.length === 0 && store.doc.elements.length === 0) {
     store.addPage({ w: 420, h: 594 }, { x: 0, y: 0 }); // A4
   }
-  // Start at 100% (true physical scale), centered on the first page, zoom locked
-  const page = store.doc.pages[0];
-  camera.zoom = baseZoom();
-  if (page) {
-    camera.x = page.x + page.w / 2;
-    camera.y = page.y + page.h / 2;
+  // Back where you left off in this zine; otherwise 100% centered on the first page
+  if (!restoreCamera(store.docId)) {
+    const page = store.doc.pages[0];
+    camera.zoom = baseZoom();
+    if (page) {
+      camera.x = page.x + page.w / 2;
+      camera.y = page.y + page.h / 2;
+    }
   }
   state.updateCursor();
   renderer.clearCache();
   renderer.invalidate();
 });
+
+// ---- remember the camera per zine (restored on reload / when switching back) ----
+const CAM_KEY = (id: string) => `infinizine-cam-${id}`;
+function restoreCamera(id: string): boolean {
+  try {
+    const raw = localStorage.getItem(CAM_KEY(id));
+    if (!raw) return false;
+    const c = JSON.parse(raw) as { x: number; y: number; zoom: number };
+    if (![c.x, c.y, c.zoom].every(Number.isFinite) || c.zoom <= 0) return false;
+    camera.x = c.x; camera.y = c.y; camera.zoom = c.zoom;
+    return true;
+  } catch {
+    return false;
+  }
+}
+let camSaved = '';
+let camDocId = store.docId;
+setInterval(() => {
+  if (store.docId !== camDocId) {
+    // switched zines: land where that zine was last viewed, or on its first page
+    camDocId = store.docId;
+    if (!restoreCamera(camDocId)) {
+      const page = store.doc.pages[0];
+      camera.zoom = baseZoom();
+      if (page) { camera.x = page.x + page.w / 2; camera.y = page.y + page.h / 2; }
+    }
+    state.updateCursor();
+    renderer.invalidate();
+    camSaved = '';
+  }
+  const snap = JSON.stringify({ x: Math.round(camera.x * 100) / 100, y: Math.round(camera.y * 100) / 100, zoom: camera.zoom });
+  if (snap !== camSaved) {
+    camSaved = snap;
+    try { localStorage.setItem(CAM_KEY(camDocId), snap); } catch { /* ignore */ }
+  }
+}, 400);
 window.addEventListener('resize', () => renderer.invalidate());
 // pressure playground changed the curves: every cached outline is stale
 window.addEventListener('izine-restyle', () => { renderer.clearCache(); renderer.invalidate(); });
