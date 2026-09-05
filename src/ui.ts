@@ -6,7 +6,7 @@ import { baseZoom as baseZoomFn } from './camera';
 import { Store } from './store';
 import { Camera, baseZoom, pxPerMm, setPxPerMm } from './camera';
 import { PALETTES, PALETTE_GROUPS, getPalette, shades, sortByLightness } from './palettes';
-import { isPattern, patternPreviewCSS, patternLabel, PATTERN_CATEGORIES } from './patterns';
+import { isPattern, patternPreviewCSS, patternLabel, patternLevels, PATTERN_CATEGORIES } from './patterns';
 import type { ExportOptions } from './export';
 import { UNITS_PER_MM, uid, FORMAT_VERSION, FILL_BLENDS } from './types';
 import { type Fmt, PRIMARY_FORMATS, FORMAT_GROUPS, MORE_FORMATS, fitPage, customFormats, saveCustomFormat, mm } from './formats';
@@ -605,9 +605,9 @@ export function buildUI(
         <div class="pat-cat">${cat.label}</div>
         ${cat.families.map((f) => `
           <div class="pat-fam"><span class="pat-fam-name">${f.label}</span>
-            <div class="pat-swatches">${[1, 2, 3, 4, 5].map((k) => {
+            <div class="pat-swatches">${Array.from({ length: patternLevels(f.fam) }, (_, i) => i + 1).map((k) => {
               const id = `pattern:${f.fam}-${k}`;
-              return `<button class="pat-sw${state.fillPattern === id ? ' active' : ''}" data-id="${id}" title="${f.label} ${k}" style="background:${patternPreviewCSS(id, state.color, 3)}"></button>`;
+              return `<button class="pat-sw${state.fillPattern === id ? ' active' : ''}" data-id="${id}" title="${patternLevels(f.fam) === 1 ? f.label : `${f.label} ${k}`}" style="background:${patternPreviewCSS(id, state.color, 3)}"></button>`;
             }).join('')}</div>
           </div>`).join('')}`).join('')}
       <div class="set-row pat-row"><span>Tone angle</span>

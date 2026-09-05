@@ -11,32 +11,34 @@ export const inkOf = (c: string) => (isPattern(c) ? PATTERN_INK : c);
 
 type Family =
   | 'tone' | 'hatch' | 'cross' | 'lines' | 'grid' | 'sand' | 'waves' | 'scales' // manga (vector tiles)
-  | 'bayer' | 'cluster' | 'pixdots' | 'checker' | 'scan' | 'vscan' | 'stairs' | 'xhatch' | 'zigzag' | 'brick' | 'pixnoise'; // digital (pixel grid)
+  | 'pixfill' | 'bayer' | 'cluster' | 'pixdots' | 'checker' | 'scan' | 'vscan' | 'stairs' | 'xhatch' | 'zigzag' | 'brick' | 'pixnoise'; // digital (pixel grid)
 const FAMILIES: Family[] = [
   'tone', 'hatch', 'cross', 'lines', 'grid', 'sand', 'waves', 'scales',
-  'bayer', 'cluster', 'pixdots', 'checker', 'scan', 'vscan', 'stairs', 'xhatch', 'zigzag', 'brick', 'pixnoise',
+  'pixfill', 'bayer', 'cluster', 'pixdots', 'checker', 'scan', 'vscan', 'stairs', 'xhatch', 'zigzag', 'brick', 'pixnoise',
 ];
-const PIXEL: Set<string> = new Set(['bayer', 'cluster', 'pixdots', 'checker', 'scan', 'vscan', 'stairs', 'xhatch', 'zigzag', 'brick', 'pixnoise']);
+const PIXEL: Set<string> = new Set(['pixfill', 'bayer', 'cluster', 'pixdots', 'checker', 'scan', 'vscan', 'stairs', 'xhatch', 'zigzag', 'brick', 'pixnoise']);
 const parse = (id: string): { fam: Family; k: number } | null => {
   const m = /^pattern:([a-z]+)-([1-5])$/.exec(id);
   if (!m || !FAMILIES.includes(m[1] as Family)) return null;
   return { fam: m[1] as Family, k: Number(m[2]) };
 };
-/** the 5 densities of a pattern's family, lightest → heaviest (its "shades") */
+/** how many levels a family has (most: 5 densities; the pixel fill is just one) */
+export const patternLevels = (fam: string) => (fam === 'pixfill' ? 1 : 5);
+/** the densities of a pattern's family, lightest → heaviest (its "shades") */
 export function patternVariants(id: string): string[] {
   const p = parse(id);
-  return p ? [1, 2, 3, 4, 5].map((k) => `pattern:${p.fam}-${k}`) : [];
+  return p ? Array.from({ length: patternLevels(p.fam) }, (_, i) => `pattern:${p.fam}-${i + 1}`) : [];
 }
 const NAMES: Record<Family, string> = {
   tone: 'Screentone', hatch: 'Hatching', cross: 'Cross-hatch', lines: 'Ruled lines', grid: 'Grid',
   sand: 'Sand tone', waves: 'Waves', scales: 'Scales',
-  bayer: 'Ordered dither', cluster: 'Halftone dither', pixdots: 'Pixel dots', checker: 'Checker',
+  pixfill: 'Pixel fill', bayer: 'Ordered dither', cluster: 'Halftone dither', pixdots: 'Pixel dots', checker: 'Checker',
   scan: 'Scanlines', vscan: 'Vertical lines', stairs: 'Pixel diagonal', xhatch: 'Pixel crosshatch',
   zigzag: 'Zigzag', brick: 'Bricks', pixnoise: 'Pixel noise',
 };
 export function patternLabel(id: string): string {
   const p = parse(id);
-  return p ? `${NAMES[p.fam]} ${p.k}` : id;
+  return p ? (patternLevels(p.fam) === 1 ? NAMES[p.fam] : `${NAMES[p.fam]} ${p.k}`) : id;
 }
 
 /** One pixel of every digital pattern, in world units (2 units = 1mm → 0.6mm cells).
@@ -100,6 +102,7 @@ function cellRule(id: string): ((i: number, j: number) => boolean) | null {
   if (!p || !PIXEL.has(p.fam)) return null;
   const { fam, k } = p;
   switch (fam) {
+    case 'pixfill': return () => true; // solid ink, but the edge steps along the pixel grid
     case 'bayer': { const level = [2, 5, 8, 11, 14][k - 1]; return (i, j) => BAYER[mod(i, 4)][mod(j, 4)] < level; }
     case 'cluster': { const level = [2, 5, 8, 11, 14][k - 1]; return (i, j) => CLUSTER[mod(i, 4)][mod(j, 4)] < level; }
     case 'pixdots': {
@@ -347,7 +350,7 @@ export const PATTERN_CATEGORIES: { label: string; families: { fam: string; label
   {
     label: 'Digital · one pixel grid · levels stack without adding ink',
     families: [
-      { fam: 'bayer', label: 'Ordered' }, { fam: 'cluster', label: 'Halftone' }, { fam: 'pixdots', label: 'Pixel dots' },
+      { fam: 'pixfill', label: 'Pixel fill' }, { fam: 'bayer', label: 'Ordered' }, { fam: 'cluster', label: 'Halftone' }, { fam: 'pixdots', label: 'Pixel dots' },
       { fam: 'checker', label: 'Checker' }, { fam: 'scan', label: 'Scanlines' }, { fam: 'vscan', label: 'Vertical' },
       { fam: 'stairs', label: 'Diagonal' }, { fam: 'xhatch', label: 'Crosshatch' }, { fam: 'zigzag', label: 'Zigzag' },
       { fam: 'brick', label: 'Bricks' }, { fam: 'pixnoise', label: 'Noise' },
