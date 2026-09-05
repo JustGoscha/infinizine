@@ -62,11 +62,13 @@ export function patternTile(id: string, color: string, px: number): HTMLCanvasEl
   } else if (fam === 'hatch' || fam === 'cross') {
     g.lineWidth = [0.22, 0.36, 0.55, 0.8, 1.15][k - 1];
     g.lineCap = 'butt';
+    // lines run far past the tile: the canvas edge clips them, not a butt cap,
+    // so the repeat is seamless (a cap on the border leaves a notch)
     const diag = (dir: 1 | -1) => {
-      for (const off of [-T, 0, T]) {
+      for (const off of [-2 * T, -T, 0, T, 2 * T]) {
         g.beginPath();
-        if (dir === 1) { g.moveTo(off, T); g.lineTo(off + T, 0); }
-        else { g.moveTo(off, 0); g.lineTo(off + T, T); }
+        if (dir === 1) { g.moveTo(off - T, 2 * T); g.lineTo(off + 2 * T, -T); }
+        else { g.moveTo(off - T, -T); g.lineTo(off + 2 * T, 2 * T); }
         g.stroke();
       }
     };
