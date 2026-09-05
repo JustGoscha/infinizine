@@ -33,23 +33,22 @@ export const PALETTES: PalettePreset[] = [
     hues: ['#9BBC0F', '#0F380F', '#8BAC0F', '#306230'],
   },
   {
-    // NES-flavoured: the console's greys plus its punchiest primaries
     // the 2C02 master palette (54 colours) — the main row is one entry per hue family,
     // each swatch's shades are that family's other real entries
     id: 'nes',
     strict: true,
     drama: 0.1,
     name: 'NES',
-    hues: ['#FCFCFC', '#000000', '#7C7C7C', '#E40058', '#F83800', '#F8B800', '#00A800', '#0078F8', '#D800CC'],
+    hues: ['#FCFCFC', '#000000', '#E40058', '#F8B800', '#00A800', '#0078F8'],
     ramps: {
       '#FCFCFC': ['#FCFCFC', '#F8F8F8', '#BCBCBC', '#7C7C7C', '#787878', '#000000'],
-      '#7C7C7C': ['#FCFCFC', '#F8F8F8', '#BCBCBC', '#7C7C7C', '#787878', '#000000'],
-      '#E40058': ['#F8A4C0', '#F85898', '#F878F8', '#E40058', '#D800CC', '#A80020', '#940084'],
-      '#F83800': ['#F0D0B0', '#F87858', '#FCA044', '#F83800', '#E45C10', '#A81000', '#881400'],
-      '#F8B800': ['#FCE0A8', '#F8D878', '#FCA044', '#F8B800', '#AC7C00', '#503000'],
-      '#00A800': ['#B8F8B8', '#D8F878', '#B8F818', '#58D854', '#00B800', '#00A800', '#007800', '#005800'],
-      '#0078F8': ['#A4E4FC', '#3CBCFC', '#6888FC', '#0078F8', '#0058F8', '#0000FC', '#0000BC'],
-      '#D800CC': ['#F8D8F8', '#D8B8F8', '#9878F8', '#6844FC', '#D800CC', '#940084', '#4428BC'],
+      '#000000': ['#FCFCFC', '#F8F8F8', '#BCBCBC', '#7C7C7C', '#787878', '#000000'],
+      // reds, pinks, oranges and purples share the warm swatch
+      '#E40058': ['#F8A4C0', '#F878F8', '#F85898', '#F87858', '#F83800', '#E40058', '#D800CC', '#A81000', '#A80020', '#940084', '#881400'],
+      '#F8B800': ['#FCE0A8', '#F8D878', '#F0D0B0', '#FCA044', '#F8B800', '#E45C10', '#AC7C00', '#503000'],
+      '#00A800': ['#B8F8B8', '#D8F878', '#B8F818', '#58D854', '#58F898', '#00B800', '#00A800', '#007800', '#005800'],
+      // blues, cyans and violets share the cool swatch
+      '#0078F8': ['#A4E4FC', '#00FCFC', '#3CBCFC', '#00E8D8', '#6888FC', '#9878F8', '#0078F8', '#0058F8', '#6844FC', '#008888', '#0000FC', '#0000BC', '#4428BC', '#004058'],
     },
   },
   {
@@ -57,7 +56,7 @@ export const PALETTES: PalettePreset[] = [
     id: 'snes',
     drama: 0.2,
     name: 'Super 16-bit',
-    hues: ['#F8F8F8', '#202040', '#A0A8C0', '#F85030', '#48A0F8', '#F8D830', '#68C840', '#B060E0'],
+    hues: ['#F8F8F8', '#202040', '#F85030', '#48A0F8', '#F8D830', '#68C840'],
   },
   {
     // CGA / early PC: cyan-magenta glare
