@@ -1825,3 +1825,9 @@ body.presenting .pages-panel { z-index: 60; }
 .tl-nav-rec { color: #D6336C; }
 .tl-nav-rec.on { background: #D6336C !important; color: #fff !important; border-color: #D6336C !important; animation: tl-rec-blink 1.2s ease-in-out infinite; }
 @keyframes tl-rec-blink { 50% { opacity: 0.55; } }
+.tl-frame-del {
+  position: absolute; top: 1px; right: 5px; width: 16px; height: 16px; display: grid; place-items: center;
+  color: rgba(255,255,255,0.9); cursor: pointer; z-index: 2;
+}
+.tl-frame-del svg { width: 12px; height: 12px; }
+.tl-frame-del:hover { color: #fff; transform: scale(1.15); }

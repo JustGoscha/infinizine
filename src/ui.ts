@@ -1451,7 +1451,7 @@ export function buildUI(
       <div class="tl-tracks" id="tl-tracks"></div>
       ${tlView === 'frames'
         ? `<div class="tl-ops">
-        <button id="tl-del" title="Delete frame">${svg('<path d="M6 12h12"/>')}</button>
+        <button id="tl-del" class="tl-trash" title="Delete the current frame">${svg('<path d="M4 7 H20 M9 7 V5 A1 1 0 0 1 10 4 H14 A1 1 0 0 1 15 5 V7 M6.5 7 L7.5 20 H16.5 L17.5 7"/>')}</button>
         <button id="tl-add" title="Add frame after the current one">${svg('<path d="M12 6v12M6 12h12"/>')}</button>
         <button id="tl-dup" title="Duplicate frame">${svg('<rect x="8" y="8" width="11" height="11" rx="1"/><path d="M5 15V6a1 1 0 0 1 1-1h9"/>')}</button>
         <span class="tl-sep"></span>
@@ -1734,6 +1734,21 @@ export function buildUI(
           });
         }
         b.appendChild(grip);
+        if (f.id === state.activeFrameId && l.frames.length > 1) {
+          // the selected frame carries its own bin
+          const del = document.createElement('span');
+          del.className = 'tl-frame-del';
+          del.title = 'Delete this frame';
+          del.innerHTML = svg('<path d="M4 7 H20 M9 7 V5 A1 1 0 0 1 10 4 H14 A1 1 0 0 1 15 5 V7 M6.5 7 L7.5 20 H16.5 L17.5 7"/>');
+          del.addEventListener('pointerdown', (e) => e.stopPropagation());
+          del.addEventListener('click', (e) => {
+            e.stopPropagation();
+            store.deleteFrame(area.id, l.id, f.id);
+            renderTimeline();
+            invalidate();
+          });
+          b.appendChild(del);
+        }
         // tap selects; horizontal drag reorders within the layer
         let marker: HTMLElement | null = null;
         const insertIndex = (px: number) => {
