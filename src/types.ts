@@ -88,6 +88,7 @@ export interface TextBox {
   fontSize: number; // world units
   font?: string; // typeface key (see text.ts FONTS); default 'franklin'
   text: string; // markdown: # headings, - bullets, **bold**, *italic*
+  auto?: boolean; // width follows the content (tap-created box) until the user resizes it
   layer?: Layer;
   frame?: string;
   alayer?: string;

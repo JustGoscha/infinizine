@@ -7,7 +7,7 @@ import { Store } from './store';
 import { Camera, baseZoom, pxPerMm, setPxPerMm } from './camera';
 import { PALETTES, getPalette, shades } from './palettes';
 import { UNITS_PER_MM, uid } from './types';
-import { layoutText, layoutHeight, FONTS } from './text';
+import { layoutText, layoutHeight, layoutWidth, FONTS } from './text';
 import { pressure, savePressure, resetPressure, loadPressure, exportPressure, importPressure, easeP, curveAt, type Curve, type CurveNode } from './geometry';
 import { markdownToHtml, htmlToMarkdown, autoTransform, caretToEnd } from './richedit';
 
@@ -712,7 +712,8 @@ export function buildUI(
     { label: 'Sub', size: 5.5 },
   ];
 
-  state.onTextEdit = (target, rect) => {
+  state.onTextEdit = (target, rect, autoFlag) => {
+    const auto = autoFlag ?? target?.auto ?? false; // width follows content until resized
     let fontSize = target ? target.fontSize : state.textSize;
     let color = target ? target.color : state.color;
     let family = target?.font ?? state.font;
@@ -768,8 +769,12 @@ export function buildUI(
       bar.appendChild(b);
     }
     document.body.appendChild(bar);
+    // auto boxes: width = widest line (+ a hair so greedy wrapping never kicks in)
+    const curW = () =>
+      auto ? Math.max(40, layoutWidth(layoutText(value() || ' ', family, fontSize, 1e6), family) + 4) : rect.w;
     const contentH = () =>
-      Math.max(rect.h, layoutHeight(layoutText(value() || ' ', family, fontSize, rect.w)));
+      Math.max(auto ? 0 : rect.h, layoutHeight(layoutText(value() || ' ', family, fontSize, curW())));
+    if (auto) ta.style.whiteSpace = 'pre'; // never wrap while auto-sizing
     const place = () => {
       const r = (document.getElementById('canvas') as HTMLCanvasElement).getBoundingClientRect();
       const s = camera.worldToScreen(rect.x, rect.y, r.width, r.height);
@@ -779,7 +784,7 @@ export function buildUI(
       ta.style.font = `400 ${fontSize * z}px ${FONTS[family].css}`;
       ta.style.lineHeight = `${fontSize * 1.3 * z}px`;
       ta.style.color = color;
-      ta.style.width = `${rect.w * z}px`; // fixed: the drawn rectangle's width
+      ta.style.width = `${curW() * z}px`; // drawn rectangle's width, or the content's when auto
       ta.style.minHeight = `${contentH() * z}px`; // grows downward with content
       bar.style.left = `${r.left + s.x}px`;
       bar.style.top = `${r.top + s.y - 46}px`;
@@ -815,10 +820,11 @@ export function buildUI(
       bar.remove();
       if (target) state.hidden.delete(target.id);
       const text = value().replace(/\s+$/, '');
-      const h = Math.max(rect.h, layoutHeight(layoutText(text || ' ', family, fontSize, rect.w)));
+      const w = auto ? Math.max(40, layoutWidth(layoutText(text || ' ', family, fontSize, 1e6), family) + 4) : rect.w;
+      const h = Math.max(auto ? 0 : rect.h, layoutHeight(layoutText(text || ' ', family, fontSize, w)));
       if (target) {
         if (color !== target.color) store.recolorElements([target.id], color);
-        if (text === target.text && family === (target.font ?? 'franklin') && fontSize === target.fontSize) {
+        if (text === target.text && family === (target.font ?? 'franklin') && fontSize === target.fontSize && w === target.w) {
           invalidate();
           return;
         }
@@ -826,7 +832,7 @@ export function buildUI(
           store.updateText(
             target.id,
             { text: target.text, w: target.w, h: target.h, font: target.font ?? 'franklin', fontSize: target.fontSize },
-            { text, w: rect.w, h, font: family, fontSize },
+            { text, w, h, font: family, fontSize },
           );
         } else {
           store.deleteElements([target]);
@@ -834,8 +840,8 @@ export function buildUI(
       } else if (text) {
         store.addElement({
           id: uid('tx'),
-          kind: 'text', x: rect.x, y: rect.y, w: rect.w, h,
-          color, fontSize, font: family, text,
+          kind: 'text', x: rect.x, y: rect.y, w, h,
+          color, fontSize, font: family, text, auto: auto || undefined,
           layer: state.paintBehind ? 'back' : 'front',
           frame: state.activeFrameId ?? undefined,
           alayer: state.activeLayerId ?? undefined,

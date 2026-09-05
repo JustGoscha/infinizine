@@ -88,6 +88,17 @@ export function layoutHeight(lines: RichLine[]): number {
   return lines.reduce((a, l) => a + l.size * LINE_HEIGHT, 0);
 }
 
+/** Widest line, for auto-sized boxes (lay out with a huge maxW first). */
+export function layoutWidth(lines: RichLine[], family: string): number {
+  let w = 0;
+  for (const line of lines) {
+    let lw = 0;
+    for (const seg of line.segs) lw += segWidth(family, line, seg);
+    w = Math.max(w, lw);
+  }
+  return w;
+}
+
 export function segWidth(family: string, line: RichLine, seg: Seg): number {
   mctx.font = fontFor(family, line.size, seg.b, seg.i);
   return mctx.measureText(seg.t).width;

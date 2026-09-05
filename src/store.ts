@@ -3,7 +3,7 @@
 import { AnimArea, AnimFrame, AnimLayer, Doc, Element, Page, emptyDoc, uid } from './types';
 
 type TextContent = { text: string; w: number; h: number; font?: string; fontSize?: number };
-type TextMetrics = { x: number; w: number; h: number; fontSize: number };
+type TextMetrics = { x: number; w: number; h: number; fontSize: number; auto?: boolean };
 type BoxRect = { x: number; y: number; w: number; h: number };
 
 type Op =
@@ -372,6 +372,7 @@ export class Store {
           el.w = op.after.w;
           el.h = op.after.h;
           el.fontSize = op.after.fontSize;
+          el.auto = op.after.auto;
         }
         break;
       }

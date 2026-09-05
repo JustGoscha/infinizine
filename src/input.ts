@@ -180,6 +180,7 @@ export class InputState {
   onTextEdit: (
     target: import('./types').TextBox | null,
     rect: { x: number; y: number; w: number; h: number },
+    auto?: boolean, // tap-created: width follows the content
   ) => void = () => {};
 }
 
@@ -1020,10 +1021,11 @@ export function attachInput(
     if (resizeText) {
       const el = resizeText;
       resizeText = null;
-      const after = { x: el.x, w: el.w, h: el.h, fontSize: el.fontSize };
+      // resizing by hand fixes the size: the box stops following its content
+      const after = { x: el.x, w: el.w, h: el.h, fontSize: el.fontSize, auto: false };
       // revert live mutation, commit as one undoable op
       el.x = resizeStart.x; el.w = resizeStart.w; el.h = resizeStart.h; el.fontSize = resizeStart.fontSize;
-      store.resizeText(el.id, { x: resizeStart.x, w: resizeStart.w, h: resizeStart.h, fontSize: resizeStart.fontSize }, after);
+      store.resizeText(el.id, { x: resizeStart.x, w: resizeStart.w, h: resizeStart.h, fontSize: resizeStart.fontSize, auto: el.auto }, after);
       return;
     }
     erased = [];
@@ -1059,11 +1061,13 @@ export function attachInput(
     if (state.textRect) {
       let r = state.textRect;
       state.textRect = null;
+      let auto = false;
       if (r.w < 12 || r.h < 12) {
-        // a tap: give a sensible default box at the tap point
-        r = { x: textDragStart.x, y: textDragStart.y, w: 220, h: 60 };
+        // a tap: an auto-sizing box that grows with what you type
+        r = { x: textDragStart.x, y: textDragStart.y, w: 40, h: 30 };
+        auto = true;
       }
-      state.onTextEdit(null, r);
+      state.onTextEdit(null, r, auto);
       invalidate();
       return;
     }
