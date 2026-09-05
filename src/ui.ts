@@ -387,10 +387,11 @@ export function buildUI(
     writePref(`infinizine-color-${store.docId}`, c);
     writePref('infinizine-last-color', c);
     state.rememberTool();
-    const textIds = store.doc.elements
-      .filter((el) => el.kind === 'text' && state.selection.has(el.id))
+    // a colour pick recolours whatever is selected: strokes, fills and text alike
+    const ids = store.doc.elements
+      .filter((el) => el.kind !== 'image' && state.selection.has(el.id))
       .map((el) => el.id);
-    if (textIds.length) store.recolorElements(textIds, c);
+    if (ids.length) store.recolorElements(ids, c);
     refresh();
     invalidate();
   }
