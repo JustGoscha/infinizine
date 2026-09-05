@@ -214,3 +214,12 @@ function hslToHex(h: number, s: number, l: number): string {
   };
   return `#${f(0)}${f(8)}${f(4)}`;
 }
+
+/** Palette picker sections (ids not listed fall into "More"). */
+export const PALETTE_GROUPS: { label: string; ids: string[] }[] = [
+  { label: 'Print & ink', ids: ['cmyk', 'ink', 'riso', 'newsprint', 'blueprint'] },
+  { label: 'Retro hardware', ids: ['gameboy', 'nes', 'snes', 'cga'] },
+  { label: 'Painterly', ids: ['pastel', 'vibrant', 'autumn', 'fauve', 'markers', 'gelato'] },
+  { label: 'Nature', ids: ['ocean', 'forest', 'sunset', 'jungle'] },
+  { label: 'Design', ids: ['bauhaus'] },
+];

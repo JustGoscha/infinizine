@@ -5,7 +5,7 @@ import { Renderer } from './render';
 import { baseZoom as baseZoomFn } from './camera';
 import { Store } from './store';
 import { Camera, baseZoom, pxPerMm, setPxPerMm } from './camera';
-import { PALETTES, getPalette, shades } from './palettes';
+import { PALETTES, PALETTE_GROUPS, getPalette, shades } from './palettes';
 import { isPattern, patternPreviewCSS, patternLabel, PATTERN_CATEGORIES } from './patterns';
 import { UNITS_PER_MM, uid, FORMAT_VERSION, FILL_BLENDS } from './types';
 import { type Fmt, PRIMARY_FORMATS, FORMAT_GROUPS, MORE_FORMATS, fitPage, customFormats, saveCustomFormat, mm } from './formats';
@@ -460,7 +460,7 @@ export function buildUI(
       const cancelLp = () => clearTimeout(lp);
       dot.addEventListener('pointerup', cancelLp);
       dot.addEventListener('pointerleave', cancelLp);
-      wrap.append(fly, dot);
+      if (hueList.length) wrap.append(fly, dot); else wrap.append(dot); // strict palettes: no (empty) shade popover
       palRow.appendChild(wrap);
     }
     refresh();
@@ -469,14 +469,19 @@ export function buildUI(
   function buildPalettePopover() {
     const preset = getPalette(store.doc.palette);
     palettePop.innerHTML = `
-      <div class="pal-presets">${PALETTES.map(
-        (p) => `<button class="pal-preset ${p.id === preset.id ? 'active' : ''}" data-id="${p.id}">
+      <div class="pal-presets">${(() => {
+        const listed = new Set(PALETTE_GROUPS.flatMap((g) => g.ids));
+        const groups = [...PALETTE_GROUPS, { label: 'More', ids: PALETTES.filter((p) => !listed.has(p.id)).map((p) => p.id) }]
+          .filter((g) => g.ids.length);
+        const card = (p: (typeof PALETTES)[number]) => `<button class="pal-preset ${p.id === preset.id ? 'active' : ''}" data-id="${p.id}">
           <span class="pal-preset-name">${p.name}</span>
           <span class="pal-preview">${p.hues
-            .map((c) => `<i style="background:${isPattern(c) ? patternPreviewCSS(c, undefined, 6) : c}"></i>`)
+            .map((c: string) => `<i style="background:${isPattern(c) ? patternPreviewCSS(c, undefined, 6) : c}"></i>`)
             .join('')}</span>
-        </button>`,
-      ).join('')}</div>
+        </button>`;
+        return groups.map((g) => `<div class="pal-group-label">${g.label}</div>${g.ids
+          .map((id) => PALETTES.find((p) => p.id === id)).filter((p): p is (typeof PALETTES)[number] => !!p).map(card).join('')}`).join('');
+      })()}</div>
       <label class="pal-custom">custom <input type="color" id="custom-color" value="${state.color}"></label>
       <div class="paper-row">
         <span class="paper-label">pattern</span>
