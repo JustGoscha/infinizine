@@ -1389,17 +1389,18 @@ export class Renderer {
       ctx.strokeStyle = '#2A241A';
       arrow(hx, hy, dx, dy);
     }
-    // delete handle: top-right, away from the move handle
+    // delete handle: top-right, away from the move handle — a small bin (an X means "close" elsewhere)
     const dh = deleteHandleRect(x, y, w, z);
     ctx.fillStyle = '#FDFCF8';
     ctx.strokeStyle = '#D6336C';
     ctx.fillRect(dh.x, dh.y, dh.s, dh.s);
     ctx.strokeRect(dh.x, dh.y, dh.s, dh.s);
+    const u = dh.s / 24, bx = dh.x + dh.s * 0.15, by = dh.y + dh.s * 0.15, k = 0.7 * dh.s / 24;
+    const P = (px: number, py: number) => [bx + px * k * (1 / u) * u, by + py * k * (1 / u) * u] as const;
     ctx.beginPath();
-    ctx.moveTo(dh.x + dh.s * 0.3, dh.y + dh.s * 0.3);
-    ctx.lineTo(dh.x + dh.s * 0.7, dh.y + dh.s * 0.7);
-    ctx.moveTo(dh.x + dh.s * 0.7, dh.y + dh.s * 0.3);
-    ctx.lineTo(dh.x + dh.s * 0.3, dh.y + dh.s * 0.7);
+    let p = P(4, 7); ctx.moveTo(p[0], p[1]); p = P(20, 7); ctx.lineTo(p[0], p[1]);
+    p = P(9, 7); ctx.moveTo(p[0], p[1]); p = P(9.5, 4); ctx.lineTo(p[0], p[1]); p = P(14.5, 4); ctx.lineTo(p[0], p[1]); p = P(15, 7); ctx.lineTo(p[0], p[1]);
+    p = P(6.5, 7); ctx.moveTo(p[0], p[1]); p = P(7.5, 20); ctx.lineTo(p[0], p[1]); p = P(16.5, 20); ctx.lineTo(p[0], p[1]); p = P(17.5, 7); ctx.lineTo(p[0], p[1]);
     ctx.stroke();
   }
 

@@ -366,7 +366,7 @@ html, body {
 /* ---------- animation timeline (floating window) ---------- */
 .timeline {
   position: fixed;
-  right: 18px;
+  right: 84px; /* clear of the floating selection menu, so the close button stays reachable */
   bottom: 96px;
   width: 520px;
   max-width: calc(100vw - 24px);
@@ -482,7 +482,7 @@ html, body {
   border-right: 1px solid var(--line);
   z-index: 2;
 }
-.tl-ruler-scale { position: relative; flex: 1 0 auto; }
+.tl-ruler-scale { position: relative; flex: 1 0 auto; touch-action: pan-x; } /* the free-to-swipe stripe: scrolls, never selects */
 .tl-tick {
   position: absolute;
   bottom: 0;
@@ -514,7 +514,17 @@ html, body {
 .tl-track-head button:active { background: var(--ink); color: var(--card); }
 .timeline.hidden { display: none !important; }
 
-.tl-head { display: flex; align-items: center; gap: 6px; margin-bottom: 8px; flex-wrap: wrap; row-gap: 4px; }
+.tl-head { display: flex; align-items: center; gap: 6px; margin-bottom: 8px; flex-wrap: wrap; row-gap: 4px; padding-right: 40px; }
+.timeline { position: fixed; }
+/* the one obvious way out: a big close in the panel's top-right corner */
+.tl-close {
+  position: absolute; top: 8px; right: 8px; width: 34px; height: 34px;
+  border: 1.5px solid var(--ink) !important; border-radius: 3px !important; background: var(--card) !important;
+  display: grid; place-items: center; padding: 0 !important;
+}
+.tl-close svg { width: 18px; height: 18px; }
+.tl-trash svg { width: 16px; height: 16px; color: #D6336C; }
+.doc-del svg { width: 15px; height: 15px; }
 .tl-grip { cursor: grab; color: var(--ink-soft); font-size: 15px; padding: 2px 4px; touch-action: none; }
 .tl-name { font-weight: 700; margin-right: auto; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
 .tl-head button {
@@ -1782,3 +1792,24 @@ body.presenting .pages-panel { z-index: 60; }
 .pat-shade.active { outline: 2px solid var(--ink); outline-offset: 1px; }
 .pat-more { background: transparent; font-weight: 700; letter-spacing: 0.05em; color: var(--ink); }
 .pat-fly-sep { display: block; height: 1px; background: var(--line); margin: 1px 0; }
+
+/* frame navigator: always visible above the tracks */
+.tl-nav { display: flex; align-items: center; gap: 4px; margin-top: 2px; }
+.tl-nav-play svg { width: 18px; height: 18px; }
+.tl-jog-off { cursor: default; color: var(--ink-soft); }
+.tl-nav button {
+  border: 1.5px solid var(--line); background: transparent; color: var(--ink); border-radius: 2px;
+  min-width: 34px; height: 30px; font: inherit; font-size: 16px; font-weight: 700; cursor: pointer; padding: 0 8px;
+}
+.tl-nav button:active { background: var(--ink); color: var(--card); }
+.tl-jog {
+  flex: 1; position: relative; height: 30px; border: 1.5px solid var(--line); border-radius: 2px;
+  display: flex; align-items: center; justify-content: center; cursor: ew-resize; touch-action: none; user-select: none; -webkit-user-select: none;
+  overflow: hidden; --jog: 0px;
+}
+.tl-jog-ticks {
+  position: absolute; inset: 0;
+  background: repeating-linear-gradient(90deg, rgba(90,75,50,0.28) 0 1px, transparent 1px 12px);
+  background-position-x: var(--jog);
+}
+.tl-pos { position: relative; font-size: 12px; font-weight: 700; padding: 1px 8px; background: var(--card); border-radius: 2px; }

@@ -1136,6 +1136,15 @@ export function buildUI(
   tl.className = 'timeline hidden';
   document.body.appendChild(tl);
   let tlAreaId: string | null = null;
+  let tlStep: (d: number) => void = () => {}; // frame stepper of the current render (arrow keys, jog)
+  window.addEventListener('keydown', (e) => {
+    if (!tlAreaId || tl.classList.contains('hidden') || state.presenting) return;
+    const t = e.target as HTMLElement | null;
+    if (t && (t.isContentEditable || /^(INPUT|TEXTAREA|SELECT)$/.test(t.tagName))) return;
+    if (e.key === 'ArrowLeft') { e.preventDefault(); tlStep(-1); }
+    else if (e.key === 'ArrowRight') { e.preventDefault(); tlStep(1); }
+    else if (e.key === ' ') { e.preventDefault(); (tl.querySelector('#tl-play') as HTMLElement | null)?.click(); }
+  });
   let tlView: 'frames' | 'live' = 'frames';
   let tlZoom = 1; // horizontal duration-resolution zoom
   let tlDock: 'float' | 'bottom' | 'top' | 'left' | 'right' = 'float';
@@ -1391,23 +1400,28 @@ export function buildUI(
   function renderTimeline() {
     const area = tlAreaId ? store.area(tlAreaId) : undefined;
     if (!area) { closeTimeline(); return; }
-    const prevScroll = (tl.querySelector('.tl-tracks') as HTMLElement | null)?.scrollTop ?? 0;
+    const prevTracks = tl.querySelector('.tl-tracks') as HTMLElement | null;
+    const prevScroll = prevTracks?.scrollTop ?? 0;
+    const prevScrollLeft = prevTracks?.scrollLeft ?? 0;
+    const prevActive = prevTracks?.querySelector('.tl-frame.active')?.getAttribute('data-fid') ?? null;
     if (!area.layers.some((l) => l.id === state.activeLayerId)) {
       state.activeLayerId = area.layers[area.layers.length - 1]?.id ?? null;
     }
-    const activeLayer = area.layers.find((l) => l.id === state.activeLayerId)!;
-    if (!activeLayer.frames.some((f) => f.id === state.activeFrameId)) {
+    // an undo can leave the area without layers or the active frame gone: never crash, just show what's there
+    const activeLayer = area.layers.find((l) => l.id === state.activeLayerId);
+    if (activeLayer && !activeLayer.frames.some((f) => f.id === state.activeFrameId)) {
       state.activeFrameId = activeLayer.frames[0]?.id ?? null;
     }
-    const fid = state.activeFrameId!;
-    const lid = state.activeLayerId!;
+    if (!activeLayer) state.activeFrameId = null;
+    const fid = state.activeFrameId ?? '';
+    const lid = state.activeLayerId ?? '';
+    const frameIdx = activeLayer ? activeLayer.frames.findIndex((f) => f.id === fid) : -1;
     const nFrameLayers = area.layers.filter((l) => l.kind !== 'live').length;
     const nLiveLayers = area.layers.filter((l) => l.kind === 'live').length;
     tl.innerHTML = `
       <div class="tl-head">
         <span class="tl-grip" title="Drag to move">⠿</span>
         <span class="tl-name" title="Double-click to rename">${area.name}</span>
-        <button id="tl-play" title="Play/pause">${state.playingAreas ? '⏸' : '▶'}</button>
         <span class="tl-time" id="tl-time"></span>
         <input id="tl-fps" type="number" min="1" max="60" value="${area.fps}" title="fps"><span class="tl-fpslabel">fps</span>
         <button id="tl-zoom-out" class="tl-zoom" title="Zoom timeline out">−</button>
@@ -1426,9 +1440,9 @@ export function buildUI(
                   ? svg('<rect x="4" y="4" width="16" height="16"/><path d="M14 4 H20 V20 H14 Z" fill="currentColor"/>')
                   : svg('<rect x="4" y="4" width="16" height="16"/><path d="M4 14 H20"/>')
         }</button>
-        <button id="tl-delarea" title="Delete area">🗑</button>
-        <button id="tl-close" title="Close">✕</button>
+        <button id="tl-delarea" class="tl-trash" title="Delete this animation area">${svg('<path d="M4 7 H20 M9 7 V5 A1 1 0 0 1 10 4 H14 A1 1 0 0 1 15 5 V7 M6.5 7 L7.5 20 H16.5 L17.5 7"/>')}</button>
       </div>
+      <button id="tl-close" class="tl-close" title="Close the timeline">${svg('<path d="M6 6 L18 18 M18 6 L6 18"/>')}</button>
       <div class="tl-tabs">
         <button id="tl-tab-frames" class="${tlView === 'frames' ? 'on' : ''}">keyframes<span class="tl-tab-count">${nFrameLayers}</span>
           <span id="tl-eye-frames" class="tl-tab-eye${area.hideFrames ? ' off' : ''}" title="Show/hide all keyframe layers">${area.hideFrames ? svg('<path d="M4 5 L20 19"/><path d="M3 12 C6 7 9 5.5 12 5.5 C15 5.5 18 7 21 12 C19.5 14.5 17.8 16.2 16 17.2 M9.5 17.9 C7.2 17.1 5 15.2 3 12"/>') : svg('<path d="M3 12 C6 6.8 9 5 12 5 C15 5 18 6.8 21 12 C18 17.2 15 19 12 19 C9 19 6 17.2 3 12 Z"/><circle cx="12" cy="12" r="3"/>')}</span>
@@ -1458,6 +1472,15 @@ export function buildUI(
         <button id="tl-taper" class="tl-toggle ${state.liveInkTaper ? 'on' : ''}" title="Tail eats away over its life">taper</button>
         <button id="tl-showink" class="tl-toggle ${state.showLiveInk ? 'on' : ''}" title="Show live ink while editing (it always shows in playback)">show</button>
       </div>`}
+      <div class="tl-nav">
+        <button id="tl-play" class="tl-nav-play" title="Play / pause (space)">${state.playingAreas ? svg('<path d="M8 5v14M16 5v14"/>') : svg('<path d="M7 5 L19 12 L7 19 Z"/>')}</button>
+        ${activeLayer && activeLayer.kind !== 'live'
+          ? `<button id="tl-prev" title="Previous frame (←)">‹</button>
+        <div class="tl-jog" id="tl-jog" title="Swipe or scroll to flip through the frames"><span class="tl-jog-ticks"></span><span class="tl-pos" id="tl-pos">${frameIdx + 1} / ${activeLayer.frames.length}</span></div>
+        <button id="tl-next" title="Next frame (→)">›</button>
+        <button id="tl-addnext" title="New frame after this one">＋</button>`
+          : `<div class="tl-jog tl-jog-off"><span class="tl-pos">live lines</span></div>`}
+      </div>
     `;
 
     (tl.querySelector('#tl-tab-frames') as HTMLElement).addEventListener('click', () => {
@@ -1564,7 +1587,7 @@ export function buildUI(
         <button data-a="down" title="Layer down">↓</button>
         ${l.kind === 'live'
           ? `<button data-a="menu" title="More">⋮</button>`
-          : `<button data-a="del" title="Delete layer">✕</button>`}`;
+          : `<button data-a="del" class="tl-trash" title="Delete layer">${svg('<path d="M4 7 H20 M9 7 V5 A1 1 0 0 1 10 4 H14 A1 1 0 0 1 15 5 V7 M6.5 7 L7.5 20 H16.5 L17.5 7"/>')}</button>`}`;
       head.querySelector('.tl-lname')?.addEventListener('dblclick', (e) => {
         e.stopPropagation();
         inlineRename(e.target as HTMLElement, l.name, (v) => store.renameAnimLayer(area.id, l.id, v));
@@ -1685,32 +1708,27 @@ export function buildUI(
         const grip = document.createElement('span');
         grip.className = 'tl-frame-grip';
         grip.title = 'Drag to change duration';
-        grip.addEventListener('pointerdown', (e) => {
-          e.stopPropagation(); // not a reorder / tap
-          e.preventDefault();
-          grip.setPointerCapture(e.pointerId);
-          const startX = e.clientX;
-          const startDur = f.duration;
+        // hold (touch/pen) then drag to change the duration; a plain swipe over the edge just scrolls
+        grip.addEventListener('pointerdown', (e) => e.stopPropagation()); // not a reorder / tap of the tile
+        {
           const perTick = 30 * tlZoom;
-          let dur = startDur;
-          const onMove = (ev: PointerEvent) => {
-            dur = Math.max(1, Math.round(startDur + (ev.clientX - startX) / perTick));
-            b.style.width = `${Math.max(14, perTick * dur)}px`;
-            b.classList.add('resizing');
-          };
-          const onUp = () => {
-            grip.removeEventListener('pointermove', onMove);
-            grip.removeEventListener('pointerup', onUp);
-            grip.removeEventListener('pointercancel', onUp);
-            b.classList.remove('resizing');
-            if (dur !== startDur) store.setFrameDuration(area.id, l.id, f.id, dur);
-            renderTimeline();
-            invalidate();
-          };
-          grip.addEventListener('pointermove', onMove);
-          grip.addEventListener('pointerup', onUp);
-          grip.addEventListener('pointercancel', onUp);
-        });
+          let dur = f.duration;
+          pressDrag(grip, {
+            onLift: () => b.classList.add('resizing'),
+            onMove: (_ev, dx) => {
+              dur = Math.max(1, Math.round(f.duration + dx / perTick));
+              b.style.width = `${Math.max(14, perTick * dur)}px`;
+              b.classList.add('resizing');
+            },
+            onEnd: () => {
+              b.classList.remove('resizing');
+              if (dur !== f.duration) store.setFrameDuration(area.id, l.id, f.id, dur);
+              renderTimeline();
+              invalidate();
+            },
+            onTap: () => { b.classList.remove('resizing'); },
+          });
+        }
         b.appendChild(grip);
         // tap selects; horizontal drag reorders within the layer
         let marker: HTMLElement | null = null;
@@ -1864,11 +1882,11 @@ export function buildUI(
       closeTimeline();
     });
     q('#tl-close').addEventListener('click', closeTimeline);
-    const framesOps = activeLayer.kind !== 'live';
+    const framesOps = !!activeLayer && activeLayer.kind !== 'live';
     on('#tl-add', () => {
       if (!framesOps) return;
-      const idx = activeLayer.frames.findIndex((f) => f.id === fid);
-      const cur = activeLayer.frames[idx];
+      const idx = activeLayer!.frames.findIndex((f) => f.id === fid);
+      const cur = activeLayer!.frames[idx];
       const nf = store.addFrame(area.id, lid, idx + 1, cur?.duration ?? 1);
       state.activeFrameId = nf.id;
       renderTimeline();
@@ -1889,7 +1907,7 @@ export function buildUI(
     });
     const dur = (d: number) => {
       if (!framesOps) return;
-      const f = activeLayer.frames.find((x) => x.id === fid);
+      const f = activeLayer!.frames.find((x) => x.id === fid);
       if (f) store.setFrameDuration(area.id, lid, fid, f.duration + d);
       renderTimeline();
       invalidate();
@@ -1898,6 +1916,90 @@ export function buildUI(
     on('#tl-longer', () => dur(1));
     const tracksDiv = tl.querySelector('.tl-tracks') as HTMLElement;
     tracksDiv.scrollTop = prevScroll;
+    tracksDiv.scrollLeft = prevScrollLeft;
+    // the strip keeps its place; when the active frame changed, bring it into view
+    if (fid && fid !== prevActive) {
+      const tile = tracksDiv.querySelector<HTMLElement>(`.tl-frame[data-fid="${fid}"]`);
+      if (tile) {
+        const tr = tracksDiv.getBoundingClientRect(), fr = tile.getBoundingClientRect();
+        const headW = (tracksDiv.querySelector('.tl-track-head') as HTMLElement | null)?.offsetWidth ?? 130;
+        if (fr.left < tr.left + headW) tracksDiv.scrollLeft -= tr.left + headW - fr.left + 24;
+        else if (fr.right > tr.right) tracksDiv.scrollLeft += fr.right - tr.right + 24;
+      }
+    }
+    // frame navigation: buttons, the jog strip (drag / wheel), arrow keys
+    // `light`: while jogging, only the tile highlight and counter update — the panel isn't rebuilt under the finger
+    const stepFrame = (d: number, light = false) => {
+      if (!activeLayer || activeLayer.kind === 'live' || !activeLayer.frames.length) return;
+      const cur = activeLayer.frames.findIndex((f) => f.id === state.activeFrameId);
+      const i = Math.max(0, Math.min(activeLayer.frames.length - 1, cur + d));
+      if (i === cur) return;
+      state.activeFrameId = activeLayer.frames[i].id;
+      if (light) {
+        tracksDiv.querySelectorAll('.tl-frame.active').forEach((t) => t.classList.remove('active'));
+        const tile = tracksDiv.querySelector<HTMLElement>(`.tl-frame[data-fid="${state.activeFrameId}"]`);
+        tile?.classList.add('active');
+        if (tile) {
+          const tr = tracksDiv.getBoundingClientRect(), fr = tile.getBoundingClientRect();
+          const headW = (tracksDiv.querySelector('.tl-track-head') as HTMLElement | null)?.offsetWidth ?? 130;
+          if (fr.left < tr.left + headW) tracksDiv.scrollLeft -= tr.left + headW - fr.left + 24;
+          else if (fr.right > tr.right) tracksDiv.scrollLeft += fr.right - tr.right + 24;
+        }
+        const pos = tl.querySelector('#tl-pos');
+        if (pos) pos.textContent = `${i + 1} / ${activeLayer.frames.length}`;
+        invalidate();
+        return;
+      }
+      renderTimeline();
+      invalidate();
+    };
+    tlStep = stepFrame;
+    on('#tl-prev', () => stepFrame(-1));
+    on('#tl-next', () => stepFrame(1));
+    on('#tl-addnext', () => {
+      if (!activeLayer || activeLayer.kind === 'live') return;
+      const cur = activeLayer.frames[frameIdx];
+      const nf = store.addFrame(area.id, lid, frameIdx + 1, cur?.duration ?? 1);
+      state.activeFrameId = nf.id;
+      renderTimeline();
+      invalidate();
+    });
+    const jog = tl.querySelector('#tl-jog') as HTMLElement | null;
+    if (jog) {
+      const STEP_PX = 22;
+      jog.addEventListener('pointerdown', (e) => {
+        e.preventDefault();
+        jog.setPointerCapture(e.pointerId);
+        let lastX = e.clientX;
+        let acc = 0;
+        let shift = 0;
+        const onMove = (ev: PointerEvent) => {
+          acc += ev.clientX - lastX;
+          shift += ev.clientX - lastX;
+          lastX = ev.clientX;
+          jog.style.setProperty('--jog', `${shift}px`);
+          const steps = Math.trunc(acc / STEP_PX);
+          if (steps) {
+            acc -= steps * STEP_PX;
+            stepFrame(steps, true);
+          }
+        };
+        const onUp = () => {
+          jog.removeEventListener('pointermove', onMove);
+          jog.removeEventListener('pointerup', onUp);
+          jog.removeEventListener('pointercancel', onUp);
+          renderTimeline(); // settle: full rebuild with the new active frame
+        };
+        jog.addEventListener('pointermove', onMove);
+        jog.addEventListener('pointerup', onUp);
+        jog.addEventListener('pointercancel', onUp);
+      });
+      jog.addEventListener('wheel', (e) => {
+        e.preventDefault();
+        const d = Math.abs(e.deltaX) > Math.abs(e.deltaY) ? e.deltaX : e.deltaY;
+        if (Math.abs(d) >= 4) stepFrame(d > 0 ? 1 : -1);
+      }, { passive: false });
+    }
     if (tlHeight) tracksDiv.style.maxHeight = `${tlHeight}px`;
     // docked: a grab edge resizes the tracks up/down
     if (tlDock !== 'float') {
@@ -1979,7 +2081,7 @@ export function buildUI(
           (m) => `<div class="doc-row ${m.id === store.docId ? 'active' : ''}" data-id="${m.id}">
             <span class="doc-row-name">${m.name}</span>
             <span class="doc-row-date">${new Date(m.updated).toLocaleDateString()}</span>
-            <button class="doc-del" data-id="${m.id}" title="Delete">✕</button>
+            <button class="doc-del" data-id="${m.id}" title="Delete zine">${svg('<path d="M4 7 H20 M9 7 V5 A1 1 0 0 1 10 4 H14 A1 1 0 0 1 15 5 V7 M6.5 7 L7.5 20 H16.5 L17.5 7"/>')}</button>
           </div>`,
         )
         .join('')}</div>
