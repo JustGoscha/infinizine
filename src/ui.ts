@@ -401,6 +401,7 @@ export function buildUI(
   function buildPalRow() {
     palRow.innerHTML = '';
     const preset = getPalette(store.doc.palette);
+    palRow.classList.toggle('many', preset.hues.length > 7); // pattern palettes: smaller dots so the bar fits
     for (const hue of preset.hues) {
       const wrap = document.createElement('div');
       wrap.className = 'pal-wrap';
