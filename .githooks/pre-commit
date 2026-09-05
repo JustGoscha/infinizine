@@ -7,6 +7,23 @@
 changed=$(git diff --cached --name-only --diff-filter=ACMR)
 echo "$changed" | grep -Eq '^(src/|index\.html|vite\.config\.ts|public/)' || exit 0
 
+# --- compatibility nudge: the document model / persistence changed? think for a sec ---
+if echo "$changed" | grep -Eq '^src/(types\.ts|store\.ts|richedit\.ts|text\.ts)$'; then
+  head_fmt=$(git show HEAD:src/types.ts 2>/dev/null | grep -E 'export const FORMAT_VERSION' | sed -E 's/[^0-9]*([0-9]+).*/\1/')
+  new_fmt=$(git show :src/types.ts | grep -E 'export const FORMAT_VERSION' | sed -E 's/[^0-9]*([0-9]+).*/\1/')
+  echo ""
+  echo "ℹ Compatibility check — you touched: $(echo "$changed" | grep -E '^src/(types|store|richedit|text)\.ts$' | tr '\n' ' ')"
+  echo "  · Does a zine saved by the PREVIOUS version still load and render identically?"
+  echo "  · Does a zine saved NOW still open in the previous version (or is the new field optional/ignored)?"
+  echo "  · New required field, renamed field, or new text/markup syntax → bump FORMAT_VERSION + add a migrateDoc step."
+  if [ -n "$head_fmt" ] && [ "$head_fmt" = "$new_fmt" ]; then
+    echo "  FORMAT_VERSION unchanged ($new_fmt): fine if the change is additive/optional."
+  else
+    echo "  FORMAT_VERSION: $head_fmt → $new_fmt — make sure migrateDoc handles $head_fmt → $new_fmt."
+  fi
+  echo ""
+fi
+
 head_ver=$(git show HEAD:package.json 2>/dev/null | grep -E '"version"' | head -1 | sed -E 's/.*"version": *"([^"]+)".*/\1/')
 new_ver=$(git show :package.json | grep -E '"version"' | head -1 | sed -E 's/.*"version": *"([^"]+)".*/\1/')
 
