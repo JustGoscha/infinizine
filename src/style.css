@@ -1725,3 +1725,11 @@ body.presenting .popover { display: none; }
 
 .pat-blend { flex-wrap: wrap; }
 .pat-blend button { padding: 4px 7px; font-size: 11px; }
+
+.pat-solid { position: relative; }
+.pat-solid::after {
+  content: ''; position: absolute; inset: 3px;
+  background: linear-gradient(135deg, transparent 47%, rgba(255,255,255,0.9) 48%, rgba(255,255,255,0.9) 52%, transparent 53%);
+  pointer-events: none;
+}
+.pat-solid.active::after { display: none; }

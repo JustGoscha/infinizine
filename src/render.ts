@@ -8,11 +8,11 @@ import { layoutText, fontFor, segWidth, LINE_HEIGHT } from './text';
 import { moveHandleRect, moveAllHandleRect, deleteHandleRect, eyeHandleRect, type InputState } from './input';
 import { Store, ChangeInfo } from './store';
 import { formatLabel } from './formats';
-import { patternTile, patternTileSize, patternCellSize, snapPolygonToCells, motifPath, isPixelPattern } from './patterns';
+import { patternTile, patternTileSize, patternCellSize, cellPath, motifPath, isPixelPattern } from './patterns';
 import { reportCrash } from './crash';
 
 type View = { x: number; y: number; w: number; h: number }; // camera viewport, world coords
-interface CacheEntry { solid?: boolean; path: Path2D; bbox: BBox; passes?: Path2D[]; core?: Path2D; detail: number }
+interface CacheEntry { solid?: boolean; zoomFree?: boolean; path: Path2D; bbox: BBox; passes?: Path2D[]; core?: Path2D; detail: number }
 
 export class Renderer {
   private ctx: CanvasRenderingContext2D;
@@ -24,7 +24,8 @@ export class Renderer {
     canvas: HTMLCanvasElement;
     valid: boolean;
     key: string; // camera + size + style fingerprint
-  } = { canvas: document.createElement('canvas'), valid: false, key: '' };
+    cam: { x: number; y: number; zoom: number; vw: number; vh: number; dpr: number } | null; // what it was built for
+  } = { canvas: document.createElement('canvas'), valid: false, key: '', cam: null };
   // pencil stamp lists are zoom-independent: computed once per stroke
   private stampCache = new Map<string, { n: number; stamps: { x: number; y: number; p: number; a?: number }[] }>();
   // zoom gestures: keep drawing stale rasters (scaled) and rebuild only when the
@@ -188,6 +189,7 @@ export class Renderer {
     }
     st.valid = true;
     st.key = this.staticKey();
+    st.cam = { x: this.camera.x, y: this.camera.y, zoom: this.camera.zoom, vw, vh, dpr };
   }
 
   /** Append freshly committed elements onto the (valid) static layer. */
@@ -319,21 +321,31 @@ export class Renderer {
   private entry(el: Stroke | FillShape): CacheEntry {
     const detail = this.detail();
     let e = this.cache.get(el.id);
-    if (!e || e.detail !== detail) {
+    if (!e || (e.detail !== detail && !e.zoomFree)) {
       let path: Path2D, core: Path2D | undefined;
       if (el.kind === 'stroke' && el.tool === 'marker') {
         const mp = markerPaths(el.points, el.baseWidth, detail);
         path = mp.fill; core = mp.hull;
       } else if (el.kind === 'fill' && el.pattern && patternCellSize(el.pattern)) {
-        // pixel patterns: the outline snaps to the cell grid so no cell is cut in half
-        path = snapPolygonToCells(el.points, patternCellSize(el.pattern)!) ?? polygonPath(el.points);
+        // pixel patterns: solid geometry of the "on" cells inside the shape — whole cells,
+        // no repeating tile, so no seams between pixels (zoom-independent)
+        const cells = cellPath(el.points, el.pattern);
+        path = cells ?? polygonPath(el.points);
+        e = { path, bbox: elementBBox(el), detail, zoomFree: true, solid: !!cells };
+        this.cache.set(el.id, e);
+        return e;
       } else if (el.kind === 'fill' && el.pattern && (path = motifPath(el.points, el.pattern, el.patternAngle ?? 0)!)) {
-        // dot tones: whole dots only — the path IS the dots, filled solid
-        e = { path, bbox: elementBBox(el), detail, solid: true };
+        // dot tones: whole dots only — the path IS the dots, filled solid (zoom-independent)
+        e = { path, bbox: elementBBox(el), detail, solid: true, zoomFree: true };
+        this.cache.set(el.id, e);
+        return e;
+      } else if (el.kind === 'fill') {
+        path = polygonPath(el.points);
+        e = { path, bbox: elementBBox(el), detail, zoomFree: true };
         this.cache.set(el.id, e);
         return e;
       } else {
-        path = el.kind === 'stroke' ? outlineToPath(strokeOutline(el, detail)) : polygonPath(el.points);
+        path = outlineToPath(strokeOutline(el, detail)); // strokes (fills were handled above)
       }
       e = { path, bbox: elementBBox(el), detail, core };
       if (el.kind === 'stroke' && el.tool === 'sketch') {
@@ -647,11 +659,26 @@ export class Renderer {
     const useStatic = !presenting && this.input.hidden.size === 0 && !(live && live.layer === 'back');
     if (useStatic) {
       const st = this.staticLayer;
-      if (!st.valid || st.key !== this.staticKey()) this.buildStatic(vw, vh, dpr);
-      if (st.canvas.width && st.canvas.height) {
-        ctx.setTransform(1, 0, 0, 1, 0, 0);
-        ctx.drawImage(st.canvas, 0, 0);
-        ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
+      const zooming = frameStart - this.lastZoomChangeAt < 180;
+      const stale = !st.valid || st.key !== this.staticKey();
+      if (stale && zooming && st.valid && st.cam && st.cam.vw === vw && st.cam.vh === vh && st.cam.dpr === dpr) {
+        // mid-gesture: scale the last good bitmap into place instead of re-rendering
+        // every fill/pattern/pencil each frame; the real rebuild happens when zoom settles
+        const c = st.cam;
+        const sc = camera.zoom / c.zoom;
+        ctx.fillStyle = paper;
+        ctx.fillRect(0, 0, vw, vh);
+        const offX = (vw / 2) * (1 - sc) + (c.x - camera.x) * camera.zoom;
+        const offY = (vh / 2) * (1 - sc) + (c.y - camera.y) * camera.zoom;
+        ctx.drawImage(st.canvas, offX, offY, vw * sc, vh * sc);
+        this.dirty = true; // keep coming back until the gesture ends and we can rebuild
+      } else {
+        if (stale) this.buildStatic(vw, vh, dpr);
+        if (st.canvas.width && st.canvas.height) {
+          ctx.setTransform(1, 0, 0, 1, 0, 0);
+          ctx.drawImage(st.canvas, 0, 0);
+          ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
+        }
       }
     } else {
       // Desk (chosen paper color)

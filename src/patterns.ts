@@ -63,6 +63,50 @@ export function patternCellSize(id: string): number | null {
 }
 export const isPixelPattern = (id: string) => patternCellSize(id) !== null;
 
+/** Pixel families as a cell predicate + per-cell drawn height fraction (scanlines are thin rows). */
+function cellRule(id: string): { on: (i: number, j: number) => boolean; hFrac: number } | null {
+  const p = parse(id);
+  if (!p) return null;
+  const { fam, k } = p;
+  switch (fam) {
+    case 'bayer': { const level = [2, 5, 8, 11, 14][k - 1]; return { on: (i, j) => BAYER[((i % 4) + 4) % 4][((j % 4) + 4) % 4] < level, hFrac: 1 }; }
+    case 'stairs': return { on: (i, j) => ((((i + j) % 4) + 4) % 4) < Math.min(k, 3), hFrac: 1 };
+    case 'checker': return { on: (i, j) => ((((i + j) % 2) + 2) % 2) === 0, hFrac: 1 };
+    case 'pixnoise': { const pr = [0.1, 0.22, 0.38, 0.55, 0.72][k - 1]; return { on: (i, j) => rnd((((i % 20) + 20) % 20) * 20 + (((j % 20) + 20) % 20), 5) < pr, hFrac: 1 }; }
+    case 'scan': return { on: (i) => (((i % 2) + 2) % 2) === 0, hFrac: [0.25, 0.4, 0.55, 0.7, 0.85][k - 1] };
+    default: return null;
+  }
+}
+
+/** Pixel-pattern fill as solid geometry: every "on" cell whose centre is inside
+ * the polygon, merged into horizontal runs. No repeating tile → no resampling
+ * seams between pixels at any zoom; whole cells only at the edge. */
+export function cellPath(points: { x: number; y: number }[], id: string): Path2D | null {
+  const rule = cellRule(id);
+  const cell = patternCellSize(id);
+  if (!rule || !cell || points.length < 3) return null;
+  let minX = Infinity, minY = Infinity, maxX = -Infinity, maxY = -Infinity;
+  for (const q of points) { minX = Math.min(minX, q.x); minY = Math.min(minY, q.y); maxX = Math.max(maxX, q.x); maxY = Math.max(maxY, q.y); }
+  const c0 = Math.floor(minX / cell), c1 = Math.ceil(maxX / cell);
+  const r0 = Math.floor(minY / cell), r1 = Math.ceil(maxY / cell);
+  if ((c1 - c0) * (r1 - r0) > 600_000) return null;
+  const path = new Path2D();
+  const eps = cell * 0.02; // hairline overlap between runs so rows never show antialias seams
+  for (let r = r0; r < r1; r++) {
+    const cy = (r + 0.5) * cell;
+    let run = -1;
+    for (let c = c0; c <= c1; c++) {
+      const inside = c < c1 && rule.on(r, c) && pointInPolygon((c + 0.5) * cell, cy, points);
+      if (inside && run < 0) run = c;
+      if (!inside && run >= 0) {
+        path.rect(run * cell - eps, r * cell - eps, (c - run) * cell + 2 * eps, cell * rule.hFrac + (rule.hFrac === 1 ? 2 * eps : 0));
+        run = -1;
+      }
+    }
+  }
+  return path;
+}
+
 /** A polygon snapped to a cell grid anchored at the world origin: every cell
  * whose centre lies inside is included whole — the fill's edge becomes pixel
  * steps, never a cell cut in half. Rows are emitted as horizontal runs. */
