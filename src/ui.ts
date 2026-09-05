@@ -412,7 +412,7 @@ export function buildUI(
       const fly = document.createElement('div');
       fly.className = 'shade-flyout';
       // hardware palettes are exact: no derived shades, so no flyout
-      const hueList = preset.strict ? [] : shades(hue, preset.drama);
+      const hueList = preset.strict ? (preset.ramps?.[hue] ?? []) : shades(hue, preset.drama);
       for (const c of hueList) {
         const s = document.createElement('button');
         s.className = 'pal-shade';
@@ -2129,7 +2129,8 @@ export function buildUI(
     const drama = getPalette(store.doc.palette).drama;
     palRow.querySelectorAll<HTMLElement>('.pal-main').forEach((d) => {
       const hue = d.dataset.hue!;
-      const sh = getPalette(store.doc.palette).strict ? [] : shades(hue, drama);
+      const pr = getPalette(store.doc.palette);
+      const sh = pr.strict ? (pr.ramps?.[hue] ?? []) : shades(hue, drama);
       d.classList.toggle('active', hue === state.color || sh.includes(state.color));
       if (sh.includes(state.color) && hue !== state.color) d.style.background = isPattern(state.color) ? patternPreviewCSS(state.color) : state.color;
       else d.style.background = hue;

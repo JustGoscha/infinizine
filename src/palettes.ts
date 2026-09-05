@@ -7,6 +7,7 @@ export interface PalettePreset {
   hues: string[];
   drama?: number; // 0..1: how extreme the painterly hue-shift in shades is (default 0.5)
   strict?: boolean; // hardware palettes: only these exact colours, no derived tints/shades
+  ramps?: Record<string, string[]>; // strict palettes: exact alternative colours per hue (the swatch's "shades")
 }
 
 // Each palette: 5–6 colors — whitish, blackish, neutralish, then 2–3 accents.
@@ -33,11 +34,23 @@ export const PALETTES: PalettePreset[] = [
   },
   {
     // NES-flavoured: the console's greys plus its punchiest primaries
+    // the 2C02 master palette (54 colours) — the main row is one entry per hue family,
+    // each swatch's shades are that family's other real entries
     id: 'nes',
     strict: true,
     drama: 0.1,
     name: 'NES',
-    hues: ['#FCFCFC', '#000000', '#7C7C7C', '#E40058', '#0078F8', '#F8B800', '#00A800'],
+    hues: ['#FCFCFC', '#000000', '#7C7C7C', '#E40058', '#F83800', '#F8B800', '#00A800', '#0078F8', '#D800CC'],
+    ramps: {
+      '#FCFCFC': ['#FCFCFC', '#F8F8F8', '#BCBCBC', '#7C7C7C', '#787878', '#000000'],
+      '#7C7C7C': ['#FCFCFC', '#F8F8F8', '#BCBCBC', '#7C7C7C', '#787878', '#000000'],
+      '#E40058': ['#F8A4C0', '#F85898', '#F878F8', '#E40058', '#D800CC', '#A80020', '#940084'],
+      '#F83800': ['#F0D0B0', '#F87858', '#FCA044', '#F83800', '#E45C10', '#A81000', '#881400'],
+      '#F8B800': ['#FCE0A8', '#F8D878', '#FCA044', '#F8B800', '#AC7C00', '#503000'],
+      '#00A800': ['#B8F8B8', '#D8F878', '#B8F818', '#58D854', '#00B800', '#00A800', '#007800', '#005800'],
+      '#0078F8': ['#A4E4FC', '#3CBCFC', '#6888FC', '#0078F8', '#0058F8', '#0000FC', '#0000BC'],
+      '#D800CC': ['#F8D8F8', '#D8B8F8', '#9878F8', '#6844FC', '#D800CC', '#940084', '#4428BC'],
+    },
   },
   {
     // SNES / 16-bit: softer, more saturated mid-tones
@@ -48,11 +61,19 @@ export const PALETTES: PalettePreset[] = [
   },
   {
     // CGA / early PC: cyan-magenta glare
+    // CGA: the classic mode-4 look up front, the full 16-colour set behind each swatch
     id: 'cga',
     strict: true,
     drama: 0,
     name: 'CGA',
-    hues: ['#FFFFFF', '#000000', '#55FFFF', '#FF55FF', '#AAAAAA'],
+    hues: ['#FFFFFF', '#000000', '#55FFFF', '#FF55FF', '#AAAAAA', '#FFFF55'],
+    ramps: {
+      '#FFFFFF': ['#FFFFFF', '#AAAAAA', '#555555', '#000000'],
+      '#AAAAAA': ['#FFFFFF', '#AAAAAA', '#555555', '#000000'],
+      '#55FFFF': ['#55FFFF', '#00AAAA', '#5555FF', '#0000AA', '#55FF55', '#00AA00'],
+      '#FF55FF': ['#FF55FF', '#AA00AA', '#FF5555', '#AA0000'],
+      '#FFFF55': ['#FFFF55', '#AA5500', '#FF5555', '#55FF55'],
+    },
   },
   {
     id: 'ink',
