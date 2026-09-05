@@ -12,7 +12,7 @@ import { patternTile, patternTileSize, patternCellSize, cellPath, motifPath, isP
 import { reportCrash } from './crash';
 
 type View = { x: number; y: number; w: number; h: number }; // camera viewport, world coords
-interface CacheEntry { solid?: boolean; zoomFree?: boolean; path: Path2D; bbox: BBox; passes?: Path2D[]; core?: Path2D; detail: number; tone?: number }
+interface CacheEntry { solid?: boolean; zoomFree?: boolean; path: Path2D; bbox: BBox; passes?: Path2D[]; core?: Path2D; detail: number }
 
 export class Renderer {
   private ctx: CanvasRenderingContext2D;
@@ -20,12 +20,15 @@ export class Renderer {
   // Static layer: everything committed and not animated, rendered once for the
   // current camera. Per frame we blit it and draw live/animated/UI on top, so
   // drawing speed no longer depends on how much is on the page.
+  // Two bitmaps: `canvas` holds paper + the 'back' layer, `front` the rest, so a
+  // paint-behind live stroke can slip between them without repainting anything.
   private staticLayer: {
     canvas: HTMLCanvasElement;
+    front: HTMLCanvasElement;
     valid: boolean;
     key: string; // camera + size + style fingerprint
     cam: { x: number; y: number; zoom: number; vw: number; vh: number; dpr: number } | null; // what it was built for
-  } = { canvas: document.createElement('canvas'), valid: false, key: '', cam: null };
+  } = { canvas: document.createElement('canvas'), front: document.createElement('canvas'), valid: false, key: '', cam: null };
   // pencil stamp lists are zoom-independent: computed once per stroke
   private stampCache = new Map<string, { n: number; stamps: { x: number; y: number; p: number; a?: number }[] }>();
   // zoom gestures: keep drawing stale rasters (scaled) and rebuild only when the
@@ -37,7 +40,7 @@ export class Renderer {
   private fillPatterns = new Map<string, CanvasPattern>();
   /** world-anchored fill pattern (screentone / dither) at the current zoom bucket */
   private fillPattern(id: string, color: string, angle = 0): CanvasPattern | string {
-    const T = patternTileSize(id) * (isPixelPattern(id) ? 1 : this.toneScale()); // pixel grids never step with zoom
+    const T = patternTileSize(id);
     const dpr = window.devicePixelRatio || 1;
     const px = Math.max(8, Math.min(1024, Math.round(T * this.detail() * baseZoom() * dpr)));
     const key = `${id}|${color}|${px}`;
@@ -122,7 +125,7 @@ export class Renderer {
       info.added &&
       info.added.length &&
       st.key === this.staticKey() &&
-      info.added.every((el) => this.isStill(el) && el.layer !== 'back');
+      info.added.every((el) => this.isStill(el));
     if (canAppend) {
       this.paintOntoStatic(info.added!);
     } else {
@@ -167,8 +170,6 @@ export class Renderer {
     const g = c.getContext('2d')!;
     const saved = this.ctx;
     const savedDetail = this.detailOverride;
-    const savedTone = this.toneOverride;
-    this.toneOverride = 1;
     this.ctx = g;
     this.detailOverride = Math.min(16, Math.max(0.25, 2 ** Math.round(Math.log2(scale / baseZoom()))));
     try {
@@ -195,7 +196,6 @@ export class Renderer {
     } finally {
       this.ctx = saved;
       this.detailOverride = savedDetail;
-      this.toneOverride = savedTone;
       // caches were built at the export detail: let them rebuild for the screen
       this.clearCache();
       this.invalidate();
@@ -203,52 +203,36 @@ export class Renderer {
     return c;
   }
 
-  /** Rebuild the static layer for the current camera. */
+  /** Rebuild the static layers for the current camera. */
   private buildStatic(vw: number, vh: number, dpr: number) {
     const st = this.staticLayer;
-    const sc = st.canvas;
-    if (sc.width !== vw * dpr || sc.height !== vh * dpr) { sc.width = vw * dpr; sc.height = vh * dpr; }
-    const sctx = sc.getContext('2d')!;
-    const saved = this.ctx;
-    this.ctx = sctx; // helpers (pattern, pencil, grain) draw through this.ctx
-    try {
-      const { camera } = this;
-      const paper = this.store.doc.paper ?? '#F7F4EC';
-      sctx.setTransform(dpr, 0, 0, dpr, 0, 0);
-      sctx.fillStyle = paper;
-      sctx.fillRect(0, 0, vw, vh);
-      this.drawPattern(vw, vh, paper);
-      const view = camera.viewport(vw, vh);
-      const z = camera.zoom;
-      sctx.save();
-      sctx.translate(vw / 2, vh / 2);
-      sctx.scale(z, z);
-      sctx.translate(-camera.x, -camera.y);
-      const dim = this.focusAreaId() ? 0.3 : 1;
-      const still = this.store.doc.elements.filter((el) => this.isStill(el));
-      for (const el of still) if (el.layer === 'back') this.paintElement(el, view, z, dim);
-      for (const el of still) if (el.layer !== 'back') this.paintElement(el, view, z, dim);
-      sctx.globalAlpha = 1;
-      sctx.restore();
-    } finally {
-      this.ctx = saved;
+    for (const c of [st.canvas, st.front]) {
+      if (c.width !== vw * dpr || c.height !== vh * dpr) { c.width = vw * dpr; c.height = vh * dpr; }
     }
+    const paper = this.store.doc.paper ?? '#F7F4EC';
+    const still = this.store.doc.elements.filter((el) => this.isStill(el));
+    this.paintStatic(st.canvas, vw, vh, dpr, (g) => {
+      g.fillStyle = paper;
+      g.fillRect(0, 0, vw, vh);
+      this.drawPattern(vw, vh, paper);
+    }, still.filter((el) => el.layer === 'back'));
+    this.paintStatic(st.front, vw, vh, dpr, (g) => g.clearRect(0, 0, vw, vh), still.filter((el) => el.layer !== 'back'));
     st.valid = true;
     st.key = this.staticKey();
     st.cam = { x: this.camera.x, y: this.camera.y, zoom: this.camera.zoom, vw, vh, dpr };
   }
 
-  /** Append freshly committed elements onto the (valid) static layer. */
-  private paintOntoStatic(els: Element[]) {
-    const { camera, canvas } = this;
-    const vw = canvas.clientWidth, vh = canvas.clientHeight, dpr = window.devicePixelRatio || 1;
-    const sctx = this.staticLayer.canvas.getContext('2d')!;
+  /** Paint `els` (in order) onto one static bitmap for the current camera; `prep` runs first in screen space. */
+  private paintStatic(target: HTMLCanvasElement, vw: number, vh: number, dpr: number, prep: (g: CanvasRenderingContext2D) => void, els: Element[]) {
+    const sctx = target.getContext('2d')!;
     const saved = this.ctx;
-    this.ctx = sctx;
+    this.ctx = sctx; // helpers (pattern, pencil, grain) draw through this.ctx
     try {
+      const { camera } = this;
+      sctx.setTransform(dpr, 0, 0, dpr, 0, 0);
+      prep(sctx);
       const view = camera.viewport(vw, vh);
       const z = camera.zoom;
-      sctx.setTransform(dpr, 0, 0, dpr, 0, 0);
       sctx.save();
       sctx.translate(vw / 2, vh / 2);
       sctx.scale(z, z);
@@ -260,6 +244,16 @@ export class Renderer {
     } finally {
       this.ctx = saved;
     }
+  }
+
+  /** Append freshly committed elements onto the (valid) static layers. */
+  private paintOntoStatic(els: Element[]) {
+    const { canvas } = this;
+    const vw = canvas.clientWidth, vh = canvas.clientHeight, dpr = window.devicePixelRatio || 1;
+    const back = els.filter((el) => el.layer === 'back');
+    const front = els.filter((el) => el.layer !== 'back');
+    if (back.length) this.paintStatic(this.staticLayer.canvas, vw, vh, dpr, () => {}, back);
+    if (front.length) this.paintStatic(this.staticLayer.front, vw, vh, dpr, () => {}, front);
   }
 
   /** Paint one element's body (no handles/selection) through this.ctx. Returns false if culled. */
@@ -365,25 +359,11 @@ export class Renderer {
     const rel = this.camera.zoom / baseZoom();
     return Math.min(16, Math.max(0.25, 2 ** Math.round(Math.log2(rel))));
   }
-  /** Tone/dither scale for the current zoom: patterns are world-anchored, so
-   * zoomed far out the dots would shrink to dust and zoomed in they'd be
-   * boulders — every ~4× of zoom the tone steps by 4× instead, staying within
-   * a legible band on screen. 1 at 100% (and for exports). Manga tones only:
-   * pixel dithers keep their 100% grid at every zoom. */
-  private toneOverride: number | null = null;
-  toneScale(): number {
-    if (this.toneOverride !== null) return this.toneOverride;
-    const rel = this.camera.zoom / baseZoom();
-    // switch points sit at ~41% / 10% (out) and ~162% / 650% (in), not at the step itself
-    const k = Math.round(Math.log(1 / rel) / Math.log(4) - 0.15);
-    return 4 ** Math.max(-3, Math.min(4, k));
-  }
 
   private entry(el: Stroke | FillShape): CacheEntry {
     const detail = this.detail();
-    const tone = this.toneScale();
     let e = this.cache.get(el.id);
-    if (!e || (e.detail !== detail && !e.zoomFree) || (e.tone !== undefined && e.tone !== tone)) {
+    if (!e || (e.detail !== detail && !e.zoomFree)) {
       let path: Path2D, core: Path2D | undefined;
       if (el.kind === 'stroke' && el.tool === 'marker') {
         const mp = markerPaths(el.points, el.baseWidth, detail);
@@ -396,14 +376,14 @@ export class Renderer {
         e = { path, bbox: elementBBox(el), detail, zoomFree: true, solid: !!cells };
         this.cache.set(el.id, e);
         return e;
-      } else if (el.kind === 'fill' && el.pattern && (path = motifPath(el.points, el.pattern, el.patternAngle ?? 0, tone)!)) {
+      } else if (el.kind === 'fill' && el.pattern && (path = motifPath(el.points, el.pattern, el.patternAngle ?? 0)!)) {
         // dot tones: whole dots only — the path IS the dots, filled solid (zoom-independent)
-        e = { path, bbox: elementBBox(el), detail, solid: true, zoomFree: true, tone };
+        e = { path, bbox: elementBBox(el), detail, solid: true, zoomFree: true };
         this.cache.set(el.id, e);
         return e;
       } else if (el.kind === 'fill') {
         path = polygonPath(el.points);
-        e = { path, bbox: elementBBox(el), detail, zoomFree: true, tone: el.pattern && !isPixelPattern(el.pattern) ? tone : undefined };
+        e = { path, bbox: elementBBox(el), detail, zoomFree: true };
         this.cache.set(el.id, e);
         return e;
       } else {
@@ -715,10 +695,11 @@ export class Renderer {
     const paper = this.store.doc.paper ?? '#F7F4EC';
     const live = this.input.live;
 
-    // Static layer for the committed, non-animated content. Skipped while
-    // presenting (page clip), while the eraser hides elements, and when a
-    // paint-behind live stroke must render underneath existing ink.
-    const useStatic = !presenting && this.input.hidden.size === 0 && !(live && live.layer === 'back');
+    // Static layers for the committed, non-animated content. Skipped while
+    // presenting (page clip) and while the eraser hides elements. The back
+    // bitmap goes down now; the front one after a paint-behind live stroke.
+    const useStatic = !presenting && this.input.hidden.size === 0;
+    let blitFront: () => void = () => {};
     if (useStatic) {
       const st = this.staticLayer;
       const zooming = frameStart - this.lastZoomChangeAt < 180;
@@ -733,6 +714,7 @@ export class Renderer {
         const offX = (vw / 2) * (1 - sc) + (c.x - camera.x) * camera.zoom;
         const offY = (vh / 2) * (1 - sc) + (c.y - camera.y) * camera.zoom;
         ctx.drawImage(st.canvas, offX, offY, vw * sc, vh * sc);
+        blitFront = () => { ctx.save(); ctx.setTransform(dpr, 0, 0, dpr, 0, 0); ctx.drawImage(st.front, offX, offY, vw * sc, vh * sc); ctx.restore(); };
         this.dirty = true; // keep coming back until the gesture ends and we can rebuild
       } else {
         if (stale) this.buildStatic(vw, vh, dpr);
@@ -740,6 +722,7 @@ export class Renderer {
           ctx.setTransform(1, 0, 0, 1, 0, 0);
           ctx.drawImage(st.canvas, 0, 0);
           ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
+          blitFront = () => { ctx.save(); ctx.setTransform(1, 0, 0, 1, 0, 0); ctx.drawImage(st.front, 0, 0); ctx.restore(); };
         }
       }
     } else {
@@ -964,9 +947,10 @@ export class Renderer {
       drawTimedWith(el, (t) => r - start - t * tk.fps);
     };
 
-    if (live?.layer === 'back') drawLive(); // live back-ink previews behind existing back-ink
+    if (live?.layer === 'back') drawLive(); // live back-ink previews behind existing front ink
     if (useStatic) {
-      // bodies are in the static layer; only handles/selection outlines here
+      blitFront(); // the front layer covers the live back-stroke, as committed ink would
+      // bodies are in the static layers; only handles/selection outlines here
       for (const el of still) {
         const ui = selected.has(el.id) || this.input.hoverText === el.id || this.input.hoverImage === el.id;
         if (ui && bboxIntersects(elementBBox(el), view)) this.paintElementUi(el, z);
