@@ -66,6 +66,15 @@ export interface Stroke {
   startTime: number; // epoch seconds, for future replay/timelines
 }
 
+export type FillBlend = 'multiply' | 'source-over' | 'darken' | 'screen' | 'difference';
+export const FILL_BLENDS: { id: FillBlend; label: string; hint: string }[] = [
+  { id: 'multiply', label: 'Overprint', hint: 'inks stack and darken (CMYK)' },
+  { id: 'source-over', label: 'Cover', hint: 'opaque, like paper cut-outs' },
+  { id: 'darken', label: 'Darken', hint: 'keeps the darker of the two' },
+  { id: 'screen', label: 'Screen', hint: 'light inks on dark paper' },
+  { id: 'difference', label: 'Difference', hint: 'inverting overlaps, riso-poster look' },
+];
+
 export interface FillShape {
   id: string;
   kind: 'fill';
@@ -77,6 +86,7 @@ export interface FillShape {
   pattern?: string; // fill pattern id (see patterns.ts) drawn in `color` — manga tones, dithers
   patternAngle?: number; // rotation of the pattern in degrees (randomised per fill; rotate from the selection menu)
   ink?: number; // ink coverage 0..1 for pattern fills (CMYK-like: <1 lets paper through, overlaps mix and darken)
+  blend?: FillBlend; // how a pattern fill composites (default 'multiply' = overprint)
   points: { x: number; y: number }[]; // closed polygon, world coords
 }
 

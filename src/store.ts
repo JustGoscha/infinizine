@@ -1,6 +1,6 @@
 // Document store: state, undo/redo, localStorage persistence, page placement.
 
-import { AnimArea, AnimFrame, AnimLayer, Doc, Element, Layer, Page, emptyDoc, uid, FORMAT_VERSION } from './types';
+import { AnimArea, AnimFrame, AnimLayer, Doc, Element, Layer, Page, FillBlend, emptyDoc, uid, FORMAT_VERSION } from './types';
 import { isPixelPattern } from './patterns';
 
 type TextContent = { text: string; w: number; h: number; font?: string; fontSize?: number };
@@ -41,6 +41,7 @@ type Op =
   | { type: 'doc-faces'; before: Record<string, string> | undefined; after: Record<string, string> | undefined }
   | { type: 'pattern-angle'; items: { id: string; before: number; after: number }[] }
   | { type: 'fill-ink'; items: { id: string; before: number | undefined; after: number }[] }
+  | { type: 'fill-blend'; items: { id: string; before: FillBlend | undefined; after: FillBlend | undefined }[] }
   | { type: 'layer-flag'; areaId: string; layerId: string; field: 'hidden' | 'loop'; before: boolean; after: boolean }
   | { type: 'area-flag'; areaId: string; field: 'hideFrames' | 'hideLive'; before: boolean; after: boolean };
 
@@ -67,6 +68,7 @@ function changeInfo(op: Op): ChangeInfo {
     case 'retime-strokes':
     case 'pattern-angle':
     case 'fill-ink':
+    case 'fill-blend':
       return { ids: op.items.map((i) => i.id) };
     case 'add-area':
     case 'delete-area':
@@ -575,6 +577,12 @@ export class Store {
           if (el && el.kind === 'fill') { if (it.after === undefined) delete el.ink; else el.ink = it.after; }
         }
         break;
+      case 'fill-blend':
+        for (const it of op.items) {
+          const el = d.elements.find((e) => e.id === it.id);
+          if (el && el.kind === 'fill') { if (it.after) el.blend = it.after; else delete el.blend; }
+        }
+        break;
       case 'doc-style': {
         if (op.field === 'palette') d.palette = op.after;
         else if (op.field === 'paper') d.paper = op.after;
@@ -650,6 +658,8 @@ export class Store {
         return { ...op, items: op.items.map((it) => ({ ...it, before: it.after, after: it.before })) };
       case 'fill-ink':
         return { ...op, items: op.items.map((it) => ({ ...it, before: it.after, after: it.before as number })) };
+      case 'fill-blend':
+        return { ...op, items: op.items.map((it) => ({ ...it, before: it.after, after: it.before })) };
       case 'layer-flag': return { ...op, before: op.after, after: op.before };
       case 'area-flag': return { ...op, before: op.after, after: op.before };
     }
@@ -1131,6 +1141,16 @@ export class Store {
       .filter((e): e is Extract<Element, { kind: 'fill' }> => !!e && e.kind === 'fill' && !!e.pattern && (e.ink ?? 1) !== ink)
       .map((e) => ({ id: e.id, before: e.ink, after: ink }));
     if (items.length) this.commit({ type: 'fill-ink', items });
+  }
+
+  /** blend mode of pattern fills (undoable); 'multiply' is stored as undefined (the default) */
+  setBlend(ids: string[], blend: FillBlend) {
+    const want = blend === 'multiply' ? undefined : blend;
+    const items = ids
+      .map((id) => this.doc.elements.find((e) => e.id === id))
+      .filter((e): e is Extract<Element, { kind: 'fill' }> => !!e && e.kind === 'fill' && !!e.pattern && (e.blend ?? undefined) !== want)
+      .map((e) => ({ id: e.id, before: e.blend, after: want }));
+    if (items.length) this.commit({ type: 'fill-blend', items });
   }
 
   /** per-zine typeface overrides (undefined = follow the app-wide picks) */

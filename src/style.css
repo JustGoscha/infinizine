@@ -1722,3 +1722,6 @@ body.presenting .popover { display: none; }
   border: 1.5px solid var(--line); cursor: pointer; padding: 0;
 }
 .pat-sw.active { border: 2.5px solid var(--ink); }
+
+.pat-blend { flex-wrap: wrap; }
+.pat-blend button { padding: 4px 7px; font-size: 11px; }

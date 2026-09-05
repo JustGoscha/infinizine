@@ -135,6 +135,11 @@ export class InputState {
   })();
   /** ink coverage for pattern fills (CMYK-style tint): 1 = solid ink, lower lets paper through so overlaps mix */
   inkDensity = (() => { const v = Number(readPref('infinizine-ink-density')); return v >= 0.3 && v <= 1 ? v : 0.8; })();
+  /** how pattern fills composite with what's below */
+  fillBlend: import('./types').FillBlend = (() => {
+    const v = readPref('infinizine-fill-blend');
+    return v && ['multiply', 'source-over', 'darken', 'screen', 'difference'].includes(v) ? (v as import('./types').FillBlend) : 'multiply';
+  })();
   baseWidth = 1.6; // world units at 100% (2 per mm)
   adaptiveSize = readPref('infinizine-adaptive-size') === '1'; // keep on-screen size across zoom
   /** brush width in world units for a stroke started at this zoom */
@@ -1093,6 +1098,7 @@ export function attachInput(
           id: uid('fl'), kind: 'fill', color: state.color, opacity: 1,
           pattern: state.fillPattern ?? undefined,
           ink: state.fillPattern ? state.inkDensity : undefined,
+          blend: state.fillPattern && state.fillBlend !== 'multiply' ? state.fillBlend : undefined,
           // every tone fill gets its own angle so neighbouring fills don't line up like wallpaper
           patternAngle: state.fillPattern && !isPixelPattern(state.fillPattern) ? Math.floor(Math.random() * 36) * 5 : undefined,
           layer: state.paintBehind ? 'back' : 'front',

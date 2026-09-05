@@ -274,7 +274,7 @@ export class Renderer {
       // paper × (1 − ink·(1 − colour)) — so overlaps mix and darken (CMYK-like)
       if (patterned) {
         ctx.save();
-        ctx.globalCompositeOperation = 'multiply';
+        ctx.globalCompositeOperation = (el.kind === 'fill' && el.blend) || 'multiply';
         ctx.globalAlpha = el.opacity * dim * (el.kind === 'fill' ? el.ink ?? 1 : 1);
       }
       ctx.fill(e.path);

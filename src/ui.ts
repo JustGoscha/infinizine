@@ -7,7 +7,7 @@ import { Store } from './store';
 import { Camera, baseZoom, pxPerMm, setPxPerMm } from './camera';
 import { PALETTES, getPalette, shades } from './palettes';
 import { isPattern, patternPreviewCSS, patternLabel, PATTERN_CATEGORIES } from './patterns';
-import { UNITS_PER_MM, uid, FORMAT_VERSION } from './types';
+import { UNITS_PER_MM, uid, FORMAT_VERSION, FILL_BLENDS } from './types';
 import { type Fmt, PRIMARY_FORMATS, FORMAT_GROUPS, MORE_FORMATS, fitPage, customFormats, saveCustomFormat, mm } from './formats';
 import { layoutText, layoutHeight, layoutWidth, FONTS, FACES, chosenFaces, appFaces, setFace, setDocFaces, weightRange, type FontRole } from './text';
 import { pressure, savePressure, resetPressure, loadPressure, exportPressure, importPressure, easeP, curveAt, type Curve, type CurveNode } from './geometry';
@@ -569,8 +569,20 @@ export function buildUI(
               return `<button class="pat-sw${state.fillPattern === id ? ' active' : ''}" data-id="${id}" title="${f.label} ${k}" style="background:${patternPreviewCSS(id, state.color, 9)}"></button>`;
             }).join('')}</div>
           </div>`).join('')}`).join('')}
+      <div class="pat-fam"><span class="pat-fam-name">blend</span>
+        <div class="seg pat-blend" id="pat-blend">${FILL_BLENDS.map((b) => `<button data-v="${b.id}" class="${state.fillBlend === b.id ? 'active' : ''}" title="${b.hint}">${b.label}</button>`).join('')}</div></div>
       <label class="pg-row pat-ink"><span>ink density</span><input type="range" id="pat-ink" min="0.3" max="1" step="0.05" value="${state.inkDensity}"><b>${Math.round(state.inkDensity * 100)}%</b></label>
       <div class="set-note">Patterns paint with the fill tool, in the current colour, and overprint like process ink: below 100% the paper shows through, so overlapping tones mix and darken (red over yellow → orange-red). Dot tones rotate randomly per fill; dithers stay pixel-aligned.</div>`;
+    patternPop.querySelector('#pat-blend')!.addEventListener('click', (e) => {
+      const v = (e.target as HTMLElement).closest('button')?.dataset.v as import('./types').FillBlend | undefined;
+      if (!v) return;
+      state.fillBlend = v;
+      writePref('infinizine-fill-blend', v);
+      patternPop.querySelectorAll<HTMLElement>('#pat-blend button').forEach((b) => b.classList.toggle('active', b.dataset.v === v));
+      const ids = store.doc.elements.filter((el) => el.kind === 'fill' && el.pattern && state.selection.has(el.id)).map((el) => el.id);
+      if (ids.length) store.setBlend(ids, v);
+      invalidate();
+    });
     const inkSlider = patternPop.querySelector('#pat-ink') as HTMLInputElement;
     inkSlider.addEventListener('input', () => {
       state.inkDensity = Number(inkSlider.value);
