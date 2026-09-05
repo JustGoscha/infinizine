@@ -1477,6 +1477,7 @@ export function buildUI(
       </div>`}
       <div class="tl-nav">
         <button id="tl-play" class="tl-nav-play" title="Play / pause (space)">${state.playingAreas ? svg('<path d="M8 5v14M16 5v14"/>') : svg('<path d="M7 5 L19 12 L7 19 Z"/>')}</button>
+        <button id="tl-rec" class="tl-nav-rec${state.recording ? ' on' : ''}" title="Record: plays the area and keeps every line you draw as a live line">${svg('<circle cx="12" cy="12" r="6" fill="currentColor" stroke="none"/>')}</button>
         ${activeLayer && activeLayer.kind !== 'live'
           ? `<button id="tl-prev" title="Previous frame (←)">${svg('<path d="M14.5 6 L8.5 12 L14.5 18"/>')}</button>
         <div class="tl-jog" id="tl-jog" title="Swipe or scroll to flip through the frames"><span class="tl-jog-ticks"></span><span class="tl-pos" id="tl-pos">${frameIdx + 1} / ${activeLayer.frames.length}</span><span class="tl-time" id="tl-time"></span></div>
@@ -1857,6 +1858,15 @@ export function buildUI(
     );
     q('#tl-play').addEventListener('click', () => {
       state.playingAreas = !state.playingAreas;
+      if (!state.playingAreas) state.recording = false;
+      state.playEpoch = performance.now() / 1000;
+      renderTimeline();
+      invalidate();
+    });
+    q('#tl-rec').addEventListener('click', () => {
+      // record = play with intent: lines drawn while it runs become live lines on the loop clock
+      state.recording = !state.recording;
+      state.playingAreas = state.recording;
       state.playEpoch = performance.now() / 1000;
       renderTimeline();
       invalidate();

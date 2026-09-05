@@ -210,6 +210,7 @@ export class InputState {
   blinkStart = 0;
   playingAreas = false;
   onionMuted = false; // onion skin hidden while flipping through frames with the jog
+  recording = false; // record button: plays the area and captures live lines as you draw
   playEpoch = 0; // performance.now()/1000 when playback started
   onAnimOpen: (area: import('./types').AnimArea) => void = () => {};
   onTextEdit: (
