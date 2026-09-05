@@ -8,11 +8,11 @@ import { layoutText, fontFor, segWidth, LINE_HEIGHT } from './text';
 import { moveHandleRect, moveAllHandleRect, deleteHandleRect, eyeHandleRect, type InputState } from './input';
 import { Store, ChangeInfo } from './store';
 import { formatLabel } from './formats';
-import { patternTile, patternTileSize, patternCellSize, snapPolygonToCells, inkOf } from './patterns';
+import { patternTile, patternTileSize, patternCellSize, snapPolygonToCells, motifPath, isPixelPattern, inkOf } from './patterns';
 import { reportCrash } from './crash';
 
 type View = { x: number; y: number; w: number; h: number }; // camera viewport, world coords
-interface CacheEntry { path: Path2D; bbox: BBox; passes?: Path2D[]; core?: Path2D; detail: number }
+interface CacheEntry { solid?: boolean; path: Path2D; bbox: BBox; passes?: Path2D[]; core?: Path2D; detail: number }
 
 export class Renderer {
   private ctx: CanvasRenderingContext2D;
@@ -266,7 +266,9 @@ export class Renderer {
       ctx.restore();
     } else {
       ctx.globalAlpha = el.opacity * dim;
-      ctx.fillStyle = el.kind === 'fill' && el.pattern ? this.fillPattern(el.pattern, el.color, el.patternAngle ?? 0) : el.color;
+      ctx.fillStyle = el.kind === 'fill' && el.pattern && !e.solid
+        ? this.fillPattern(el.pattern, el.color, isPixelPattern(el.pattern) ? 0 : el.patternAngle ?? 0) // dithers never rotate
+        : el.color;
       ctx.fill(e.path);
     }
     return true;
@@ -316,6 +318,11 @@ export class Renderer {
       } else if (el.kind === 'fill' && el.pattern && patternCellSize(el.pattern)) {
         // pixel patterns: the outline snaps to the cell grid so no cell is cut in half
         path = snapPolygonToCells(el.points, patternCellSize(el.pattern)!) ?? polygonPath(el.points);
+      } else if (el.kind === 'fill' && el.pattern && (path = motifPath(el.points, el.pattern, el.patternAngle ?? 0)!)) {
+        // dot tones: whole dots only — the path IS the dots, filled solid
+        e = { path, bbox: elementBBox(el), detail, solid: true };
+        this.cache.set(el.id, e);
+        return e;
       } else {
         path = el.kind === 'stroke' ? outlineToPath(strokeOutline(el, detail)) : polygonPath(el.points);
       }

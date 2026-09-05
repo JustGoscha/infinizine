@@ -86,6 +86,43 @@ export function snapPolygonToCells(points: { x: number; y: number }[], cell: num
   return path;
 }
 
+/** Dot families (screentone, sand): the fill is built from WHOLE motifs — a dot
+ * is in when its centre is inside the polygon, so the edge never shows half
+ * dots. Returns null for line-like families (those clip the pattern instead). */
+export function motifPath(points: { x: number; y: number }[], id: string, angleDeg: number): Path2D | null {
+  const p = parse(id);
+  if (!p || (p.fam !== 'tone' && p.fam !== 'sand') || points.length < 3) return null;
+  const T = patternTileSize(id);
+  const a = (angleDeg * Math.PI) / 180, ca = Math.cos(a), sa = Math.sin(a);
+  // polygon bbox → pattern-space bbox (inverse rotation of the corners)
+  let minX = Infinity, minY = Infinity, maxX = -Infinity, maxY = -Infinity;
+  for (const q of points) { minX = Math.min(minX, q.x); minY = Math.min(minY, q.y); maxX = Math.max(maxX, q.x); maxY = Math.max(maxY, q.y); }
+  let pu0 = Infinity, pv0 = Infinity, pu1 = -Infinity, pv1 = -Infinity;
+  for (const [x, y] of [[minX, minY], [maxX, minY], [minX, maxY], [maxX, maxY]]) {
+    const u = x * ca + y * sa, v = -x * sa + y * ca; // world → pattern space
+    pu0 = Math.min(pu0, u); pv0 = Math.min(pv0, v); pu1 = Math.max(pu1, u); pv1 = Math.max(pv1, v);
+  }
+  const i0 = Math.floor(pu0 / T) - 1, i1 = Math.ceil(pu1 / T) + 1;
+  const j0 = Math.floor(pv0 / T) - 1, j1 = Math.ceil(pv1 / T) + 1;
+  const motifs: [number, number][] = p.fam === 'tone'
+    ? [[0, 0], [T / 2, T / 2]]
+    : Array.from({ length: Math.round([10, 22, 40, 65, 100][p.k - 1] * (T * T) / 16) }, (_, i) => [rnd(i, 1) * T, rnd(i, 2) * T] as [number, number]);
+  const r = p.fam === 'tone' ? Math.sqrt(([0.08, 0.18, 0.3, 0.45, 0.62][p.k - 1] * T * T) / 2 / Math.PI) : 0.13;
+  if ((i1 - i0) * (j1 - j0) * motifs.length > 400_000) return null; // too many dots: clip the pattern instead
+  const path = new Path2D();
+  for (let i = i0; i < i1; i++) for (let j = j0; j < j1; j++) {
+    for (const [mu, mv] of motifs) {
+      const u = i * T + mu, v = j * T + mv;
+      const x = u * ca - v * sa, y = u * sa + v * ca; // pattern → world
+      if (x < minX - r || x > maxX + r || y < minY - r || y > maxY + r) continue;
+      if (!pointInPolygon(x, y, points)) continue;
+      path.moveTo(x + r, y);
+      path.arc(x, y, r, 0, Math.PI * 2);
+    }
+  }
+  return path;
+}
+
 // deterministic per-tile randomness so a tile is identical every time it's built
 const rnd = (i: number, salt: number) => {
   const x = Math.sin(i * 127.1 + salt * 311.7) * 43758.5453;
