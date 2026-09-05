@@ -836,7 +836,13 @@ body.tl-docked-side .topbar { z-index: 40; }
   cursor: pointer;
   font-size: 13px;
   white-space: nowrap;
+  display: inline-grid; place-items: center; line-height: 1;
 }
+.tl-ops button svg, .tl-nav button svg, .tl-zoom svg, .tl-track-head button svg { width: 16px; height: 16px; display: block; }
+.tl-nav button { display: inline-grid; place-items: center; line-height: 1; }
+.tl-zoom { display: inline-grid; place-items: center; }
+.tl-head { flex-wrap: nowrap; }
+.tl-name { min-width: 0; flex: 1 1 auto; }
 .tl-ops button:active { background: var(--ink); color: var(--card); }
 .tl-sep { width: 1px; height: 18px; background: var(--line); margin: 0 6px; }
 .tl-layers-label { color: var(--ink-soft); font-size: 11px; font-weight: 600; margin-right: 2px; }

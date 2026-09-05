@@ -1424,8 +1424,8 @@ export function buildUI(
         <span class="tl-name" title="Double-click to rename">${area.name}</span>
         <span class="tl-time" id="tl-time"></span>
         <input id="tl-fps" type="number" min="1" max="60" value="${area.fps}" title="fps"><span class="tl-fpslabel">fps</span>
-        <button id="tl-zoom-out" class="tl-zoom" title="Zoom timeline out">−</button>
-        <button id="tl-zoom-in" class="tl-zoom" title="Zoom timeline in">＋</button>
+        <button id="tl-zoom-out" class="tl-zoom" title="Zoom timeline out">${svg('<path d="M6 12h12"/>')}</button>
+        <button id="tl-zoom-in" class="tl-zoom" title="Zoom timeline in">${svg('<path d="M12 6v12M6 12h12"/>')}</button>
         <button id="tl-loop" class="tl-toggle ${area.loop ? 'on' : ''}">loop</button>
         <button id="tl-clip" class="tl-toggle ${area.clip ? 'on' : ''}" title="Cut off ink outside the area">clip</button>
         <button id="tl-onion" class="tl-toggle ${state.onionSkin ? 'on' : ''}">onion</button>
@@ -1454,31 +1454,31 @@ export function buildUI(
       <div class="tl-tracks" id="tl-tracks"></div>
       ${tlView === 'frames'
         ? `<div class="tl-ops">
-        <button id="tl-del" title="Delete frame">−</button>
-        <button id="tl-add" title="Add frame after the current one">＋</button>
-        <button id="tl-dup" title="Duplicate frame">⧉</button>
+        <button id="tl-del" title="Delete frame">${svg('<path d="M6 12h12"/>')}</button>
+        <button id="tl-add" title="Add frame after the current one">${svg('<path d="M12 6v12M6 12h12"/>')}</button>
+        <button id="tl-dup" title="Duplicate frame">${svg('<rect x="8" y="8" width="11" height="11" rx="1"/><path d="M5 15V6a1 1 0 0 1 1-1h9"/>')}</button>
         <span class="tl-sep"></span>
-        <button id="tl-shorter" title="Shorter">⇤</button>
-        <button id="tl-longer" title="Longer">⇥</button>
+        <button id="tl-shorter" title="Shorter">${svg('<path d="M5 6v12M19 12H8M12 8l-4 4 4 4"/>')}</button>
+        <button id="tl-longer" title="Longer">${svg('<path d="M19 6v12M5 12h11M12 8l4 4-4 4"/>')}</button>
         <span class="tl-sep"></span>
         <span class="tl-layers-label">layers</span>
-        <button id="tl-addlayer" title="Add layer">＋</button>
+        <button id="tl-addlayer" title="Add layer">${svg('<path d="M12 6v12M6 12h12"/>')}</button>
       </div>`
         : `<div class="tl-ops">
         <span class="tl-layers-label" title="How long a stroke drawn while playing stays visible">live ink duration</span>
-        <button id="tl-life-minus" title="Shorter">−</button>
+        <button id="tl-life-minus" title="Shorter">${svg('<path d="M6 12h12"/>')}</button>
         <span class="tl-life" id="tl-life">${state.liveInkLife} frames</span>
-        <button id="tl-life-plus" title="Longer">＋</button>
+        <button id="tl-life-plus" title="Longer">${svg('<path d="M12 6v12M6 12h12"/>')}</button>
         <button id="tl-taper" class="tl-toggle ${state.liveInkTaper ? 'on' : ''}" title="Tail eats away over its life">taper</button>
         <button id="tl-showink" class="tl-toggle ${state.showLiveInk ? 'on' : ''}" title="Show live ink while editing (it always shows in playback)">show</button>
       </div>`}
       <div class="tl-nav">
         <button id="tl-play" class="tl-nav-play" title="Play / pause (space)">${state.playingAreas ? svg('<path d="M8 5v14M16 5v14"/>') : svg('<path d="M7 5 L19 12 L7 19 Z"/>')}</button>
         ${activeLayer && activeLayer.kind !== 'live'
-          ? `<button id="tl-prev" title="Previous frame (←)">‹</button>
+          ? `<button id="tl-prev" title="Previous frame (←)">${svg('<path d="M14.5 6 L8.5 12 L14.5 18"/>')}</button>
         <div class="tl-jog" id="tl-jog" title="Swipe or scroll to flip through the frames"><span class="tl-jog-ticks"></span><span class="tl-pos" id="tl-pos">${frameIdx + 1} / ${activeLayer.frames.length}</span></div>
-        <button id="tl-next" title="Next frame (→)">›</button>
-        <button id="tl-addnext" title="New frame after this one">＋</button>`
+        <button id="tl-next" title="Next frame (→)">${svg('<path d="M9.5 6 L15.5 12 L9.5 18"/>')}</button>
+        <button id="tl-addnext" title="New frame after this one">${svg('<path d="M12 6v12M6 12h12"/>')}</button>`
           : `<div class="tl-jog tl-jog-off"><span class="tl-pos">live lines</span></div>`}
       </div>
     `;
