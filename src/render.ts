@@ -991,7 +991,7 @@ export class Renderer {
         let visId: string | null;
         if (editing && l.id === activeLayerId) {
           visId = this.input.activeFrameId;
-          if (this.input.onionSkin && visId) {
+          if (this.input.onionSkin && !this.input.onionMuted && visId) {
             // 3 back in red, 3 forward in green, fading with distance;
             // when looping, "forward" wraps around to the first frames
             const idx = l.frames.findIndex((f) => f.id === visId);

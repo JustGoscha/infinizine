@@ -3,6 +3,7 @@
 import type { Store } from './store';
 import type { Renderer } from './render';
 import { UNITS_PER_MM } from './types';
+import { PIXEL_CELL } from './patterns';
 import { makeZip } from './zip';
 import { makePdf, type PdfPage } from './pdf';
 import { makeGif, type GifFrame } from './gif';
@@ -56,6 +57,16 @@ function scaleFor(r: Region, dpi: number) {
   if (longest * scale > MAX_SIDE) scale = MAX_SIDE / longest;
   return scale;
 }
+/** Raster exports sit on the dither grid: one pattern cell becomes a whole number of
+ * output pixels and the region starts on a cell boundary, so pixel art stays crisp
+ * (no half-pixel cells) in PNGs and GIFs. Grows the region by less than one cell. */
+function snapToPixelGrid(r: Region, scale: number): { r: Region; scale: number } {
+  const perCell = Math.max(1, Math.round(scale * PIXEL_CELL));
+  const s = perCell / PIXEL_CELL;
+  const x0 = Math.floor(r.x / PIXEL_CELL) * PIXEL_CELL, y0 = Math.floor(r.y / PIXEL_CELL) * PIXEL_CELL;
+  const x1 = Math.ceil((r.x + r.w) / PIXEL_CELL) * PIXEL_CELL, y1 = Math.ceil((r.y + r.h) / PIXEL_CELL) * PIXEL_CELL;
+  return { r: { ...r, x: x0, y: y0, w: x1 - x0, h: y1 - y0 }, scale: s };
+}
 
 /** Frames of a region's animation as raw RGBA, at most ~10 s and 120 frames. */
 function gifFrames(renderer: Renderer, r: Region, scale: number, paperPattern: boolean): { w: number; h: number; frames: GifFrame[] } | null {
@@ -65,8 +76,9 @@ function gifFrames(renderer: Renderer, r: Region, scale: number, paperPattern: b
   const count = Math.max(1, Math.min(120, Math.ceil(Math.min(info.seconds, 10) * fps)));
   const frames: GifFrame[] = [];
   let w = 0, h = 0;
+  const snapped = snapToPixelGrid(r, scale);
   for (let i = 0; i < count; i++) {
-    const c = renderer.renderRegion(r, scale, { time: i / fps, paperPattern });
+    const c = renderer.renderRegion(snapped.r, snapped.scale, { time: i / fps, paperPattern });
     w = c.width; h = c.height;
     frames.push({ data: c.getContext('2d')!.getImageData(0, 0, w, h).data, delayMs: 1000 / fps });
   }
@@ -88,7 +100,8 @@ export async function exportZine(store: Store, renderer: Renderer, opts: ExportO
   if (opts.format === 'png') {
     const files: { name: string; data: Uint8Array }[] = [];
     for (const r of regs) {
-      const blob = await toBlob(renderer.renderRegion(r, scaleFor(r, opts.dpi), { paperPattern }), 'image/png');
+      const sn = snapToPixelGrid(r, scaleFor(r, opts.dpi));
+      const blob = await toBlob(renderer.renderRegion(sn.r, sn.scale, { paperPattern }), 'image/png');
       if (blob) files.push({ name: `${safe}-${r.name}.png`, data: new Uint8Array(await blob.arrayBuffer()) });
       await breathe();
     }
@@ -139,8 +152,9 @@ export async function exportZine(store: Store, renderer: Renderer, opts: ExportO
     if (g) {
       items.push({ name: r.name, src: await blobToDataURL(makeGif(g.w, g.h, g.frames)), w: r.w, h: r.h });
     } else {
-      const blob = await toBlob(renderer.renderRegion(r, scale, { paperPattern }), 'image/png');
-      if (blob) items.push({ name: r.name, src: await blobToDataURL(blob), w: r.w, h: r.h });
+      const sn = snapToPixelGrid(r, scale);
+      const blob = await toBlob(renderer.renderRegion(sn.r, sn.scale, { paperPattern }), 'image/png');
+      if (blob) items.push({ name: r.name, src: await blobToDataURL(blob), w: sn.r.w, h: sn.r.h });
     }
     await breathe();
   }

@@ -209,6 +209,7 @@ export class InputState {
   blinkLayerId: string | null = null; // layer briefly opacity-blinking (selection feedback)
   blinkStart = 0;
   playingAreas = false;
+  onionMuted = false; // onion skin hidden while flipping through frames with the jog
   playEpoch = 0; // performance.now()/1000 when playback started
   onAnimOpen: (area: import('./types').AnimArea) => void = () => {};
   onTextEdit: (

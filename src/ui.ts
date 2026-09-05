@@ -1422,10 +1422,7 @@ export function buildUI(
       <div class="tl-head">
         <span class="tl-grip" title="Drag to move">⠿</span>
         <span class="tl-name" title="Double-click to rename">${area.name}</span>
-        <span class="tl-time" id="tl-time"></span>
         <input id="tl-fps" type="number" min="1" max="60" value="${area.fps}" title="fps"><span class="tl-fpslabel">fps</span>
-        <button id="tl-zoom-out" class="tl-zoom" title="Zoom timeline out">${svg('<path d="M6 12h12"/>')}</button>
-        <button id="tl-zoom-in" class="tl-zoom" title="Zoom timeline in">${svg('<path d="M12 6v12M6 12h12"/>')}</button>
         <button id="tl-loop" class="tl-toggle ${area.loop ? 'on' : ''}">loop</button>
         <button id="tl-clip" class="tl-toggle ${area.clip ? 'on' : ''}" title="Cut off ink outside the area">clip</button>
         <button id="tl-onion" class="tl-toggle ${state.onionSkin ? 'on' : ''}">onion</button>
@@ -1463,6 +1460,9 @@ export function buildUI(
         <span class="tl-sep"></span>
         <span class="tl-layers-label">layers</span>
         <button id="tl-addlayer" title="Add layer">${svg('<path d="M12 6v12M6 12h12"/>')}</button>
+        <span class="tl-sep tl-push"></span>
+        <button id="tl-zoom-out" class="tl-zoom" title="Zoom timeline out">${svg('<circle cx="10.5" cy="10.5" r="6"/><path d="M15 15l5 5M7.5 10.5h6"/>')}</button>
+        <button id="tl-zoom-in" class="tl-zoom" title="Zoom timeline in">${svg('<circle cx="10.5" cy="10.5" r="6"/><path d="M15 15l5 5M7.5 10.5h6M10.5 7.5v6"/>')}</button>
       </div>`
         : `<div class="tl-ops">
         <span class="tl-layers-label" title="How long a stroke drawn while playing stays visible">live ink duration</span>
@@ -1471,15 +1471,18 @@ export function buildUI(
         <button id="tl-life-plus" title="Longer">${svg('<path d="M12 6v12M6 12h12"/>')}</button>
         <button id="tl-taper" class="tl-toggle ${state.liveInkTaper ? 'on' : ''}" title="Tail eats away over its life">taper</button>
         <button id="tl-showink" class="tl-toggle ${state.showLiveInk ? 'on' : ''}" title="Show live ink while editing (it always shows in playback)">show</button>
+        <span class="tl-sep tl-push"></span>
+        <button id="tl-zoom-out" class="tl-zoom" title="Zoom timeline out">${svg('<circle cx="10.5" cy="10.5" r="6"/><path d="M15 15l5 5M7.5 10.5h6"/>')}</button>
+        <button id="tl-zoom-in" class="tl-zoom" title="Zoom timeline in">${svg('<circle cx="10.5" cy="10.5" r="6"/><path d="M15 15l5 5M7.5 10.5h6M10.5 7.5v6"/>')}</button>
       </div>`}
       <div class="tl-nav">
         <button id="tl-play" class="tl-nav-play" title="Play / pause (space)">${state.playingAreas ? svg('<path d="M8 5v14M16 5v14"/>') : svg('<path d="M7 5 L19 12 L7 19 Z"/>')}</button>
         ${activeLayer && activeLayer.kind !== 'live'
           ? `<button id="tl-prev" title="Previous frame (←)">${svg('<path d="M14.5 6 L8.5 12 L14.5 18"/>')}</button>
-        <div class="tl-jog" id="tl-jog" title="Swipe or scroll to flip through the frames"><span class="tl-jog-ticks"></span><span class="tl-pos" id="tl-pos">${frameIdx + 1} / ${activeLayer.frames.length}</span></div>
+        <div class="tl-jog" id="tl-jog" title="Swipe or scroll to flip through the frames"><span class="tl-jog-ticks"></span><span class="tl-pos" id="tl-pos">${frameIdx + 1} / ${activeLayer.frames.length}</span><span class="tl-time" id="tl-time"></span></div>
         <button id="tl-next" title="Next frame (→)">${svg('<path d="M9.5 6 L15.5 12 L9.5 18"/>')}</button>
         <button id="tl-addnext" title="New frame after this one">${svg('<path d="M12 6v12M6 12h12"/>')}</button>`
-          : `<div class="tl-jog tl-jog-off"><span class="tl-pos">live lines</span></div>`}
+          : `<div class="tl-jog tl-jog-off"><span class="tl-pos">live lines</span><span class="tl-time" id="tl-time"></span></div>`}
       </div>
     `;
 
@@ -1972,6 +1975,8 @@ export function buildUI(
       jog.addEventListener('pointerdown', (e) => {
         e.preventDefault();
         jog.setPointerCapture(e.pointerId);
+        state.onionMuted = true; // flipping reads better without the onion ghosts
+        invalidate();
         let lastX = e.clientX;
         let acc = 0;
         let shift = 0;
@@ -1990,7 +1995,9 @@ export function buildUI(
           jog.removeEventListener('pointermove', onMove);
           jog.removeEventListener('pointerup', onUp);
           jog.removeEventListener('pointercancel', onUp);
+          state.onionMuted = false;
           renderTimeline(); // settle: full rebuild with the new active frame
+          invalidate();
         };
         jog.addEventListener('pointermove', onMove);
         jog.addEventListener('pointerup', onUp);
