@@ -7,6 +7,7 @@ import { strokeOutline, pencilOutlines, markerPaths, outlineToPath, elementBBox,
 import { layoutText, fontFor, segWidth, LINE_HEIGHT } from './text';
 import { moveHandleRect, moveAllHandleRect, deleteHandleRect, eyeHandleRect, type InputState } from './input';
 import { Store, ChangeInfo } from './store';
+import { formatLabel } from './formats';
 import { reportCrash } from './crash';
 
 type View = { x: number; y: number; w: number; h: number }; // camera viewport, world coords
@@ -1204,7 +1205,7 @@ export class Renderer {
     ctx.font = `500 ${11 / z}px "Libre Franklin Variable", sans-serif`;
     ctx.fillStyle = 'rgba(90,75,50,0.6)';
     ctx.textAlign = 'left';
-    ctx.fillText(page.name, page.x + 2 / z, page.y - 6 / z);
+    ctx.fillText(`${page.name} · ${page.format ?? formatLabel(page.w, page.h)}`, page.x + 2 / z, page.y - 6 / z);
   }
 }
 

@@ -17,7 +17,7 @@ type Op =
   | { type: 'delete-page'; page: Page }
   | { type: 'move-page'; id: string; dx: number; dy: number }
   | { type: 'move-page-content'; id: string; ids: string[]; areaIds: string[]; dx: number; dy: number }
-  | { type: 'pages-format'; before: { id: string; w: number; h: number }[]; after: { id: string; w: number; h: number }[] }
+  | { type: 'pages-format'; before: { id: string; w: number; h: number; format?: string }[]; after: { id: string; w: number; h: number; format?: string }[] }
   | { type: 'add-area'; area: AnimArea; elements: Element[] }
   | { type: 'delete-area'; area: AnimArea; elements: Element[] }
   | { type: 'add-frame'; areaId: string; layerId: string; frame: AnimFrame; index: number; elements: Element[] }
@@ -431,7 +431,7 @@ export class Store {
       case 'pages-format': {
         for (const size of op.after) {
           const pg = d.pages.find((p) => p.id === size.id);
-          if (pg) { pg.w = size.w; pg.h = size.h; }
+          if (pg) { pg.w = size.w; pg.h = size.h; pg.format = size.format; }
         }
         break;
       }
@@ -714,13 +714,13 @@ export class Store {
   }
 
   /** All pages share one size: switch every page to the given format. */
-  setPagesFormat({ w, h }: { w: number; h: number }) {
+  setPagesFormat({ w, h, label }: { w: number; h: number; label?: string }) {
     const pages = this.doc.pages;
-    if (!pages.length || pages.every((p) => p.w === w && p.h === h)) return;
+    if (!pages.length || pages.every((p) => p.w === w && p.h === h && (!label || p.format === label))) return;
     this.commit({
       type: 'pages-format',
-      before: pages.map((p) => ({ id: p.id, w: p.w, h: p.h })),
-      after: pages.map((p) => ({ id: p.id, w, h })),
+      before: pages.map((p) => ({ id: p.id, w: p.w, h: p.h, format: p.format })),
+      after: pages.map((p) => ({ id: p.id, w, h, format: label })),
     });
   }
 
@@ -734,13 +734,14 @@ export class Store {
       h: src.h,
       name: `Page ${this.doc.pages.length + 1}`,
       order: src.order + 1,
+      format: src.format,
     };
     this.commit({ type: 'add-page', page });
     return page;
   }
 
   /** New page placed right of the last page (with padding), or at the given center. */
-  addPage(size: { w: number; h: number }, center?: { x: number; y: number }): Page {
+  addPage(size: { w: number; h: number }, center?: { x: number; y: number }, format?: string): Page {
     const { w, h } = size;
     const pages = this.doc.pages;
     let x: number, y: number;
@@ -758,6 +759,7 @@ export class Store {
       id: uid('page'), x, y, w, h,
       name: `Page ${pages.length + 1}`,
       order: pages.length,
+      format,
     };
     this.commit({ type: 'add-page', page });
     return page;

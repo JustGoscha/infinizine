@@ -7,6 +7,7 @@ import { Store } from './store';
 import { Camera, baseZoom, pxPerMm, setPxPerMm } from './camera';
 import { PALETTES, getPalette, shades } from './palettes';
 import { UNITS_PER_MM, uid, FORMAT_VERSION } from './types';
+import { type Fmt, PRIMARY_FORMATS, FORMAT_GROUPS, MORE_FORMATS, fitPage, customFormats, saveCustomFormat, mm } from './formats';
 import { layoutText, layoutHeight, layoutWidth, FONTS, FACES, chosenFaces, setFace, weightRange, type FontRole } from './text';
 import { pressure, savePressure, resetPressure, loadPressure, exportPressure, importPressure, easeP, curveAt, type Curve, type CurveNode } from './geometry';
 import { markdownToHtml, htmlToMarkdown, autoTransform, caretToEnd, applyInlineStyle } from './richedit';
@@ -106,82 +107,6 @@ const SIZES = [
 ];
 const ADAPTIVE_KEY = 'infinizine-adaptive-size';
 
-interface Fmt { label: string; w: number; h: number; screen?: boolean } // w/h in world units (2/mm); screen = fit to viewport on pick
-const mm = (w: number, h: number) => ({ w: w * UNITS_PER_MM, h: h * UNITS_PER_MM });
-
-// Quick picks in the page menu
-const PRIMARY_FORMATS: Fmt[] = [
-  { label: '16:9', ...mm(240, 135), screen: true },
-  { label: 'Story 9:16', ...mm(135, 240), screen: true },
-  { label: 'A4', ...mm(210, 297) },
-  { label: 'A5', ...mm(148, 210) },
-];
-
-// Full picker, grouped: screens & social first, then paper, then print/zine
-const FORMAT_GROUPS: { label: string; items: Fmt[] }[] = [
-  {
-    label: 'Screen & social',
-    items: [
-      { label: 'Screen 16:9', ...mm(240, 135), screen: true },
-      { label: 'Story · Phone 9:16', ...mm(135, 240), screen: true },
-      { label: 'Post 1:1', ...mm(200, 200), screen: true },
-      { label: 'Post 4:5', ...mm(192, 240), screen: true },
-      { label: 'Screen 4:3', ...mm(240, 180), screen: true },
-      { label: 'Screen 3:4', ...mm(180, 240), screen: true },
-      { label: 'Wide 21:9', ...mm(280, 120), screen: true },
-    ],
-  },
-  {
-    label: 'Paper',
-    items: [
-      { label: 'A3', ...mm(297, 420) },
-      { label: 'A4', ...mm(210, 297) },
-      { label: 'A4 wide', ...mm(297, 210) },
-      { label: 'A5', ...mm(148, 210) },
-      { label: 'A6', ...mm(105, 148) },
-      { label: 'B5', ...mm(176, 250) },
-      { label: 'Letter', ...mm(216, 279) },
-      { label: 'Legal', ...mm(216, 356) },
-      { label: 'Tabloid', ...mm(279, 432) },
-      { label: 'Half letter', ...mm(140, 216) },
-      { label: 'Square', ...mm(240, 240) },
-    ],
-  },
-  {
-    label: 'Print & zine',
-    items: [
-      { label: 'US comic', ...mm(168, 260) },
-      { label: 'Manga B6', ...mm(128, 182) },
-      { label: 'Zine pocket', ...mm(110, 178) },
-      { label: 'Postcard', ...mm(148, 105) },
-      { label: 'Bookmark', ...mm(50, 175) },
-    ],
-  },
-];
-const MORE_FORMATS: Fmt[] = FORMAT_GROUPS.flatMap((g) => g.items);
-
-/** Screen formats aren't about millimetres: zoom so the page nearly fills the
- * viewport, whatever the device. */
-function fitPage(camera: Camera, page: { x: number; y: number; w: number; h: number }) {
-  const margin = 1.08;
-  camera.zoom = Math.min(window.innerWidth / (page.w * margin), window.innerHeight / (page.h * margin));
-  camera.x = page.x + page.w / 2;
-  camera.y = page.y + page.h / 2;
-}
-
-const CUSTOM_FORMATS_KEY = 'infinizine-custom-formats';
-function customFormats(): Fmt[] {
-  try {
-    return JSON.parse(localStorage.getItem(CUSTOM_FORMATS_KEY) ?? '[]');
-  } catch {
-    return [];
-  }
-}
-function saveCustomFormat(f: Fmt) {
-  try {
-    localStorage.setItem(CUSTOM_FORMATS_KEY, JSON.stringify([...customFormats(), f]));
-  } catch { /* ignore */ }
-}
 
 /** Timeline item interaction. Mouse: drag right away. Pen/finger: moving lets
  * the tracks scroll natively; holding still for 0.5s "lifts" the item, then it
@@ -688,7 +613,7 @@ export function buildUI(
   }
 
   const createFirstPage = (f: Fmt) => {
-    const page = store.addPage({ w: f.w, h: f.h }, { x: camera.x, y: camera.y });
+    const page = store.addPage({ w: f.w, h: f.h }, { x: camera.x, y: camera.y }, f.label);
     camera.x = page.x + page.w / 2;
     camera.y = page.y + page.h / 2;
     if (f.screen) { fitPage(camera, page); state.updateCursor(); }

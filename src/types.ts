@@ -117,6 +117,7 @@ export interface Page {
   h: number;
   name: string;
   order: number; // manual order; seeded spatially
+  format?: string; // the preset it was created as ("A4", "Screen 16:9", …); derived from size when absent
 }
 
 export interface Doc {
