@@ -273,8 +273,9 @@ const rnd = (i: number, salt: number) => {
   return x - Math.floor(x);
 };
 
-/** Draw one seamless tile of `id` in `color`, `px` pixels square. */
-export function patternTile(id: string, color: string, px: number): HTMLCanvasElement {
+/** Draw one seamless tile of `id` in `color`, `px` pixels square.
+ * `preview`: swatch rendering — the solid pixel fill shows a stair-stepped edge so it reads as "pixels", not plain ink. */
+export function patternTile(id: string, color: string, px: number, preview = false): HTMLCanvasElement {
   const c = document.createElement('canvas');
   c.width = c.height = px;
   const g = c.getContext('2d')!;
@@ -286,7 +287,8 @@ export function patternTile(id: string, color: string, px: number): HTMLCanvasEl
   g.fillStyle = color;
   g.strokeStyle = color;
   const { fam, k } = p;
-  const rule = cellRule(id);
+  let rule = cellRule(id);
+  if (preview && p.fam === 'pixfill') rule = (i, j) => (i >> 1) + (j >> 1) >= PIXEL_TILE_CELLS / 2 + 1; // diagonal pixel edge
   if (rule) {
     // pixel families: the tile is PIXEL_TILE_CELLS² cells of the shared grid
     const cell = PIXEL_CELL;
@@ -372,7 +374,7 @@ export function patternPreviewCSS(id: string, color = PATTERN_INK, scale = 3): s
   const T = patternTileSize(id);
   const px = T * scale;
   if (!url) {
-    url = patternTile(id, color, Math.round(px * 2)).toDataURL();
+    url = patternTile(id, color, Math.round(px * 2), true).toDataURL();
     previewCache.set(key, url);
   }
   return `url(${url}) 0 0 / ${px}px ${px}px repeat, #FDFCF8`;
