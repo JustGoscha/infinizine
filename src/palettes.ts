@@ -6,6 +6,7 @@ export interface PalettePreset {
   name: string;
   hues: string[];
   drama?: number; // 0..1: how extreme the painterly hue-shift in shades is (default 0.5)
+  strict?: boolean; // hardware palettes: only these exact colours, no derived tints/shades
 }
 
 // Each palette: 5–6 colors — whitish, blackish, neutralish, then 2–3 accents.
@@ -25,6 +26,7 @@ export const PALETTES: PalettePreset[] = [
   {
     // the original DMG-01 LCD: four greens, nothing else (great with dithers)
     id: 'gameboy',
+    strict: true,
     drama: 0,
     name: 'Game Boy',
     hues: ['#9BBC0F', '#0F380F', '#8BAC0F', '#306230'],
@@ -32,6 +34,7 @@ export const PALETTES: PalettePreset[] = [
   {
     // NES-flavoured: the console's greys plus its punchiest primaries
     id: 'nes',
+    strict: true,
     drama: 0.1,
     name: 'NES',
     hues: ['#FCFCFC', '#000000', '#7C7C7C', '#E40058', '#0078F8', '#F8B800', '#00A800'],
@@ -46,6 +49,7 @@ export const PALETTES: PalettePreset[] = [
   {
     // CGA / early PC: cyan-magenta glare
     id: 'cga',
+    strict: true,
     drama: 0,
     name: 'CGA',
     hues: ['#FFFFFF', '#000000', '#55FFFF', '#FF55FF', '#AAAAAA'],

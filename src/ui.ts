@@ -411,7 +411,9 @@ export function buildUI(
       wrap.className = 'pal-wrap';
       const fly = document.createElement('div');
       fly.className = 'shade-flyout';
-      for (const c of shades(hue, preset.drama)) {
+      // hardware palettes are exact: no derived shades, so no flyout
+      const hueList = preset.strict ? [] : shades(hue, preset.drama);
+      for (const c of hueList) {
         const s = document.createElement('button');
         s.className = 'pal-shade';
         s.style.background = isPattern(c) ? patternPreviewCSS(c, undefined, 10) : c;
@@ -432,12 +434,12 @@ export function buildUI(
       dot.addEventListener('pointerdown', (e) => { if (state.onEditColor) e.preventDefault(); }); // keep the text editor focused
       let lp = 0;
       let longPressed = false;
-      const hueShades = shades(hue, preset.drama).map((c) => c.toLowerCase());
+      const hueShades = hueList.map((c) => c.toLowerCase());
       dot.addEventListener('click', () => {
         if (longPressed) { longPressed = false; return; }
         // tapping the hue that's already active opens/closes its shades (touch has no hover)
         const cur = state.color.toLowerCase();
-        if (cur === hue.toLowerCase() || hueShades.includes(cur)) {
+        if (hueList.length && (cur === hue.toLowerCase() || hueShades.includes(cur))) {
           const wasOpen = wrap.classList.contains('open');
           closeFlyouts();
           wrap.classList.toggle('open', !wasOpen);
@@ -448,6 +450,7 @@ export function buildUI(
       });
       dot.addEventListener('pointerdown', (e) => {
         if (e.pointerType === 'mouse') return;
+        if (!hueList.length) return; // nothing to open
         lp = window.setTimeout(() => {
           longPressed = true;
           closeFlyouts();
@@ -2121,7 +2124,7 @@ export function buildUI(
     const drama = getPalette(store.doc.palette).drama;
     palRow.querySelectorAll<HTMLElement>('.pal-main').forEach((d) => {
       const hue = d.dataset.hue!;
-      const sh = shades(hue, drama);
+      const sh = getPalette(store.doc.palette).strict ? [] : shades(hue, drama);
       d.classList.toggle('active', hue === state.color || sh.includes(state.color));
       if (sh.includes(state.color) && hue !== state.color) d.style.background = isPattern(state.color) ? patternPreviewCSS(state.color) : state.color;
       else d.style.background = hue;
