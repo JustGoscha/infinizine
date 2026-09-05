@@ -266,10 +266,14 @@ export class Renderer {
       ctx.restore();
     } else {
       ctx.globalAlpha = el.opacity * dim;
-      ctx.fillStyle = el.kind === 'fill' && el.pattern && !e.solid
-        ? this.fillPattern(el.pattern, el.color, isPixelPattern(el.pattern) ? 0 : el.patternAngle ?? 0) // dithers never rotate
+      const patterned = el.kind === 'fill' && !!el.pattern;
+      ctx.fillStyle = patterned && !e.solid
+        ? this.fillPattern(el.pattern!, el.color, isPixelPattern(el.pattern!) ? 0 : el.patternAngle ?? 0) // dithers never rotate
         : el.color;
+      // tones overprint like ink: overlapping patterns darken (multiply) instead of covering
+      if (patterned) { ctx.save(); ctx.globalCompositeOperation = 'multiply'; }
       ctx.fill(e.path);
+      if (patterned) ctx.restore();
     }
     return true;
   }
