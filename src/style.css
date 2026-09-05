@@ -1542,3 +1542,10 @@ body.presenting .popover { display: none; }
   cursor: pointer;
   text-align: left;
 }
+
+/* long-press "lift" feedback for timeline items on pen/finger */
+.tl-frame.lifted, .tl-livebar.lifted, .lifted {
+  filter: brightness(1.08);
+  box-shadow: 3px 3px 0 rgba(42, 36, 26, 0.35);
+  z-index: 3;
+}

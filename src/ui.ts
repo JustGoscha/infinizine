@@ -183,6 +183,69 @@ function saveCustomFormat(f: Fmt) {
   } catch { /* ignore */ }
 }
 
+/** Timeline item interaction. Mouse: drag right away. Pen/finger: moving lets
+ * the tracks scroll natively; holding still for 0.5s "lifts" the item, then it
+ * drags (scroll is blocked for that gesture). A short tap without moving = tap. */
+function pressDrag(
+  el: HTMLElement,
+  h: {
+    onLift?: () => void;
+    onMove: (ev: PointerEvent, dx: number) => void;
+    onEnd: (ev: PointerEvent) => void; // dragged
+    onTap: (ev: PointerEvent) => void; // no drag
+  },
+) {
+  el.addEventListener('pointerdown', (e) => {
+    const touchy = e.pointerType !== 'mouse';
+    const startX = e.clientX, startY = e.clientY;
+    let lifted = !touchy;
+    let dragging = false;
+    let done = false;
+    let timer = 0;
+    const blockScroll = (te: TouchEvent) => { if (lifted) te.preventDefault(); };
+    const cleanup = () => {
+      done = true;
+      clearTimeout(timer);
+      el.classList.remove('lifted');
+      el.removeEventListener('pointermove', onMove);
+      el.removeEventListener('pointerup', onUp);
+      el.removeEventListener('pointercancel', onCancel);
+      document.removeEventListener('touchmove', blockScroll);
+    };
+    const onMove = (ev: PointerEvent) => {
+      const dx = ev.clientX - startX, dy = ev.clientY - startY;
+      if (!lifted) {
+        if (Math.hypot(dx, dy) > 8) cleanup(); // pen/finger moved before the hold: it's a scroll
+        return;
+      }
+      if (!dragging && Math.abs(dx) > (touchy ? 2 : 8)) dragging = true;
+      if (dragging) h.onMove(ev, dx);
+    };
+    const onUp = (ev: PointerEvent) => {
+      const wasDragging = dragging;
+      cleanup();
+      if (wasDragging) h.onEnd(ev);
+      else h.onTap(ev);
+    };
+    const onCancel = () => cleanup();
+    if (touchy) {
+      document.addEventListener('touchmove', blockScroll, { passive: false });
+      timer = window.setTimeout(() => {
+        if (done) return;
+        lifted = true;
+        el.classList.add('lifted');
+        try { el.setPointerCapture(e.pointerId); } catch { /* pointer may be gone */ }
+        h.onLift?.();
+      }, 500);
+    } else {
+      el.setPointerCapture(e.pointerId);
+    }
+    el.addEventListener('pointermove', onMove);
+    el.addEventListener('pointerup', onUp);
+    el.addEventListener('pointercancel', onCancel);
+  });
+}
+
 export function buildUI(
   root: HTMLElement,
   state: InputState,
@@ -1333,24 +1396,26 @@ export function buildUI(
         bar.appendChild(prog); // after textContent — that assignment clears children
         bar.title = 'Live line — drag to move it in time';
         // tap selects; horizontal drag shifts the layer's timing on the loop clock
-        bar.addEventListener('pointerdown', (e) => {
-          bar.setPointerCapture(e.pointerId);
-          const startX = e.clientX;
-          let dragging = false;
-          const onMove = (ev: PointerEvent) => {
-            const dx = ev.clientX - startX;
-            if (!dragging && Math.abs(dx) > 6) dragging = true;
-            if (dragging) bar.style.transform = `translateX(${Math.round(dx / liveScale) * liveScale}px)`;
-          };
-          const onUp = (ev: PointerEvent) => {
-            bar.removeEventListener('pointermove', onMove);
-            bar.removeEventListener('pointerup', onUp);
+        let barStartX = 0;
+        bar.addEventListener('pointerdown', (e) => { barStartX = e.clientX; });
+        pressDrag(bar, {
+          onMove: (_ev, dx) => {
+            bar.style.transform = `translateX(${Math.round(dx / liveScale) * liveScale}px)`;
+          },
+          onEnd: (ev) => {
             bar.style.transform = '';
             state.activeLayerId = l.id;
             state.activeFrameId = null;
-            if (dragging) {
-              store.shiftLiveLayer(l.id, Math.round((ev.clientX - startX) / liveScale));
-            } else if (state.activeLayerId === l.id) {
+            store.shiftLiveLayer(l.id, Math.round((ev.clientX - barStartX) / liveScale));
+            renderTimeline();
+            invalidate();
+          },
+          onTap: () => {
+            bar.style.transform = '';
+            const wasActive = state.activeLayerId === l.id;
+            state.activeLayerId = l.id;
+            state.activeFrameId = null;
+            if (wasActive) {
               // tapping the active line again deselects it
               state.selection.clear();
               state.blinkLayerId = null;
@@ -1365,9 +1430,7 @@ export function buildUI(
             }
             renderTimeline();
             invalidate();
-          };
-          bar.addEventListener('pointermove', onMove);
-          bar.addEventListener('pointerup', onUp);
+          },
         });
         strip.appendChild(bar);
         row.append(head, strip);
@@ -1382,32 +1445,27 @@ export function buildUI(
         b.textContent = String(i + 1);
         b.title = `${l.name} · frame ${i + 1} · ${f.duration}f (drag to reorder)`;
         // tap selects; horizontal drag reorders within the layer
-        b.addEventListener('pointerdown', (e) => {
-          b.setPointerCapture(e.pointerId);
-          const startX = e.clientX;
-          let dragging = false;
-          let marker: HTMLElement | null = null;
-          const insertIndex = (px: number) => {
-            const others = [...strip.querySelectorAll('.tl-frame')].filter((c) => c !== b);
-            return {
-              others,
-              to: others.filter((c) => {
-                const r = (c as HTMLElement).getBoundingClientRect();
-                return r.left + r.width / 2 < px;
-              }).length,
-            };
+        let marker: HTMLElement | null = null;
+        const insertIndex = (px: number) => {
+          const others = [...strip.querySelectorAll('.tl-frame')].filter((c) => c !== b);
+          return {
+            others,
+            to: others.filter((c) => {
+              const r = (c as HTMLElement).getBoundingClientRect();
+              return r.left + r.width / 2 < px;
+            }).length,
           };
-          const onMove = (ev: PointerEvent) => {
-            if (!dragging && Math.abs(ev.clientX - startX) > 8) {
-              dragging = true;
+        };
+        pressDrag(b, {
+          onMove: (ev, dx) => {
+            if (!marker) {
               b.classList.add('dragging');
               marker = document.createElement('div');
               marker.className = 'tl-insert';
               strip.appendChild(marker);
             }
-            if (!dragging) return;
             // ghost follows the pointer
-            b.style.transform = `translate(${ev.clientX - startX}px, -3px)`;
+            b.style.transform = `translate(${dx}px, -3px)`;
             // insertion marker shows the drop slot
             const { others, to } = insertIndex(ev.clientX);
             const sr = strip.getBoundingClientRect();
@@ -1418,23 +1476,28 @@ export function buildUI(
                   ? (others[others.length - 1] as HTMLElement).getBoundingClientRect().right
                   : sr.left;
             if (marker) marker.style.left = `${x - sr.left + strip.scrollLeft - 2}px`;
-          };
-          const onUp = (ev: PointerEvent) => {
-            b.removeEventListener('pointermove', onMove);
-            b.removeEventListener('pointerup', onUp);
+          },
+          onEnd: (ev) => {
             b.classList.remove('dragging');
             b.style.transform = '';
             marker?.remove();
+            marker = null;
             state.activeLayerId = l.id;
             state.activeFrameId = f.id;
-            if (dragging) {
-              store.moveFrame(area.id, l.id, i, insertIndex(ev.clientX).to);
-            }
+            store.moveFrame(area.id, l.id, i, insertIndex(ev.clientX).to);
             renderTimeline();
             invalidate();
-          };
-          b.addEventListener('pointermove', onMove);
-          b.addEventListener('pointerup', onUp);
+          },
+          onTap: () => {
+            b.classList.remove('dragging');
+            b.style.transform = '';
+            marker?.remove();
+            marker = null;
+            state.activeLayerId = l.id;
+            state.activeFrameId = f.id;
+            renderTimeline();
+            invalidate();
+          },
         });
         strip.appendChild(b);
       });
