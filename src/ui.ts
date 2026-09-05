@@ -6,6 +6,7 @@ import { baseZoom as baseZoomFn } from './camera';
 import { Store } from './store';
 import { Camera, baseZoom, pxPerMm, setPxPerMm } from './camera';
 import { PALETTES, getPalette, shades } from './palettes';
+import { isPattern, inkOf, patternPreviewCSS, patternLabel } from './patterns';
 import { UNITS_PER_MM, uid, FORMAT_VERSION } from './types';
 import { type Fmt, PRIMARY_FORMATS, FORMAT_GROUPS, MORE_FORMATS, fitPage, customFormats, saveCustomFormat, mm } from './formats';
 import { layoutText, layoutHeight, layoutWidth, FONTS, FACES, chosenFaces, appFaces, setFace, setDocFaces, weightRange, type FontRole } from './text';
@@ -383,7 +384,7 @@ export function buildUI(
   /** Picking a color while textboxes are selected recolors them. */
   function applyColor(c: string) {
     state.color = c;
-    state.onEditColor?.(c); // text being edited follows the palette
+    state.onEditColor?.(inkOf(c)); // text being edited follows the palette (patterns → ink)
     writePref(`infinizine-color-${store.docId}`, c);
     writePref('infinizine-last-color', c);
     state.rememberTool();
@@ -408,7 +409,8 @@ export function buildUI(
       for (const c of shades(hue, preset.drama)) {
         const s = document.createElement('button');
         s.className = 'pal-shade';
-        s.style.background = c;
+        s.style.background = isPattern(c) ? patternPreviewCSS(c, undefined, 10) : c;
+        if (isPattern(c)) s.title = `${patternLabel(c)} — fill tool only`;
         s.addEventListener('pointerdown', (e) => e.preventDefault()); // keep the text editor focused
         s.addEventListener('click', (e) => {
           e.stopPropagation();
@@ -420,7 +422,8 @@ export function buildUI(
       const dot = document.createElement('button');
       dot.className = 'pal-main';
       dot.dataset.hue = hue;
-      dot.style.background = hue;
+      dot.style.background = isPattern(hue) ? patternPreviewCSS(hue) : hue;
+      if (isPattern(hue)) dot.title = `${patternLabel(hue)} — paints with the fill tool; strokes get ink`;
       dot.addEventListener('pointerdown', (e) => { if (state.onEditColor) e.preventDefault(); }); // keep the text editor focused
       let lp = 0;
       let longPressed = false;
@@ -462,11 +465,11 @@ export function buildUI(
         (p) => `<button class="pal-preset ${p.id === preset.id ? 'active' : ''}" data-id="${p.id}">
           <span class="pal-preset-name">${p.name}</span>
           <span class="pal-preview">${p.hues
-            .map((c) => `<i style="background:${c}"></i>`)
+            .map((c) => `<i style="background:${isPattern(c) ? patternPreviewCSS(c, undefined, 6) : c}"></i>`)
             .join('')}</span>
         </button>`,
       ).join('')}</div>
-      <label class="pal-custom">custom <input type="color" id="custom-color" value="${state.color}"></label>
+      <label class="pal-custom">custom <input type="color" id="custom-color" value="${inkOf(state.color)}"></label>
       <div class="paper-row">
         <span class="paper-label">pattern</span>
         ${['blank', 'dots', 'grid', 'lines']
@@ -2041,12 +2044,12 @@ export function buildUI(
       const hue = d.dataset.hue!;
       const sh = shades(hue, drama);
       d.classList.toggle('active', hue === state.color || sh.includes(state.color));
-      if (sh.includes(state.color) && hue !== state.color) d.style.background = state.color;
+      if (sh.includes(state.color) && hue !== state.color) d.style.background = isPattern(state.color) ? patternPreviewCSS(state.color) : state.color;
       else d.style.background = hue;
     });
     // Layer symbol: current-color stroke over / behind a white square
     const sq = '<rect x="8" y="8" width="10" height="10" fill="#fdfcf8" stroke="rgba(90,75,50,0.5)" stroke-width="1"/>';
-    const st = `<path d="M4 20 C6 13 10 18 12 12 C14 6 18 11 20 4" fill="none" stroke="${state.color}" stroke-width="2.6" stroke-linecap="round"/>`;
+    const st = `<path d="M4 20 C6 13 10 18 12 12 C14 6 18 11 20 4" fill="none" stroke="${inkOf(state.color)}" stroke-width="2.6" stroke-linecap="round"/>`;
     layerToggle.innerHTML = `<svg viewBox="0 0 24 24">${state.paintBehind ? st + sq : sq + st}</svg>`;
     layerToggle.title = state.paintBehind
       ? 'Painting behind existing ink (tap for in front)'

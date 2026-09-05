@@ -74,6 +74,7 @@ export interface FillShape {
   layer?: Layer;
   frame?: string;
   alayer?: string;
+  pattern?: string; // fill pattern id (see patterns.ts) drawn in `color` — manga tones, dithers
   points: { x: number; y: number }[]; // closed polygon, world coords
 }
 

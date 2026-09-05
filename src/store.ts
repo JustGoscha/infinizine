@@ -1,6 +1,7 @@
 // Document store: state, undo/redo, localStorage persistence, page placement.
 
 import { AnimArea, AnimFrame, AnimLayer, Doc, Element, Layer, Page, emptyDoc, uid, FORMAT_VERSION } from './types';
+import { inkOf, isPattern } from './patterns';
 
 type TextContent = { text: string; w: number; h: number; font?: string; fontSize?: number };
 type TextMetrics = { x: number; w: number; h: number; fontSize: number; auto?: boolean };
@@ -29,7 +30,7 @@ type Op =
   | { type: 'move-area-content'; id: string; ids: string[]; dx: number; dy: number }
   | { type: 'resize-area'; id: string; before: { x: number; y: number; w: number; h: number }; after: { x: number; y: number; w: number; h: number } }
   | { type: 'move-frame'; areaId: string; layerId: string; from: number; to: number }
-  | { type: 'recolor-elements'; items: { id: string; before: string; after: string }[] }
+  | { type: 'recolor-elements'; items: { id: string; before: string; after: string; beforePattern?: string; afterPattern?: string }[] }
   | { type: 'retime-strokes'; items: { id: string; before: number; after: number }[] }
   | { type: 'z-order'; prevOrder: string[]; nextOrder: string[]; layers?: { id: string; before?: Layer; after?: Layer }[] }
   | { type: 'frame-duration'; areaId: string; layerId: string; frameId: string; before: number; after: number }
@@ -505,7 +506,10 @@ export class Store {
       case 'recolor-elements': {
         for (const it of op.items) {
           const el = d.elements.find((e) => e.id === it.id);
-          if (el && el.kind !== 'image') el.color = it.after;
+          if (el && el.kind !== 'image') {
+            el.color = it.after;
+            if (el.kind === 'fill') { if (it.afterPattern) el.pattern = it.afterPattern; else delete el.pattern; }
+          }
         }
         break;
       }
@@ -607,7 +611,10 @@ export class Store {
       case 'resize-area': return { ...op, before: op.after, after: op.before };
       case 'move-frame': return { ...op, from: op.to, to: op.from };
       case 'recolor-elements':
-        return { ...op, items: op.items.map((it) => ({ ...it, before: it.after, after: it.before })) };
+        return {
+          ...op,
+          items: op.items.map((it) => ({ ...it, before: it.after, after: it.before, beforePattern: it.afterPattern, afterPattern: it.beforePattern })),
+        };
       case 'retime-strokes':
         return { ...op, items: op.items.map((it) => ({ ...it, before: it.after, after: it.before })) };
       case 'z-order':
@@ -1032,11 +1039,19 @@ export class Store {
     this.commit({ type: 'z-order', prevOrder, nextOrder, layers: layers.length ? layers : undefined });
   }
 
-  recolorElements(ids: string[], after: string) {
+  recolorElements(ids: string[], pick: string) {
+    // a pattern swatch: fills take the pattern (in ink), everything else just the ink
+    const pattern = isPattern(pick) ? pick : undefined;
+    const after = inkOf(pick);
     const items = ids
       .map((id) => this.doc.elements.find((e) => e.id === id))
-      .filter((e): e is Exclude<Element, { kind: 'image' }> => !!e && e.kind !== 'image' && e.color !== after)
-      .map((e) => ({ id: e.id, before: e.color, after }));
+      .filter((e): e is Exclude<Element, { kind: 'image' }> => !!e && e.kind !== 'image')
+      .filter((e) => e.color !== after || (e.kind === 'fill' && (e.pattern ?? undefined) !== pattern))
+      .map((e) => ({
+        id: e.id, before: e.color, after,
+        beforePattern: e.kind === 'fill' ? e.pattern : undefined,
+        afterPattern: e.kind === 'fill' ? pattern : undefined,
+      }));
     if (items.length) this.commit({ type: 'recolor-elements', items });
   }
 

@@ -6,6 +6,7 @@ import { Camera, baseZoom } from './camera';
 import { Store } from './store';
 import { AnimArea, Stroke, FillShape, Element, ImageBox, Page, TextBox, uid } from './types';
 import { hitElement, elementsInLasso, denoise, denoiseClosed, pressure } from './geometry';
+import { inkOf, isPattern } from './patterns';
 import { layoutText, layoutHeight } from './text';
 
 const CLIP_KEY = 'infinizine-clipboard';
@@ -570,7 +571,7 @@ export function attachInput(
         }
         state.live = {
           id: uid('st'), kind: 'stroke', tool: activeTool as import('./types').ToolKind,
-          color: state.color,
+          color: inkOf(state.color), // pattern swatches paint ink when stroking
           baseWidth: state.effectiveWidth(camera.zoom) / (activeTool === 'fineliner' ? 1.4 : 1),
           opacity: activeTool === 'marker' ? 0.45 : 1,
           layer: state.paintBehind ? 'back' : 'front',
@@ -1082,7 +1083,8 @@ export function attachInput(
         state.selection = new Set(elementsInLasso(store.doc.elements, lasso).map((e) => e.id));
       } else if (state.tool === 'lasso-fill' && lasso.length > 2) {
         const fill: FillShape = {
-          id: uid('fl'), kind: 'fill', color: state.color, opacity: 1,
+          id: uid('fl'), kind: 'fill', color: inkOf(state.color), opacity: 1,
+          pattern: isPattern(state.color) ? state.color : undefined,
           layer: state.paintBehind ? 'back' : 'front',
           frame: state.activeFrameId ?? undefined,
           alayer: state.activeLayerId ?? undefined,
@@ -1188,7 +1190,7 @@ export function attachInput(
       y: camera.y - h / 2,
       w: wBox,
       h,
-      color: state.color,
+      color: inkOf(state.color),
       fontSize: state.textSize,
       font: state.font,
       text,

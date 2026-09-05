@@ -8,6 +8,7 @@ import { layoutText, fontFor, segWidth, LINE_HEIGHT } from './text';
 import { moveHandleRect, moveAllHandleRect, deleteHandleRect, eyeHandleRect, type InputState } from './input';
 import { Store, ChangeInfo } from './store';
 import { formatLabel } from './formats';
+import { patternTile, patternTileSize, inkOf } from './patterns';
 import { reportCrash } from './crash';
 
 type View = { x: number; y: number; w: number; h: number }; // camera viewport, world coords
@@ -32,6 +33,23 @@ export class Renderer {
   private lastZoomChangeAt = 0;
   private rasterBudgetUntil = 0; // performance.now() deadline for raster builds this frame
   private rastersPending = false;
+  private fillPatterns = new Map<string, CanvasPattern>();
+  /** world-anchored fill pattern (screentone / dither) at the current zoom bucket */
+  private fillPattern(id: string, color: string): CanvasPattern | string {
+    const T = patternTileSize(id);
+    const dpr = window.devicePixelRatio || 1;
+    const px = Math.max(8, Math.min(512, Math.round(T * this.detail() * baseZoom() * dpr)));
+    const key = `${id}|${color}|${px}`;
+    let pat = this.fillPatterns.get(key);
+    if (!pat) {
+      const made = this.ctx.createPattern(patternTile(id, color, px), 'repeat');
+      if (!made) return color;
+      made.setTransform(new DOMMatrix().scale(T / px)); // px tile → T world units, anchored to the world origin
+      pat = made;
+      this.fillPatterns.set(key, pat);
+    }
+    return pat;
+  }
   private liveSmooth = new LiveDenoiser(); // vector live stroke
   private livePencilSmooth = new LiveDenoiser(); // pencil live stroke (separate: stamped incrementally)
   private dirty = true;
@@ -247,7 +265,7 @@ export class Renderer {
       ctx.restore();
     } else {
       ctx.globalAlpha = el.opacity * dim;
-      ctx.fillStyle = el.color;
+      ctx.fillStyle = el.kind === 'fill' && el.pattern ? this.fillPattern(el.pattern, el.color) : el.color;
       ctx.fill(e.path);
     }
     return true;
@@ -1042,11 +1060,11 @@ export class Renderer {
       for (const p of lasso) ctx.lineTo(p.x, p.y);
       ctx.setLineDash([6 / z, 5 / z]);
       ctx.lineWidth = 1.5 / z;
-      ctx.strokeStyle = this.input.tool === 'lasso-fill' ? this.input.color : '#E8590C';
+      ctx.strokeStyle = this.input.tool === 'lasso-fill' ? inkOf(this.input.color) : '#E8590C';
       if (this.input.tool === 'lasso-fill') {
         ctx.save();
         ctx.globalAlpha = 0.25;
-        ctx.fillStyle = this.input.color;
+        ctx.fillStyle = this.input.color.startsWith('pattern:') ? this.fillPattern(this.input.color, inkOf(this.input.color)) : this.input.color;
         ctx.fill();
         ctx.restore();
       }
