@@ -24,8 +24,8 @@ const LEVELS: Record<Family, number[]> = {
   tone: [0.04, 0.08, 0.13, 0.18, 0.24, 0.3, 0.37, 0.45, 0.62], // dot coverage
   hatch: [0.15, 0.22, 0.29, 0.36, 0.45, 0.55, 0.67, 0.8, 1.15], // line width (world units)
   cross: [0.15, 0.22, 0.29, 0.36, 0.45, 0.55, 0.67, 0.8, 1.15],
-  lines: [0.1, 0.15, 0.2, 0.25, 0.32, 0.4, 0.5, 0.6, 0.9],
-  grid: [0.08, 0.12, 0.16, 0.2, 0.25, 0.3, 0.37, 0.45, 0.65],
+  lines: [0.15, 0.25, 0.4, 0.6, 0.9, 1.2, 1.55, 1.9, 2.3], // up to a thick bar (tile is 3)
+  grid: [0.12, 0.2, 0.3, 0.45, 0.65, 0.9, 1.2, 1.5, 1.9],
   sand: [6, 10, 15, 22, 30, 40, 52, 65, 100], // grains per 16 units²
   waves: [0.1, 0.14, 0.18, 0.22, 0.27, 0.32, 0.38, 0.45, 0.62],
   scales: [0.08, 0.12, 0.16, 0.2, 0.25, 0.3, 0.36, 0.42, 0.58],
@@ -65,7 +65,7 @@ export function migratePatternId(id: string): string {
   const map: Partial<Record<Family, number[]>> = {
     bayer: [2, 4, 5, 6, 7], cluster: [2, 4, 5, 6, 7], pixdots: [2, 3, 5, 7, 8], checker: [1, 2, 3, 4, 5],
     scan: [1, 2, 4, 6, 7], vscan: [1, 2, 4, 6, 7], stairs: [1, 2, 4, 6, 7], xhatch: [1, 2, 3, 4, 6], zigzag: [1, 2, 3, 4, 6],
-    brick: [1, 2, 3, 5, 6], pixfill: [1, 1, 1, 1, 1],
+    brick: [1, 2, 3, 5, 6], pixfill: [1, 1, 1, 1, 1], lines: [1, 2, 3, 4, 5], grid: [1, 2, 3, 4, 5],
   };
   const to = (map[fam] ?? [2, 4, 6, 8, 9])[Number(m[2]) - 1]; // manga tones: the old five sit at 2,4,6,8,9
   return `pattern:${fam}-${to}`;

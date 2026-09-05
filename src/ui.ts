@@ -601,6 +601,8 @@ export function buildUI(
         <div class="pat-head"><span>Fill pattern</span>
           <div class="seg pat-blend" id="pat-blend">${FILL_BLENDS.map((b) => `<button data-v="${b.id}" class="${state.fillBlend === b.id ? 'active' : ''}" title="${b.hint}">${b.label}</button>`).join('')}</div></div>
         <label class="pg-row pat-ink"><span>opacity</span><input type="range" id="pat-ink" min="0.3" max="1" step="0.05" value="${state.inkDensity}"><b>${Math.round(state.inkDensity * 100)}%</b></label>
+        <div class="set-row pat-row"><span>Tone angle</span>
+          <div class="seg" id="pat-rand"><button data-v="1" class="${state.toneRandom ? 'active' : ''}">Random per fill</button><button data-v="0" class="${state.toneRandom ? '' : 'active'}">Fixed</button></div></div>
       </div>
       <div class="pat-fam"><span class="pat-fam-name">Solid</span>
         <div class="pat-swatches"><button class="pat-sw pat-solid${state.fillPattern ? '' : ' active'}" id="pat-clear" title="Solid fill" style="background:${state.color}"></button></div></div>
@@ -613,8 +615,6 @@ export function buildUI(
               return `<button class="pat-sw${state.fillPattern === id ? ' active' : ''}" data-id="${id}" title="${patternLevels(f.fam) === 1 ? f.label : `${f.label} ${k}`}" style="background:${patternPreviewCSS(id, state.color, 3)}"></button>`;
             }).join('')}</div>
           </div>`).join('')}`).join('')}
-      <div class="set-row pat-row"><span>Tone angle</span>
-        <div class="seg" id="pat-rand"><button data-v="1" class="${state.toneRandom ? 'active' : ''}">Random per fill</button><button data-v="0" class="${state.toneRandom ? '' : 'active'}">Fixed</button></div></div>
       <div class="set-note">Patterns paint with the fill tool, in the current colour. With Subtract they overprint like process ink: below 100% opacity the paper shows through, so overlapping tones mix and darken (red over yellow → orange-red). Manga tones can be rotated on a selected fill; dithers stay on one fixed pixel grid at every zoom.</div>`;
     patternPop.querySelector('#pat-rand')!.addEventListener('click', (e) => {
       const v = (e.target as HTMLElement).closest('button')?.dataset.v;

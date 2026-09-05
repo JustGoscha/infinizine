@@ -1712,7 +1712,7 @@ body.presenting .popover { display: none; }
   border-bottom: 1px solid var(--line);
   display: flex; flex-direction: column; gap: 8px;
 }
-.pat-row { margin-top: 8px; }
+.pat-row { margin-top: 0; }
 #pattern-popover.hidden { display: none; }
 .pat-head { display: flex; justify-content: space-between; align-items: center; font-weight: 700; font-size: 13px; }
 .pat-none {
