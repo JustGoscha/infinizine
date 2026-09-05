@@ -6,25 +6,34 @@ import { FONTS } from './text';
 const escapeHtml = (s: string) =>
   s.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;');
 
-function marksToHtml(s: string): string {
-  let h = escapeHtml(s);
-  h = h.replace(/\*\*([^*\n]+)\*\*/g, '<strong>$1</strong>');
-  h = h.replace(/__([^_\n]+)__/g, '<u>$1</u>');
-  h = h.replace(/(^|[^*])\*([^*\n]+)\*(?!\*)/g, '$1<em>$2</em>');
-  return h;
-}
-
-/** {role|text} font spans → <span data-font>, then the inline marks inside each run. */
+/** `{attrs|text}` spans (nesting) → <span data-font data-weight>, then marks. */
 function inlineToHtml(s: string): string {
   let out = '';
-  let last = 0;
-  for (const m of s.matchAll(/\{(franklin|serif|mono|comic|shout)\|([^}]*)\}/g)) {
-    out += marksToHtml(s.slice(last, m.index));
-    const css = FONTS[m[1]]?.css ?? 'inherit';
-    out += `<span data-font="${m[1]}" style="font-family:${css}">${marksToHtml(m[2])}</span>`;
-    last = m.index! + m[0].length;
+  let depth = 0;
+  for (let k = 0; k < s.length; k++) {
+    if (s[k] === '{') {
+      const m = /^\{([a-z0-9 ]+)\|/.exec(s.slice(k));
+      if (m) {
+        let font = '', weight = '';
+        for (const a of m[1].split(' ')) {
+          if (FONTS[a]) font = a;
+          else if (/^w[1-9]00$/.test(a)) weight = a.slice(1);
+        }
+        const style = `${font ? `font-family:${FONTS[font].css};` : ''}${weight ? `font-weight:${weight};` : ''}`;
+        out += `<span${font ? ` data-font="${font}"` : ''}${weight ? ` data-weight="${weight}"` : ''} style="${style}">`;
+        depth++;
+        k += m[0].length - 1;
+        continue;
+      }
+    }
+    if (s[k] === '}' && depth) { out += '</span>'; depth--; continue; }
+    out += escapeHtml(s[k]);
   }
-  out += marksToHtml(s.slice(last));
+  while (depth-- > 0) out += '</span>';
+  // marks may cross span boundaries — the regexes see through the tags
+  out = out.replace(/\*\*((?:(?!\*\*).)+)\*\*/g, '<strong>$1</strong>');
+  out = out.replace(/__((?:(?!__).)+)__/g, '<u>$1</u>');
+  out = out.replace(/(^|[^*])\*([^*\n]+)\*(?!\*)/g, '$1<em>$2</em>');
   return out || '<br>';
 }
 
@@ -49,21 +58,27 @@ export function markdownToHtml(md: string): string {
   return out.join('') || '<div><br></div>';
 }
 
-function inlineToMd(node: Node): string {
+type Ctx = { f?: string; w?: number };
+const attrsOf = (c: Ctx) => [c.f, c.w ? `w${c.w}` : ''].filter(Boolean).join(' ');
+function inlineToMd(node: Node, ctx: Ctx = {}): string {
   let out = '';
   node.childNodes.forEach((n) => {
-    if (n.nodeType === Node.TEXT_NODE) out += (n.textContent ?? '').replace(/​/g, '');
-    else if (n instanceof HTMLElement) {
+    if (n.nodeType === Node.TEXT_NODE) {
+      const t = (n.textContent ?? '').replace(/\u200b/g, '');
+      if (!t) return;
+      out += ctx.f || ctx.w ? `{${attrsOf(ctx)}|${t}}` : t;
+    } else if (n instanceof HTMLElement) {
       switch (n.tagName) {
         case 'BR': break;
-        case 'STRONG': case 'B': out += `**${inlineToMd(n)}**`; break;
-        case 'EM': case 'I': out += `*${inlineToMd(n)}*`; break;
-        case 'U': out += `__${inlineToMd(n)}__`; break;
+        case 'STRONG': case 'B': out += `**${inlineToMd(n, ctx)}**`; break;
+        case 'EM': case 'I': out += `*${inlineToMd(n, ctx)}*`; break;
+        case 'U': out += `__${inlineToMd(n, ctx)}__`; break;
         default: {
-          const role = n.dataset.font;
-          const inner = inlineToMd(n);
-          // per-word typeface: {role|…}; nested spans are flattened to the innermost role
-          out += role && inner ? `{${role}|${inner.replace(/\{[a-z]+\|([^}]*)\}/g, '$1')}}` : inner;
+          // per-word typeface / weight: nested spans merge, innermost wins
+          const c: Ctx = { ...ctx };
+          if (n.dataset.font) c.f = n.dataset.font;
+          if (n.dataset.weight) c.w = Number(n.dataset.weight);
+          out += inlineToMd(n, c);
         }
       }
     }
@@ -179,22 +194,32 @@ export function autoTransform(root: HTMLElement): void {
   placeCaret(after, 1);
 }
 
-/** Wrap the editor's current (non-collapsed) selection in a font span for `role`.
- * Returns false when nothing is selected (caller then applies to the whole box). */
-export function applyInlineFont(root: HTMLElement, role: string, css: string): boolean {
+/** Wrap the editor's current selection in a span carrying a typeface and/or
+ * weight. With nothing selected the whole box is wrapped. Existing spans inside
+ * the selection lose the attribute being set (so the new pick wins). */
+export function applyInlineStyle(root: HTMLElement, style: { font?: string; css?: string; weight?: number }): boolean {
   const sel = window.getSelection();
-  if (!sel || !sel.rangeCount || sel.isCollapsed) return false;
-  const range = sel.getRangeAt(0);
-  if (!root.contains(range.commonAncestorContainer)) return false;
+  if (!sel) return false;
+  let range: Range;
+  if (sel.rangeCount && !sel.isCollapsed && root.contains(sel.getRangeAt(0).commonAncestorContainer)) {
+    range = sel.getRangeAt(0);
+  } else {
+    if (style.font) return false; // typeface with no selection → whole-box font (caller handles)
+    range = document.createRange();
+    range.selectNodeContents(root);
+  }
   const frag = range.extractContents();
-  // flatten font spans already inside the selection: innermost pick wins → ours
-  frag.querySelectorAll('span[data-font]').forEach((sp) => sp.replaceWith(...Array.from(sp.childNodes)));
+  frag.querySelectorAll('span[data-font],span[data-weight]').forEach((sp) => {
+    const el = sp as HTMLElement;
+    if (style.font) { delete el.dataset.font; el.style.fontFamily = ''; }
+    if (style.weight) { delete el.dataset.weight; el.style.fontWeight = ''; }
+    if (!el.dataset.font && !el.dataset.weight) el.replaceWith(...Array.from(el.childNodes));
+  });
   const span = document.createElement('span');
-  span.dataset.font = role;
-  span.style.fontFamily = css;
+  if (style.font) { span.dataset.font = style.font; span.style.fontFamily = style.css ?? ''; }
+  if (style.weight) { span.dataset.weight = String(style.weight); span.style.fontWeight = String(style.weight); }
   span.appendChild(frag);
   range.insertNode(span);
-  // keep the text selected so further styling stacks
   const r = document.createRange();
   r.selectNodeContents(span);
   sel.removeAllRanges();

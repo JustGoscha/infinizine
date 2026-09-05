@@ -20,7 +20,7 @@ html, body {
   height: 100%;
   overflow: hidden;
   overscroll-behavior: none;
-  font-family: 'Libre Franklin', 'Franklin Gothic Medium', ui-sans-serif, sans-serif;
+  font-family: 'Libre Franklin Variable', 'Franklin Gothic Medium', ui-sans-serif, sans-serif;
   color: var(--ink);
   background: var(--paper);
   -webkit-user-select: none;
@@ -1614,8 +1614,35 @@ body.presenting .popover { display: none; }
 .set-note { font-size: 11px; color: var(--ink-soft); }
 
 /* text editor bar: inline marks */
-.font-bar .fb-mark { min-width: 30px; font-family: 'Libre Franklin', sans-serif; }
+.font-bar .fb-mark { min-width: 30px; font-family: 'Libre Franklin Variable', sans-serif; }
 .font-bar .fb-b { font-weight: 800; }
 .font-bar .fb-i { font-style: italic; }
 .font-bar .fb-u { text-decoration: underline; }
 .text-editor u { text-decoration: underline; text-underline-offset: 0.08em; }
+
+/* weight picker under the text bar */
+.weight-pop {
+  position: fixed;
+  z-index: 31;
+  display: flex;
+  gap: 4px;
+  padding: 6px;
+  background: var(--panel);
+  border: var(--panel-border);
+  border-radius: 3px;
+  box-shadow: var(--shadow);
+  -webkit-backdrop-filter: blur(10px);
+  backdrop-filter: blur(10px);
+}
+.weight-pop.hidden { display: none; }
+.weight-pop button {
+  border: 1.5px solid var(--line);
+  background: transparent;
+  color: var(--ink);
+  border-radius: 2px;
+  padding: 4px 8px;
+  font-size: 14px;
+  cursor: pointer;
+}
+.weight-pop button:hover { border-color: var(--ink); }
+.weight-note { font-size: 11px; color: var(--ink-soft); padding: 4px 6px; }

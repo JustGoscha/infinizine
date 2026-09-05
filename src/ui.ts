@@ -7,9 +7,9 @@ import { Store } from './store';
 import { Camera, baseZoom, pxPerMm, setPxPerMm } from './camera';
 import { PALETTES, getPalette, shades } from './palettes';
 import { UNITS_PER_MM, uid } from './types';
-import { layoutText, layoutHeight, layoutWidth, FONTS, FACES, chosenFaces, setFace, type FontRole } from './text';
+import { layoutText, layoutHeight, layoutWidth, FONTS, FACES, chosenFaces, setFace, weightRange, type FontRole } from './text';
 import { pressure, savePressure, resetPressure, loadPressure, exportPressure, importPressure, easeP, curveAt, type Curve, type CurveNode } from './geometry';
-import { markdownToHtml, htmlToMarkdown, autoTransform, caretToEnd, applyInlineFont } from './richedit';
+import { markdownToHtml, htmlToMarkdown, autoTransform, caretToEnd, applyInlineStyle } from './richedit';
 
 function toast(msg: string) {
   window.dispatchEvent(new CustomEvent('izine-toast', { detail: msg }));
@@ -743,7 +743,7 @@ export function buildUI(
       b.addEventListener('pointerdown', (e) => e.preventDefault());
       b.addEventListener('click', () => {
         // with a selection: typeface for just those words; otherwise the whole box
-        if (applyInlineFont(ta, key, f.css)) { place(); ta.focus(); return; }
+        if (applyInlineStyle(ta, { font: key, css: f.css })) { place(); ta.focus(); return; }
         family = key;
         state.font = key;
         bar.querySelectorAll('.fb-font').forEach((o) => o.classList.toggle('active', o === b));
@@ -768,11 +768,56 @@ export function buildUI(
       b.textContent = m.label;
       b.className = `fb-mark ${m.cls}`;
       b.title = `${m.cmd[0].toUpperCase()}${m.cmd.slice(1)} (⌘${m.key.toUpperCase()})`;
-      b.addEventListener('pointerdown', (e) => e.preventDefault());
-      b.addEventListener('click', () => { document.execCommand(m.cmd); place(); ta.focus(); syncMarks(); });
+      b.addEventListener('pointerdown', (e) => {
+        e.preventDefault();
+        if (m.cmd !== 'bold') return;
+        // long-press B → weight picker (100–900 where the face is variable)
+        holdTimer = window.setTimeout(() => { holdFired = true; openWeights(); }, 450);
+      });
+      b.addEventListener('pointerup', () => clearTimeout(holdTimer));
+      b.addEventListener('pointerleave', () => clearTimeout(holdTimer));
+      b.addEventListener('click', () => {
+        if (holdFired) { holdFired = false; return; }
+        document.execCommand(m.cmd); place(); ta.focus(); syncMarks();
+      });
       markBtns.push(b);
       bar.appendChild(b);
     }
+    let holdTimer = 0;
+    let holdFired = false;
+    const weightPop = document.createElement('div');
+    weightPop.className = 'weight-pop hidden';
+    document.body.appendChild(weightPop);
+    const openWeights = () => {
+      const range = weightRange(family);
+      weightPop.innerHTML = '';
+      if (!range) {
+        weightPop.innerHTML = `<span class="weight-note">${FONTS[family].name} has only regular & bold</span>`;
+      } else {
+        for (let w = 100; w <= 900; w += 100) {
+          if (w < range[0] || w > range[1]) continue;
+          const wb = document.createElement('button');
+          wb.textContent = String(w);
+          wb.style.fontWeight = String(w);
+          wb.style.fontFamily = FONTS[family].css;
+          wb.addEventListener('pointerdown', (e) => e.preventDefault());
+          wb.addEventListener('click', () => {
+            applyInlineStyle(ta, { weight: w });
+            weightPop.classList.add('hidden');
+            place();
+            ta.focus();
+          });
+          weightPop.appendChild(wb);
+        }
+      }
+      const br = bar.getBoundingClientRect();
+      weightPop.style.left = `${br.left}px`;
+      weightPop.style.top = `${br.bottom + 6}px`;
+      weightPop.classList.remove('hidden');
+    };
+    document.addEventListener('pointerdown', (e) => {
+      if (!(e.target as HTMLElement).closest('.weight-pop, .fb-b')) weightPop.classList.add('hidden');
+    });
     const syncMarks = () => {
       marks.forEach((m, i) => markBtns[i].classList.toggle('active', document.queryCommandState(m.cmd)));
     };
@@ -847,6 +892,7 @@ export function buildUI(
       done = true;
       state.onEditColor = null;
       document.removeEventListener('selectionchange', syncMarks);
+      weightPop.remove();
       ta.remove();
       bar.remove();
       if (target) state.hidden.delete(target.id);
@@ -886,6 +932,11 @@ export function buildUI(
       // classic shortcuts, applied as real styling (serialized back to markdown on commit)
       if ((e.metaKey || e.ctrlKey) && (e.key === 'b' || e.key === 'i' || e.key === 'u')) {
         e.preventDefault();
+        if (e.repeat) {
+          // ⌘B held down → the weight picker instead of toggling bold again
+          if (e.key === 'b' && weightPop.classList.contains('hidden')) { openWeights(); document.execCommand('bold'); }
+          return;
+        }
         document.execCommand(e.key === 'b' ? 'bold' : e.key === 'i' ? 'italic' : 'underline');
         place();
         syncMarks();
@@ -2327,11 +2378,11 @@ export function buildUI(
         c.fill(); c.stroke();
       });
       c.fillStyle = 'rgba(42,36,26,0.7)';
-      c.font = '11px Libre Franklin, sans-serif';
+      c.font = '11px Libre Franklin Variable, sans-serif';
       c.fillText(labels.x, bx0, by1 + 14);
       c.save(); c.translate(bx0 - 6, by1); c.rotate(-Math.PI / 2); c.fillText(labels.y, 0, 0); c.restore();
       const ro = labels.readout(fx);
-      c.font = '12px Libre Franklin, sans-serif';
+      c.font = '12px Libre Franklin Variable, sans-serif';
       c.fillText(ro, bx1 - c.measureText(ro).width, by0 - 6);
       // bar
       const inner = sel !== null && sel > 0 && sel < curve.length - 1;

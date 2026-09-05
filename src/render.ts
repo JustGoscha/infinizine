@@ -209,7 +209,7 @@ export class Renderer {
       for (const line of layoutText(el.text, family, el.fontSize, el.w)) {
         let tx = el.x;
         for (const seg of line.segs) {
-          ctx.font = fontFor(seg.f ?? family, line.size, seg.b, seg.i);
+          ctx.font = fontFor(seg.f ?? family, line.size, seg.b, seg.i, seg.w);
           ctx.fillText(seg.t, tx, ty);
           const sw = segWidth(family, line, seg);
           if (seg.u) ctx.fillRect(tx, ty + line.size * 1.02, sw, Math.max(0.5, line.size * 0.06));
@@ -979,7 +979,7 @@ export class Renderer {
         ctx.strokeStyle = active ? '#7048E8' : 'rgba(112,72,232,0.45)';
         ctx.strokeRect(area.x, area.y, area.w, area.h);
         ctx.setLineDash([]);
-        ctx.font = `500 ${11 / z}px "Libre Franklin", sans-serif`;
+        ctx.font = `500 ${11 / z}px "Libre Franklin Variable", sans-serif`;
         ctx.fillStyle = 'rgba(112,72,232,0.8)';
         ctx.textAlign = 'left';
         ctx.fillText(`${area.name} · ${area.fps}fps`, area.x + 2 / z, area.y - 6 / z);
@@ -1076,7 +1076,7 @@ export class Renderer {
     // Zoom badge: 100% = the first page fits the screen
     if (!presenting) {
       const pct = Math.round((z / baseZoom()) * 100);
-      ctx.font = '600 11px "Libre Franklin", sans-serif';
+      ctx.font = '600 11px "Libre Franklin Variable", sans-serif';
       ctx.fillStyle = 'rgba(42,36,26,0.55)';
       ctx.textAlign = 'right';
       ctx.fillText(`${this.fps}fps · ${pct}%${this.input.zoomLocked ? ' locked' : ''}`, vw - 14, vh - 12);
@@ -1201,7 +1201,7 @@ export class Renderer {
     ctx.lineWidth = 1 / z;
     ctx.strokeRect(page.x, page.y, page.w, page.h);
     // Label + drag tab
-    ctx.font = `500 ${11 / z}px "Libre Franklin", sans-serif`;
+    ctx.font = `500 ${11 / z}px "Libre Franklin Variable", sans-serif`;
     ctx.fillStyle = 'rgba(90,75,50,0.6)';
     ctx.textAlign = 'left';
     ctx.fillText(page.name, page.x + 2 / z, page.y - 6 / z);
