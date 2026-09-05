@@ -23,6 +23,14 @@ export class Renderer {
     valid: boolean;
     key: string; // camera + size + style fingerprint
   } = { canvas: document.createElement('canvas'), valid: false, key: '' };
+  // pencil stamp lists are zoom-independent: computed once per stroke
+  private stampCache = new Map<string, { n: number; stamps: { x: number; y: number; p: number; a?: number }[] }>();
+  // zoom gestures: keep drawing stale rasters (scaled) and rebuild only when the
+  // zoom settles, a few milliseconds per frame, so pinch-zoom stays fluid
+  private lastZoom = 0;
+  private lastZoomChangeAt = 0;
+  private rasterBudgetUntil = 0; // performance.now() deadline for raster builds this frame
+  private rastersPending = false;
   private liveSmooth = new LiveDenoiser(); // vector live stroke
   private livePencilSmooth = new LiveDenoiser(); // pencil live stroke (separate: stamped incrementally)
   private dirty = true;
@@ -79,14 +87,14 @@ export class Renderer {
     }
     return img;
   }
-  dropFromCache(id: string) { this.cache.delete(id); this.pencilCache.delete(id); this.staticLayer.valid = false; }
-  clearCache() { this.cache.clear(); this.pencilCache.clear(); this.staticLayer.valid = false; }
+  dropFromCache(id: string) { this.cache.delete(id); this.pencilCache.delete(id); this.stampCache.delete(id); this.staticLayer.valid = false; }
+  clearCache() { this.cache.clear(); this.pencilCache.clear(); this.stampCache.clear(); this.staticLayer.valid = false; }
 
   /** Document changed: drop only the touched elements' caches; keep the static
    * layer when the change is a fresh append we can paint on top of. */
   docChanged(info?: ChangeInfo) {
     if (!info) { this.clearCache(); this.invalidate(); return; }
-    for (const id of info.ids) { this.cache.delete(id); this.pencilCache.delete(id); }
+    for (const id of info.ids) { this.cache.delete(id); this.pencilCache.delete(id); this.stampCache.delete(id); }
     const st = this.staticLayer;
     const canAppend =
       st.valid &&
@@ -382,8 +390,10 @@ export class Renderer {
     return set;
   }
 
-  private stampStroke(target: CanvasRenderingContext2D, el: Stroke, alphaScale = 1, fromIndex = 0): number {
-    const nib = this.nibs(el.color);
+  /** Stamp positions for a stroke (zoom-independent), cached for committed strokes. */
+  private stampsFor(el: Stroke, useCache: boolean) {
+    const hit = useCache ? this.stampCache.get(el.id) : undefined;
+    if (hit && hit.n === el.points.length) return hit.stamps;
     // same fast-ramping pressure response as the vector tools; pressure is
     // additionally smoothed along the line so stamp density doesn't flicker
     // with the Pencil's sample-to-sample pressure noise
@@ -397,18 +407,13 @@ export class Renderer {
       return { ...pt, p: easeP(sum / cnt, 'pencil') };
     });
     const wBase = el.baseWidth;
-    // deterministic per-stamp randomness: variant, rotation, jitter — kills the
-    // repeated-texture chain look of reusing one tile in one orientation
     const rnd = (i: number, salt: number) => {
       const x = Math.sin(i * 127.1 + salt * 311.7) * 43758.5453;
       return x - Math.floor(x);
     };
-    // graphite: pressure barely widens the line — it packs more, darker
-    // stamps into the same width (spacing shrinks ~3× from light to hard)
     const spacingAt = (p: number) => Math.max(0.2, wBase * 0.3 * (1.35 - p * 0.9));
     const stamps: { x: number; y: number; p: number; a?: number }[] = [];
     if (pts.length === 1) {
-      // a tap: a dense disc of stamps at the tap pressure
       const c = pts[0];
       const R = wBase * 0.6;
       const n = Math.round(14 + c.p * 30);
@@ -433,8 +438,37 @@ export class Renderer {
       }
       carry = d - len;
     }
+    if (useCache) this.stampCache.set(el.id, { n: el.points.length, stamps });
+    return stamps;
+  }
+
+  /** Draw a pencil stroke's stamps. `minSpacing` (world units) skips stamps
+   * closer than that — set to ~0.7 device px so zoomed-out rasters cost a
+   * fraction of the draws; alpha is boosted to keep the same darkness. */
+  private stampStroke(
+    target: CanvasRenderingContext2D, el: Stroke, alphaScale = 1, fromIndex = 0,
+    opts: { minSpacing?: number; cache?: boolean } = {},
+  ): number {
+    const nib = this.nibs(el.color);
+    const stamps = this.stampsFor(el, opts.cache ?? false);
+    const minSpacing = opts.minSpacing ?? 0;
+    const wBase = el.baseWidth;
+    // deterministic per-stamp randomness: variant, rotation, jitter — kills the
+    // repeated-texture chain look of reusing one tile in one orientation
+    const rnd = (i: number, salt: number) => {
+      const x = Math.sin(i * 127.1 + salt * 311.7) * 43758.5453;
+      return x - Math.floor(x);
+    };
+    let sinceX = NaN, sinceY = NaN, skipped = 0;
     for (let i = fromIndex; i < stamps.length; i++) {
       const st = stamps[i];
+      if (minSpacing > 0 && !Number.isNaN(sinceX) && Math.hypot(st.x - sinceX, st.y - sinceY) < minSpacing) {
+        skipped++;
+        continue;
+      }
+      sinceX = st.x; sinceY = st.y;
+      const boost = 1 + skipped; // stamps merged into this one
+      skipped = 0;
       // graphite sharpens as you press: the faint halo is widest at light
       // pressure, the solid core that takes over is narrower than the halo
       // a flat Pencil lays the side of the graphite down: light strokes get
@@ -452,13 +486,13 @@ export class Renderer {
       target.rotate(rnd(i, 5) * Math.PI * 2);
       // grain: present from the lightest touch, fades back as the core takes over
       const grainA = (0.16 + st.p * 0.3) * (1 - Math.max(0, st.p - 0.55) * 0.9) / Math.sqrt(tiltMul);
-      target.globalAlpha = alphaScale * grainA * wobble;
+      target.globalAlpha = Math.min(1, alphaScale * grainA * wobble * boost);
       target.drawImage(nib.grain[Math.floor(rnd(i, 6) * 8)], -r, -r, r * 2, r * 2);
       // dense core: kicks in past mid pressure, near-solid at full
       const core = Math.max(0, (st.p - 0.4) / 0.6);
       if (core > 0) {
         const rc = wEff * (0.62 - core * 0.2) * (0.98 + rnd(i, 3) * 0.04);
-        target.globalAlpha = alphaScale * Math.pow(core, 1.3) * 0.9 * wobble;
+        target.globalAlpha = Math.min(1, alphaScale * Math.pow(core, 1.3) * 0.9 * wobble * boost);
         target.drawImage(nib.dense[Math.floor(rnd(i, 9) * 8)], -rc, -rc, rc * 2, rc * 2);
       }
       target.restore();
@@ -517,6 +551,15 @@ export class Renderer {
     let bucket = Math.pow(2, Math.round(Math.log2(Math.max(0.25, Math.min(8, z))))) * dpr;
     const hit = this.pencilCache.get(el.id);
     if (hit && hit.bucket === bucket) return hit;
+    if (hit) {
+      // wrong bucket but usable: while a zoom gesture is in flight, or once this
+      // frame's raster budget is spent, draw it scaled and rebuild later
+      const now = performance.now();
+      if (now - this.lastZoomChangeAt < 180 || now > this.rasterBudgetUntil) {
+        this.rastersPending = true;
+        return hit;
+      }
+    }
     const bbox = elementBBox(el);
     let w = Math.max(1, Math.ceil((bbox.maxX - bbox.minX) * bucket));
     let h = Math.max(1, Math.ceil((bbox.maxY - bbox.minY) * bucket));
@@ -531,7 +574,8 @@ export class Renderer {
     const cc = c.getContext('2d')!;
     cc.scale(bucket, bucket);
     cc.translate(-bbox.minX, -bbox.minY);
-    this.stampStroke(cc, el);
+    // stamps closer than ~0.7 device px are invisible: skip them (alpha-compensated)
+    this.stampStroke(cc, el, 1, 0, { minSpacing: 0.7 / bucket, cache: true });
     const entry = { c, bucket, bbox };
     this.pencilCache.set(el.id, entry);
     return entry;
@@ -542,6 +586,10 @@ export class Renderer {
     const dpr = window.devicePixelRatio || 1;
     const vw = canvas.clientWidth, vh = canvas.clientHeight;
     if (!vw || !vh) return; // hidden (e.g. the playground's scratch canvas while closed)
+    const frameStart = performance.now();
+    if (camera.zoom !== this.lastZoom) { this.lastZoom = camera.zoom; this.lastZoomChangeAt = frameStart; }
+    this.rasterBudgetUntil = frameStart + 6; // ms of pencil raster (re)building per frame
+    this.rastersPending = false;
     if (canvas.width !== vw * dpr || canvas.height !== vh * dpr) {
       canvas.width = vw * dpr;
       canvas.height = vh * dpr;
@@ -1015,6 +1063,12 @@ export class Renderer {
       veil.rect(tl.x, tl.y, br.x - tl.x, br.y - tl.y);
       ctx.fillStyle = '#000000';
       ctx.fill(veil, 'evenodd');
+    }
+
+    // stale pencil rasters were shown: come back next frame and keep rebuilding
+    if (this.rastersPending) {
+      this.staticLayer.valid = false;
+      this.dirty = true;
     }
 
     // Zoom badge: 100% = the first page fits the screen
