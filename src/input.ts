@@ -6,7 +6,7 @@ import { Camera, baseZoom } from './camera';
 import { Store } from './store';
 import { AnimArea, Stroke, FillShape, Element, ImageBox, Page, TextBox, uid } from './types';
 import { hitElement, elementsInLasso, denoise, denoiseClosed, pressure } from './geometry';
-import { inkOf, isPattern } from './patterns';
+import { inkOf, isPattern, isPixelPattern } from './patterns';
 import { layoutText, layoutHeight } from './text';
 
 const CLIP_KEY = 'infinizine-clipboard';
@@ -1086,7 +1086,7 @@ export function attachInput(
           id: uid('fl'), kind: 'fill', color: inkOf(state.color), opacity: 1,
           pattern: isPattern(state.color) ? state.color : undefined,
           // every tone fill gets its own angle so neighbouring fills don't line up like wallpaper
-          patternAngle: isPattern(state.color) ? Math.floor(Math.random() * 36) * 5 : undefined,
+          patternAngle: isPattern(state.color) && !isPixelPattern(state.color) ? Math.floor(Math.random() * 36) * 5 : undefined,
           layer: state.paintBehind ? 'back' : 'front',
           frame: state.activeFrameId ?? undefined,
           alayer: state.activeLayerId ?? undefined,

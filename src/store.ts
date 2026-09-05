@@ -1,7 +1,7 @@
 // Document store: state, undo/redo, localStorage persistence, page placement.
 
 import { AnimArea, AnimFrame, AnimLayer, Doc, Element, Layer, Page, emptyDoc, uid, FORMAT_VERSION } from './types';
-import { inkOf, isPattern } from './patterns';
+import { inkOf, isPattern, isPixelPattern } from './patterns';
 
 type TextContent = { text: string; w: number; h: number; font?: string; fontSize?: number };
 type TextMetrics = { x: number; w: number; h: number; fontSize: number; auto?: boolean };
@@ -1108,7 +1108,7 @@ export class Store {
   rotatePatterns(ids: string[], delta: number) {
     const items = ids
       .map((id) => this.doc.elements.find((e) => e.id === id))
-      .filter((e): e is Extract<Element, { kind: 'fill' }> => !!e && e.kind === 'fill' && !!e.pattern)
+      .filter((e): e is Extract<Element, { kind: 'fill' }> => !!e && e.kind === 'fill' && !!e.pattern && !isPixelPattern(e.pattern))
       .map((e) => ({ id: e.id, before: e.patternAngle ?? 0, after: ((e.patternAngle ?? 0) + delta + 360) % 360 }));
     if (items.length) this.commit({ type: 'pattern-angle', items });
   }

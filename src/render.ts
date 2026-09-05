@@ -8,7 +8,7 @@ import { layoutText, fontFor, segWidth, LINE_HEIGHT } from './text';
 import { moveHandleRect, moveAllHandleRect, deleteHandleRect, eyeHandleRect, type InputState } from './input';
 import { Store, ChangeInfo } from './store';
 import { formatLabel } from './formats';
-import { patternTile, patternTileSize, inkOf } from './patterns';
+import { patternTile, patternTileSize, patternCellSize, snapPolygonToCells, inkOf } from './patterns';
 import { reportCrash } from './crash';
 
 type View = { x: number; y: number; w: number; h: number }; // camera viewport, world coords
@@ -313,6 +313,9 @@ export class Renderer {
       if (el.kind === 'stroke' && el.tool === 'marker') {
         const mp = markerPaths(el.points, el.baseWidth, detail);
         path = mp.fill; core = mp.hull;
+      } else if (el.kind === 'fill' && el.pattern && patternCellSize(el.pattern)) {
+        // pixel patterns: the outline snaps to the cell grid so no cell is cut in half
+        path = snapPolygonToCells(el.points, patternCellSize(el.pattern)!) ?? polygonPath(el.points);
       } else {
         path = el.kind === 'stroke' ? outlineToPath(strokeOutline(el, detail)) : polygonPath(el.points);
       }

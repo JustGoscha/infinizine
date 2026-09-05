@@ -2,6 +2,8 @@
 // (Bayer, scanlines). A pattern is a "colour" like `pattern:tone-3`; only the
 // fill tool paints it — strokes and text using a pattern swatch just get ink.
 
+import { pointInPolygon } from './geometry';
+
 export const PATTERN_INK = '#1a1a1a';
 export const isPattern = (c: string) => c.startsWith('pattern:');
 /** what a stroke/text gets when a pattern swatch is active */
@@ -45,6 +47,43 @@ export function patternTileSize(id: string): number {
     case 'waves': case 'scales': return 4;
     default: return 3;
   }
+}
+
+/** Pixel families: cell size in world units (fills snap their outline to this grid). */
+export function patternCellSize(id: string): number | null {
+  const p = parse(id);
+  if (!p) return null;
+  const T = patternTileSize(id);
+  switch (p.fam) {
+    case 'bayer': case 'stairs': return T / 4;
+    case 'pixnoise': return T / 20;
+    case 'checker': case 'scan': return T / 2;
+    default: return null;
+  }
+}
+export const isPixelPattern = (id: string) => patternCellSize(id) !== null;
+
+/** A polygon snapped to a cell grid anchored at the world origin: every cell
+ * whose centre lies inside is included whole — the fill's edge becomes pixel
+ * steps, never a cell cut in half. Rows are emitted as horizontal runs. */
+export function snapPolygonToCells(points: { x: number; y: number }[], cell: number): Path2D | null {
+  if (points.length < 3) return null;
+  let minX = Infinity, minY = Infinity, maxX = -Infinity, maxY = -Infinity;
+  for (const q of points) { minX = Math.min(minX, q.x); minY = Math.min(minY, q.y); maxX = Math.max(maxX, q.x); maxY = Math.max(maxY, q.y); }
+  const c0 = Math.floor(minX / cell), c1 = Math.ceil(maxX / cell);
+  const r0 = Math.floor(minY / cell), r1 = Math.ceil(maxY / cell);
+  if ((c1 - c0) * (r1 - r0) > 600_000) return null; // absurdly large: fall back to the smooth outline
+  const path = new Path2D();
+  for (let r = r0; r < r1; r++) {
+    const cy = (r + 0.5) * cell;
+    let run = -1;
+    for (let c = c0; c <= c1; c++) {
+      const inside = c < c1 && pointInPolygon((c + 0.5) * cell, cy, points);
+      if (inside && run < 0) run = c;
+      if (!inside && run >= 0) { path.rect(run * cell, r * cell, (c - run) * cell, cell); run = -1; }
+    }
+  }
+  return path;
 }
 
 // deterministic per-tile randomness so a tile is identical every time it's built
