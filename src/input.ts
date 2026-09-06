@@ -7,7 +7,8 @@ import { Store } from './store';
 import { AnimArea, Stroke, FillShape, Element, ImageBox, Page, TextBox, uid } from './types';
 import { hitElement, elementsInLasso, denoise, denoiseClosed, pressure, strokeOutline } from './geometry';
 import { isPixelPattern, migratePatternId } from './patterns';
-import { layoutText, layoutHeight } from './text';
+import { layoutText, layoutHeight, layoutWidth, boxFamily, roleOf } from './text';
+import { rollFace, loadFace } from './facepool';
 
 const CLIP_KEY = 'infinizine-clipboard';
 export const CLIP_PENDING_KEY = 'infinizine-clip-pending'; // '1' while the clip hasn't been pasted yet
@@ -93,6 +94,18 @@ export function eyeHandleRect(x: number, y: number, zoom: number) {
 export function deleteHandleRect(x: number, y: number, w: number, zoom: number) {
   const s = 22 / zoom;
   return { x: x + w + 4 / zoom, y: y - s - 4 / zoom, s };
+}
+
+/** Copy grabber on text/image boxes: under the move handle. Dragging it drags a duplicate
+ * (the touch equivalent of alt-drag). */
+export function copyHandleRect(x: number, y: number, zoom: number) {
+  return moveAllHandleRect(x, y, zoom);
+}
+
+/** Dice (re-roll the typeface) on a textbox: right side, under the bin. */
+export function diceHandleRect(x: number, y: number, w: number, zoom: number) {
+  const s = 22 / zoom;
+  return { x: x + w + 4 / zoom, y: y + 2 / zoom, s };
 }
 
 function inRect(w: { x: number; y: number }, r: { x: number; y: number; s: number }): boolean {
@@ -189,6 +202,8 @@ export class InputState {
   onPagePreview: (page: Page) => void = () => {};
   textRect: { x: number; y: number; w: number; h: number } | null = null; // rect being drawn with the text tool
   hoverText: string | null = null; // textbox under the mouse (shows its move handle)
+  /** textboxes whose dice is rolling → pip face shown (1–6), flipped while the new typeface loads */
+  rolling = new Map<string, number>();
   hoverArea: string | null = null; // anim area under the mouse (shows its handles)
   hoverPage: string | null = null; // page under the mouse (shows its grabbers)
   hoverImage: string | null = null; // image under the mouse (shows its handles)
@@ -429,8 +444,9 @@ export function attachInput(
         store.deleteElements([el]);
         return;
       }
-      if (inRect(w, moveHandleRect(el.x, el.y, z))) {
+      if (inRect(w, moveHandleRect(el.x, el.y, z)) || inRect(w, copyHandleRect(el.x, el.y, z))) {
         state.selection = new Set([el.id]);
+        if (e.altKey || inRect(w, copyHandleRect(el.x, el.y, z))) duplicateSelection();
         dragSelection = true;
         dragStartWorld = w;
         dragTotal = { x: 0, y: 0 };
@@ -463,9 +479,15 @@ export function attachInput(
         store.deleteElements([el]);
         return;
       }
-      const hr = textHandleRect(el, z);
-      if (inRect(w, hr)) {
+      if (inRect(w, diceHandleRect(el.x, el.y, el.w, z))) {
         state.selection = new Set([el.id]);
+        void rollTextFace(el);
+        return;
+      }
+      const hr = textHandleRect(el, z);
+      if (inRect(w, hr) || inRect(w, copyHandleRect(el.x, el.y, z))) {
+        state.selection = new Set([el.id]);
+        if (e.altKey || inRect(w, copyHandleRect(el.x, el.y, z))) duplicateSelection();
         dragSelection = true;
         dragStartWorld = w;
         dragTotal = { x: 0, y: 0 };
@@ -646,10 +668,11 @@ export function attachInput(
         if (tapped && !state.selection.has(tapped.id)) {
           state.selection = new Set([tapped.id]);
           invalidate();
-          return;
+          if (!e.altKey) return; // alt: fall through and drag a copy right away
         }
-        // Drag inside current selection moves it; otherwise start a new lasso/marquee.
+        // Drag inside current selection moves it (alt-drag moves a duplicate); otherwise start a new lasso/marquee.
         if (state.selection.size && hitsSelection(w)) {
+          if (e.altKey) duplicateSelection();
           dragSelection = true;
           dragStartWorld = w;
           dragTotal = { x: 0, y: 0 };
@@ -696,6 +719,19 @@ export function attachInput(
         return;
       }
     }
+  }
+
+  /** Clone the selected elements in place (same frame/layer) and select the clones, so a
+   * drag that follows moves the copies and leaves the originals put. */
+  function duplicateSelection() {
+    const els = store.doc.elements
+      .filter((el) => state.selection.has(el.id))
+      .map((el) => Object.assign(structuredClone(el) as Element, { id: uid('cp') }));
+    if (!els.length) return;
+    store.addElements(els);
+    state.selection = new Set(els.map((el) => el.id));
+    if (state.hoverText && !state.selection.has(state.hoverText)) state.hoverText = null;
+    if (state.hoverImage && !state.selection.has(state.hoverImage)) state.hoverImage = null;
   }
 
   function hitsSelection(w: { x: number; y: number }): boolean {
@@ -892,7 +928,7 @@ export function attachInput(
         el.w = resizeStart.w * f;
         el.fontSize = resizeStart.fontSize * f;
       }
-      const contentH = layoutHeight(layoutText(el.text, el.font ?? 'franklin', el.fontSize, el.w));
+      const contentH = layoutHeight(layoutText(el.text, boxFamily(el), el.fontSize, el.w));
       el.h =
         resizeMode === 'height'
           ? Math.max(contentH, resizeStart.h + dy)
@@ -1241,6 +1277,52 @@ export function attachInput(
     img.src = dataURL;
   }
 
+  /** The dice: pick another face of the box's role, spin until it has loaded, then apply (undoable). */
+  async function rollTextFace(el: TextBox) {
+    if (state.rolling.has(el.id)) return;
+    const role = roleOf(el.font ?? 'franklin');
+    const started = performance.now();
+    state.rolling.set(el.id, 1 + Math.floor(Math.random() * 6));
+    let last = started;
+    const spin = () => {
+      if (!state.rolling.has(el.id)) return;
+      const now = performance.now();
+      if (now - last > 90) {
+        last = now;
+        const cur = state.rolling.get(el.id)!;
+        let pip = 1 + Math.floor(Math.random() * 6);
+        if (pip === cur) pip = (pip % 6) + 1;
+        state.rolling.set(el.id, pip);
+        invalidate();
+      }
+      requestAnimationFrame(spin);
+    };
+    invalidate();
+    requestAnimationFrame(spin);
+    let face = el.face;
+    for (let tries = 0; tries < 4; tries++) {
+      const pick = rollFace(role, face);
+      if (!pick) break;
+      if (await loadFace(pick.id)) { face = pick.id; break; }
+    }
+    // a roll that came back instantly still shows its spin
+    const wait = 450 - (performance.now() - started);
+    if (wait > 0) await new Promise((r) => setTimeout(r, wait));
+    state.rolling.delete(el.id);
+    const live = store.doc.elements.find((e) => e.id === el.id);
+    if (!live || live.kind !== 'text' || face === live.face) { invalidate(); return; }
+    // the new face has its own metrics: re-measure the box like an edit would
+    const fam = boxFamily({ font: live.font, face });
+    const w = live.auto ? Math.max(40, layoutWidth(layoutText(live.text || ' ', fam, live.fontSize, 1e6), fam) + 4) : live.w;
+    const h = Math.max(live.auto ? 0 : live.h, layoutHeight(layoutText(live.text || ' ', fam, live.fontSize, w)));
+    store.updateText(
+      live.id,
+      { text: live.text, w: live.w, h: live.h, face: live.face ?? null },
+      { text: live.text, w, h, face },
+    );
+    invalidate();
+  }
+
   function addTextFromString(text: string) {
     const wBox = 220;
     const h = Math.max(30, layoutHeight(layoutText(text, state.font, state.textSize, wBox)));
@@ -1500,6 +1582,8 @@ export function attachInput(
         const hr = textHandleRect(el, z);
         const inHandle = w.x >= hr.x && w.x <= hr.x + hr.s && w.y >= hr.y && w.y <= hr.y + hr.s;
         const inDel = inRect(w, deleteHandleRect(el.x, el.y, el.w, z));
+        const inDice = inRect(w, diceHandleRect(el.x, el.y, el.w, z));
+        const inCopy = inRect(w, copyHandleRect(el.x, el.y, z));
         const inBox = w.x >= el.x && w.x <= el.x + el.w && w.y >= el.y && w.y <= el.y + el.h;
         // resize handles straddle the border: their outer half must keep the box hovered
         const r = 12 / z;
@@ -1507,10 +1591,11 @@ export function attachInput(
           Math.hypot(w.x - (el.x + el.w), w.y - (el.y + el.h)) < r ||
           (Math.abs(w.y - (el.y + el.h)) < r && Math.abs(w.x - (el.x + el.w / 2)) < r) ||
           (Math.abs(w.y - (el.y + el.h / 2)) < r && (Math.abs(w.x - el.x) < r || Math.abs(w.x - (el.x + el.w)) < r));
-        if (inHandle || inBox || inDel || nearResize) {
+        if (inHandle || inBox || inDel || inDice || inCopy || nearResize) {
           hover = el.id;
           if (inHandle) cursor = 'grab';
-          if (inDel) cursor = 'pointer';
+          if (inCopy) cursor = 'copy';
+          if (inDel || inDice) cursor = 'pointer';
           if (Math.hypot(w.x - (el.x + el.w), w.y - (el.y + el.h)) < r) cursor = 'nwse-resize';
           else if (Math.abs(w.y - (el.y + el.h)) < r && Math.abs(w.x - (el.x + el.w / 2)) < r) cursor = 'ns-resize';
           else if (Math.abs(w.y - (el.y + el.h / 2)) < r &&
@@ -1526,14 +1611,16 @@ export function attachInput(
           const r = 12 / z;
           const inBox = w.x >= el.x && w.x <= el.x + el.w && w.y >= el.y && w.y <= el.y + el.h;
           const inMove = inRect(w, moveHandleRect(el.x, el.y, z));
+          const inCopy = inRect(w, copyHandleRect(el.x, el.y, z));
           const inDel = inRect(w, deleteHandleRect(el.x, el.y, el.w, z));
           const nearResize =
             Math.hypot(w.x - (el.x + el.w), w.y - (el.y + el.h)) < r ||
             (Math.abs(w.y - (el.y + el.h)) < r && Math.abs(w.x - (el.x + el.w / 2)) < r) ||
             (Math.abs(w.y - (el.y + el.h / 2)) < r && (Math.abs(w.x - el.x) < r || Math.abs(w.x - (el.x + el.w)) < r));
-          if (inBox || inMove || inDel || nearResize) {
+          if (inBox || inMove || inCopy || inDel || nearResize) {
             hoverImage = el.id;
             if (inMove) cursor = 'grab';
+            else if (inCopy) cursor = 'copy';
             else if (inDel) cursor = 'pointer';
             else if (Math.hypot(w.x - (el.x + el.w), w.y - (el.y + el.h)) < r) cursor = 'nwse-resize';
             else if (Math.abs(w.y - (el.y + el.h)) < r && Math.abs(w.x - (el.x + el.w / 2)) < r) cursor = 'ns-resize';

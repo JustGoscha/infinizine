@@ -1,6 +1,8 @@
 // Text engine: typefaces, markdown parsing (# headings, - bullets, **bold**,
 // *italic*), wrapping layout shared by the canvas renderer and the editor.
 
+import { faceReady, poolCss, poolWeights, loadFace } from './facepool';
+
 const mctx = document.createElement('canvas').getContext('2d')!;
 
 export const LINE_HEIGHT = 1.3;
@@ -92,12 +94,36 @@ export function setDocFaces(faces: Record<string, string> | undefined) {
   refreshFonts();
 }
 
-/** Weight range a role's current face supports (undefined = just 400/700). */
-export function weightRange(role: string): [number, number] | undefined {
-  return faceOf((role in FACES ? role : 'franklin') as FontRole).weights;
+/** A box's family key: its role, or `role@face` when the dice gave it a face of its own. */
+export function boxFamily(el: { font?: string; face?: string }): string {
+  const role = el.font ?? 'franklin';
+  return el.face ? `${role}@${el.face}` : role;
+}
+export function roleOf(family: string): FontRole {
+  const at = family.indexOf('@');
+  const role = at >= 0 ? family.slice(0, at) : family;
+  return (role in FACES ? role : 'franklin') as FontRole;
+}
+/** CSS family list for a family key. A rolled face that hasn't arrived yet draws
+ * in the role's face meanwhile (and the fetch is kicked off). */
+export function cssOf(family: string): string {
+  const at = family.indexOf('@');
+  if (at >= 0) {
+    const face = family.slice(at + 1);
+    if (faceReady(face)) return poolCss(face)!;
+    void loadFace(face);
+    family = family.slice(0, at);
+  }
+  return (FONTS[family] ?? FONTS.franklin).css;
+}
+/** Weight range a family's face supports (undefined = just 400/700). */
+export function weightRange(family: string): [number, number] | undefined {
+  const at = family.indexOf('@');
+  if (at >= 0 && faceReady(family.slice(at + 1))) return poolWeights(family.slice(at + 1));
+  return faceOf(roleOf(family)).weights;
 }
 export function fontFor(family: string, size: number, bold = false, italic = false, weight?: number): string {
-  const css = (FONTS[family] ?? FONTS.franklin).css;
+  const css = cssOf(family);
   // an explicit weight wins; bold on top of it pushes heavier
   const w = weight !== undefined ? (bold ? Math.min(900, weight + 300) : weight) : bold ? 700 : 400;
   return `${italic ? 'italic ' : ''}${w} ${size}px ${css}`;

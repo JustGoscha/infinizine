@@ -3,7 +3,7 @@
 import { AnimArea, AnimFrame, AnimLayer, Doc, Element, Layer, Page, FillBlend, emptyDoc, uid, FORMAT_VERSION } from './types';
 import { isPixelPattern, migratePatternId } from './patterns';
 
-type TextContent = { text: string; w: number; h: number; font?: string; fontSize?: number };
+type TextContent = { text: string; w: number; h: number; font?: string; fontSize?: number; face?: string | null }; // face: null clears
 type TextMetrics = { x: number; w: number; h: number; fontSize: number; auto?: boolean };
 type BoxRect = { x: number; y: number; w: number; h: number };
 
@@ -509,6 +509,9 @@ export class Store {
           el.h = op.after.h;
           if (op.after.font) el.font = op.after.font;
           if (op.after.fontSize) el.fontSize = op.after.fontSize;
+          if (op.after.face !== undefined) {
+            if (op.after.face) el.face = op.after.face; else delete el.face;
+          }
         }
         break;
       }

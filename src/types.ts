@@ -98,6 +98,7 @@ export interface TextBox {
   color: string;
   fontSize: number; // world units
   font?: string; // typeface key (see text.ts FONTS); default 'franklin'
+  face?: string; // rolled face (facepool id) overriding the role's face for this box
   text: string; // markdown: # headings, - bullets, **bold**, *italic*
   auto?: boolean; // width follows the content (tap-created box) until the user resizes it
   layer?: Layer;

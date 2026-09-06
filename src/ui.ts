@@ -10,7 +10,7 @@ import { isPattern, patternPreviewCSS, patternLabel, patternLevels, patternVaria
 import type { ExportOptions } from './export';
 import { UNITS_PER_MM, uid, FORMAT_VERSION, FILL_BLENDS } from './types';
 import { type Fmt, PRIMARY_FORMATS, FORMAT_GROUPS, MORE_FORMATS, fitPage, customFormats, saveCustomFormat, mm } from './formats';
-import { layoutText, layoutHeight, layoutWidth, FONTS, FACES, chosenFaces, appFaces, setFace, setDocFaces, weightRange, type FontRole } from './text';
+import { layoutText, layoutHeight, layoutWidth, FONTS, FACES, chosenFaces, appFaces, setFace, setDocFaces, weightRange, cssOf, ROLE_IDS, type FontRole } from './text';
 import { pressure, savePressure, resetPressure, loadPressure, exportPressure, importPressure, easeP, curveAt, type Curve, type CurveNode } from './geometry';
 import { markdownToHtml, htmlToMarkdown, autoTransform, caretToEnd, applyInlineStyle } from './richedit';
 
@@ -262,7 +262,7 @@ export function buildUI(
         <div class="seg" id="set-faces-scope"><button data-v="zine">This zine</button><button data-v="app">App-wide</button></div></div>
       <div class="set-fonts" id="set-fonts"></div>
       <button class="set-action set-ghost" id="set-faces-reset">Zine follows app-wide typefaces</button>
-      <div class="set-note">All fonts are bundled with the app (SIL Open Font Licence / Apache). Nothing is loaded from Google.</div>
+      <div class="set-note">These faces are bundled with the app (SIL Open Font Licence / Apache). The dice on a text box rolls one of ~600 more, fetched on demand from jsDelivr's Fontsource CDN — the only network request the app makes.</div>
       <button class="set-action" id="set-brushes">Brush settings…</button>
       <div class="set-note">InfiniZine v${__APP_VERSION__} · zine format ${FORMAT_VERSION}</div>
     </div>
@@ -847,11 +847,24 @@ export function buildUI(
     { label: 'Sub', size: 5.5 },
   ];
 
+  // text style clipboard: typeface, size and colour of one box, ready to apply to another
+  type TextStyle = { font: string; fontSize: number; color: string };
+  const readStyleClip = (): TextStyle | null => { try { return JSON.parse(readPref('infinizine-text-style') ?? 'null'); } catch { return null; } };
+  const writeStyleClip = (s: TextStyle) => writePref('infinizine-text-style', JSON.stringify(s));
+  const restyleText = (el: import('./types').TextBox, s: TextStyle) => {
+    const w = el.auto ? Math.max(40, layoutWidth(layoutText(el.text || ' ', s.font, s.fontSize, 1e6), s.font) + 4) : el.w;
+    const h = layoutHeight(layoutText(el.text || ' ', s.font, s.fontSize, w));
+    store.updateText(el.id, { text: el.text, w: el.w, h: el.h, font: el.font ?? 'franklin', fontSize: el.fontSize }, { text: el.text, w, h, font: s.font, fontSize: s.fontSize });
+    if (s.color !== el.color) store.recolorElements([el.id], s.color);
+  };
+
   state.onTextEdit = (target, rect, autoFlag) => {
     const auto = autoFlag ?? target?.auto ?? false; // width follows content until resized
     let fontSize = target ? target.fontSize : state.textSize;
     let color = target ? target.color : state.color;
     let family = target?.font ?? state.font;
+    let face = target?.face; // a rolled face stays until another role is picked
+    const fam = () => (face ? `${family}@${face}` : family);
     state.onEditColor = (c) => { color = c; place(); ta.focus(); };
     if (target) state.hidden.add(target.id);
     invalidate();
@@ -866,7 +879,8 @@ export function buildUI(
     // typeface bar floating over the text field
     const bar = document.createElement('div');
     bar.className = 'font-bar';
-    for (const [key, f] of Object.entries(FONTS)) {
+    for (const key of ROLE_IDS) {
+      const f = FONTS[key];
       const b = document.createElement('button');
       b.textContent = f.name;
       b.style.fontFamily = f.css;
@@ -877,6 +891,7 @@ export function buildUI(
         // with a selection: typeface for just those words; otherwise the whole box
         if (applyInlineStyle(ta, { font: key, css: f.css })) { place(); ta.focus(); return; }
         family = key;
+        face = undefined;
         state.font = key;
         bar.querySelectorAll('.fb-font').forEach((o) => o.classList.toggle('active', o === b));
         place();
@@ -921,7 +936,7 @@ export function buildUI(
     weightPop.className = 'weight-pop hidden';
     document.body.appendChild(weightPop);
     const openWeights = () => {
-      const range = weightRange(family);
+      const range = weightRange(fam());
       weightPop.innerHTML = '';
       if (!range) {
         weightPop.innerHTML = `<span class="weight-note">${FONTS[family].name} has only regular & bold</span>`;
@@ -931,7 +946,7 @@ export function buildUI(
           const wb = document.createElement('button');
           wb.textContent = String(w);
           wb.style.fontWeight = String(w);
-          wb.style.fontFamily = FONTS[family].css;
+          wb.style.fontFamily = cssOf(fam());
           wb.addEventListener('pointerdown', (e) => e.preventDefault());
           wb.addEventListener('click', () => {
             applyInlineStyle(ta, { weight: w });
@@ -975,6 +990,34 @@ export function buildUI(
       });
       bar.appendChild(b);
     }
+    // copy / paste style (typeface, size, colour)
+    const styleSep = document.createElement('span');
+    styleSep.className = 'font-bar-sep';
+    bar.appendChild(styleSep);
+    const copyStyle = document.createElement('button');
+    copyStyle.className = 'fb-style';
+    copyStyle.title = 'Copy style (typeface, size, colour)';
+    copyStyle.innerHTML = svg('<path d="M14 4 L20 10 M12 6 L18 12 M6 18 L13 11 L15.5 13.5 L8.5 20.5 L4 20.5 L3.5 16 Z"/>');
+    copyStyle.addEventListener('pointerdown', (e) => e.preventDefault());
+    copyStyle.addEventListener('click', () => { writeStyleClip({ font: family, fontSize, color }); pasteStyle.hidden = false; toast('Style copied'); ta.focus(); });
+    const pasteStyle = document.createElement('button');
+    pasteStyle.className = 'fb-style';
+    pasteStyle.title = 'Paste style';
+    pasteStyle.innerHTML = svg('<path d="M4 20 C6 14 9 12 14 8 L16 10 C12 15 10 18 4 20 Z"/><path d="M14 8 L19 3 L21 5 L16 10"/>');
+    pasteStyle.hidden = !readStyleClip();
+    pasteStyle.addEventListener('pointerdown', (e) => e.preventDefault());
+    pasteStyle.addEventListener('click', () => {
+      const s = readStyleClip();
+      if (!s || !FONTS[s.font]) return;
+      family = s.font; face = undefined; state.font = s.font;
+      fontSize = s.fontSize; state.textSize = s.fontSize;
+      color = s.color;
+      bar.querySelectorAll<HTMLElement>('.fb-font').forEach((o) => o.classList.toggle('active', o.textContent === FONTS[s.font].name));
+      bar.querySelectorAll<HTMLElement>('button').forEach((o) => { const ts = TEXT_SIZES.find((x) => x.label === o.textContent); if (ts) o.classList.toggle('active', Math.abs(ts.size - fontSize) < 0.01); });
+      place();
+      ta.focus();
+    });
+    bar.append(copyStyle, pasteStyle);
     document.body.appendChild(bar);
     // auto boxes: width = widest line (+ a hair so greedy wrapping never kicks in)
     const curW = () =>
@@ -988,7 +1031,7 @@ export function buildUI(
       const z = camera.zoom;
       ta.style.left = `${r.left + s.x}px`;
       ta.style.top = `${r.top + s.y}px`;
-      ta.style.font = `400 ${fontSize * z}px ${FONTS[family].css}`;
+      ta.style.font = `400 ${fontSize * z}px ${cssOf(fam())}`;
       ta.style.lineHeight = `${fontSize * 1.3 * z}px`;
       ta.style.color = color;
       ta.style.width = `${curW() * z}px`; // drawn rectangle's width, or the content's when auto
@@ -1033,19 +1076,19 @@ export function buildUI(
       bar.remove();
       if (target) state.hidden.delete(target.id);
       const text = value().replace(/\s+$/, '');
-      const w = auto ? Math.max(40, layoutWidth(layoutText(text || ' ', family, fontSize, 1e6), family) + 4) : rect.w;
-      const h = Math.max(auto ? 0 : rect.h, layoutHeight(layoutText(text || ' ', family, fontSize, w)));
+      const w = auto ? Math.max(40, layoutWidth(layoutText(text || ' ', fam(), fontSize, 1e6), fam()) + 4) : rect.w;
+      const h = Math.max(auto ? 0 : rect.h, layoutHeight(layoutText(text || ' ', fam(), fontSize, w)));
       if (target) {
         if (color !== target.color) store.recolorElements([target.id], color);
-        if (text === target.text && family === (target.font ?? 'franklin') && fontSize === target.fontSize && w === target.w) {
+        if (text === target.text && family === (target.font ?? 'franklin') && face === target.face && fontSize === target.fontSize && w === target.w) {
           invalidate();
           return;
         }
         if (text) {
           store.updateText(
             target.id,
-            { text: target.text, w: target.w, h: target.h, font: target.font ?? 'franklin', fontSize: target.fontSize },
-            { text, w, h, font: family, fontSize },
+            { text: target.text, w: target.w, h: target.h, font: target.font ?? 'franklin', fontSize: target.fontSize, face: target.face ?? null },
+            { text, w, h, font: family, fontSize, face: face ?? null },
           );
         } else {
           store.deleteElements([target]);
@@ -2513,6 +2556,8 @@ export function buildUI(
     <button id="sm-paste" title="Paste (⌘V)">${svg('<rect x="5" y="4" width="14" height="17" rx="1.5"/><path d="M9 4 A3 3 0 0 1 15 4"/><path d="M9 12 h6 M9 16 h6"/>')}</button>
     <button id="sm-back" title="Send to back">${svg('<rect x="8" y="8" width="12" height="12" rx="1"/><path d="M4 12 V5.5 A1.5 1.5 0 0 1 5.5 4 H12"/><path d="M14 11 L14 17 M11.5 14.5 L14 17 L16.5 14.5"/>')}</button>
     <button id="sm-rot" title="Rotate pattern 15° (shift-click: 45°)">${svg('<path d="M19 12 a7 7 0 1 1 -2.05 -4.95"/><path d="M19 4 v4 h-4"/><circle cx="12" cy="12" r="2"/>')}</button>
+    <button id="sm-cstyle" title="Copy text style">{svg('<path d="M14 4 L20 10 M12 6 L18 12 M6 18 L13 11 L15.5 13.5 L8.5 20.5 L4 20.5 L3.5 16 Z"/>')}</button>
+    <button id="sm-pstyle" title="Paste text style onto the selected text">{svg('<path d="M4 20 C6 14 9 12 14 8 L16 10 C12 15 10 18 4 20 Z"/><path d="M14 8 L19 3 L21 5 L16 10"/>')}</button>
     <button id="sm-front" title="Bring to front">${svg('<rect x="4" y="4" width="12" height="12" rx="1"/><path d="M20 12 V18.5 A1.5 1.5 0 0 1 18.5 20 H12"/><path d="M10 13 L10 7 M7.5 9.5 L10 7 L12.5 9.5"/>')}</button>
     <button id="sm-del" title="Delete">${svg('<path d="M4 7 H20 M9 7 V5 A1 1 0 0 1 10 4 H14 A1 1 0 0 1 15 5 V7 M6.5 7 L7.5 20 H16.5 L17.5 7"/>')}</button>
   `;
@@ -2530,6 +2575,16 @@ export function buildUI(
   });
   (selMenu.querySelector('#sm-front') as HTMLButtonElement).addEventListener('click', () => {
     store.reorder([...state.selection], 'front');
+    invalidate();
+  });
+  (selMenu.querySelector('#sm-cstyle') as HTMLButtonElement).addEventListener('click', () => {
+    const t = store.doc.elements.find((el) => el.kind === 'text' && state.selection.has(el.id));
+    if (t && t.kind === 'text') { writeStyleClip({ font: t.font ?? 'franklin', fontSize: t.fontSize, color: t.color }); toast('Style copied'); }
+  });
+  (selMenu.querySelector('#sm-pstyle') as HTMLButtonElement).addEventListener('click', () => {
+    const s = readStyleClip();
+    if (!s || !FONTS[s.font]) return;
+    for (const el of store.doc.elements) if (el.kind === 'text' && state.selection.has(el.id)) restyleText(el, s);
     invalidate();
   });
   (selMenu.querySelector('#sm-del') as HTMLButtonElement).addEventListener('click', () => {
@@ -2559,6 +2614,9 @@ export function buildUI(
     const hasPatternFill = hasSel && store.doc.elements.some((el) => el.kind === 'fill' && el.pattern && state.selection.has(el.id));
     (selMenu.querySelector('#sm-rot') as HTMLButtonElement).hidden = !hasPatternFill;
     (selMenu.querySelector('#sm-front') as HTMLButtonElement).hidden = !hasSel;
+    const selTexts = hasSel ? store.doc.elements.filter((el) => el.kind === 'text' && state.selection.has(el.id)).length : 0;
+    (selMenu.querySelector('#sm-cstyle') as HTMLButtonElement).hidden = selTexts !== 1;
+    (selMenu.querySelector('#sm-pstyle') as HTMLButtonElement).hidden = !(selTexts > 0 && readStyleClip());
     const pasteBtn = selMenu.querySelector('#sm-paste') as HTMLButtonElement;
     // touch devices can't peek at the system clipboard (a screenshot, say): with a
     // selection tool active the paste button is always offered; tapping it asks iOS

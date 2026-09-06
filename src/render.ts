@@ -4,8 +4,8 @@
 import { Camera, baseZoom } from './camera';
 import { AnimArea, Element, FillShape, Page, Stroke, StrokePoint } from './types';
 import { strokeOutline, pencilOutlines, markerPaths, outlineToPath, elementBBox, bboxIntersects, densify, filterPressure, easeP, easeTilt, LiveDenoiser, LiveOutliner, hasPressure, denoiseClosed, pressure, BBox } from './geometry';
-import { layoutText, fontFor, segWidth, LINE_HEIGHT } from './text';
-import { moveHandleRect, moveAllHandleRect, deleteHandleRect, eyeHandleRect, type InputState } from './input';
+import { layoutText, fontFor, segWidth, LINE_HEIGHT, boxFamily } from './text';
+import { moveHandleRect, moveAllHandleRect, deleteHandleRect, eyeHandleRect, diceHandleRect, copyHandleRect, type InputState } from './input';
 import { Store, ChangeInfo } from './store';
 import { formatLabel } from './formats';
 import { patternTile, patternTileSize, patternCellSize, cellPath, motifPath, isPixelPattern, PIXEL_CELL } from './patterns';
@@ -384,7 +384,7 @@ export class Renderer {
       ctx.fillStyle = el.color;
       ctx.textAlign = 'left';
       ctx.textBaseline = 'top';
-      const family = el.font ?? 'franklin';
+      const family = boxFamily(el);
       let ty = el.y;
       for (const line of layoutText(el.text, family, el.fontSize, el.w)) {
         let tx = el.x;
@@ -450,7 +450,8 @@ export class Renderer {
     if (this.input.presenting) return;
     if (el.kind === 'text' || el.kind === 'image') {
       const hovered = el.kind === 'text' ? this.input.hoverText === el.id : this.input.hoverImage === el.id;
-      if (hovered || selected) this.drawBoxHandles(el.x, el.y, el.w, el.h, z);
+      if (hovered || selected) this.drawBoxHandles(el.x, el.y, el.w, el.h, z, true);
+      if (el.kind === 'text' && (hovered || selected || this.input.rolling.has(el.id))) this.drawDice(el.x, el.y, el.w, z, this.input.rolling.get(el.id));
       if (selected) {
         ctx.globalAlpha = 0.9;
         ctx.strokeStyle = '#E8590C';
@@ -1106,7 +1107,7 @@ export class Renderer {
       blitFront(); // the front layer covers the live back-stroke, as committed ink would
       // bodies are in the static layers; only handles/selection outlines here
       for (const el of still) {
-        const ui = selected.has(el.id) || this.input.hoverText === el.id || this.input.hoverImage === el.id;
+        const ui = selected.has(el.id) || this.input.hoverText === el.id || this.input.hoverImage === el.id || this.input.rolling.has(el.id);
         if (ui && bboxIntersects(elementBBox(el), view)) this.paintElementUi(el, z);
       }
     } else {
@@ -1382,8 +1383,9 @@ export class Renderer {
     ctx.stroke();
   }
 
-  /** Move box (top-left) + width/height/corner handles with arrow icons. */
-  private drawBoxHandles(x: number, y: number, w: number, h: number, z: number) {
+  /** Move box (top-left) + width/height/corner handles with arrow icons.
+   * `copy` adds the copy grabber under the move box (elements; areas use that slot for move-all). */
+  private drawBoxHandles(x: number, y: number, w: number, h: number, z: number, copy = false) {
     const { ctx } = this;
     const mh = moveHandleRect(x, y, z);
     ctx.fillStyle = '#FDFCF8';
@@ -1393,6 +1395,24 @@ export class Renderer {
     ctx.strokeRect(mh.x, mh.y, mh.s, mh.s);
     ctx.strokeStyle = '#2A241A';
     this.drawMoveCross(mh.x, mh.y, mh.s);
+    if (copy) {
+      // two offset squares: "drag a copy"
+      const ch = copyHandleRect(x, y, z);
+      ctx.fillStyle = '#FDFCF8';
+      ctx.strokeStyle = 'rgba(90,75,50,0.5)';
+      ctx.fillRect(ch.x, ch.y, ch.s, ch.s);
+      ctx.strokeRect(ch.x, ch.y, ch.s, ch.s);
+      ctx.strokeStyle = '#2A241A';
+      const u = ch.s / 24;
+      ctx.beginPath();
+      ctx.rect(ch.x + 9 * u, ch.y + 9 * u, 10 * u, 10 * u);
+      ctx.moveTo(ch.x + 6 * u, ch.y + 15 * u);
+      ctx.lineTo(ch.x + 5 * u, ch.y + 15 * u);
+      ctx.lineTo(ch.x + 5 * u, ch.y + 5 * u);
+      ctx.lineTo(ch.x + 15 * u, ch.y + 5 * u);
+      ctx.lineTo(ch.x + 15 * u, ch.y + 6 * u);
+      ctx.stroke();
+    }
     const hs = 13 / z;
     const arrow = (cx: number, cy: number, dx: number, dy: number) => {
       const L = hs * 0.3;
@@ -1438,6 +1458,40 @@ export class Renderer {
     p = P(9, 7); ctx.moveTo(p[0], p[1]); p = P(9.5, 4); ctx.lineTo(p[0], p[1]); p = P(14.5, 4); ctx.lineTo(p[0], p[1]); p = P(15, 7); ctx.lineTo(p[0], p[1]);
     p = P(6.5, 7); ctx.moveTo(p[0], p[1]); p = P(7.5, 20); ctx.lineTo(p[0], p[1]); p = P(16.5, 20); ctx.lineTo(p[0], p[1]); p = P(17.5, 7); ctx.lineTo(p[0], p[1]);
     ctx.stroke();
+  }
+
+  /** Typeface dice under the bin on a textbox. `pip` is set while a roll is in flight: the
+   * die shows that face and tilts, so the wait for the download reads as rolling. */
+  private drawDice(x: number, y: number, w: number, z: number, pip?: number) {
+    const { ctx } = this;
+    const r = diceHandleRect(x, y, w, z);
+    const cx = r.x + r.s / 2, cy = r.y + r.s / 2;
+    ctx.save();
+    ctx.translate(cx, cy);
+    if (pip !== undefined) ctx.rotate(((pip * 37) % 24 - 12) * Math.PI / 180);
+    const d = r.s * 0.82, rad = d * 0.2;
+    ctx.fillStyle = '#FDFCF8';
+    ctx.strokeStyle = pip !== undefined ? '#E8590C' : 'rgba(90,75,50,0.6)';
+    ctx.lineWidth = 1.2 / z;
+    ctx.beginPath();
+    ctx.roundRect(-d / 2, -d / 2, d, d, rad);
+    ctx.fill();
+    ctx.stroke();
+    // pips
+    const n = pip ?? 5;
+    const o = d * 0.25, pr = d * 0.095;
+    const spots: [number, number][] = [];
+    if (n % 2 === 1) spots.push([0, 0]);
+    if (n >= 2) spots.push([-o, -o], [o, o]);
+    if (n >= 4) spots.push([o, -o], [-o, o]);
+    if (n === 6) spots.push([-o, 0], [o, 0]);
+    ctx.fillStyle = pip !== undefined ? '#E8590C' : '#2A241A';
+    for (const [px, py] of spots) {
+      ctx.beginPath();
+      ctx.arc(px, py, pr, 0, Math.PI * 2);
+      ctx.fill();
+    }
+    ctx.restore();
   }
 
   private drawPattern(vw: number, vh: number, paper: string) {

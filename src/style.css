@@ -1831,3 +1831,5 @@ body.presenting .pages-panel { z-index: 60; }
 }
 .tl-frame-del svg { width: 12px; height: 12px; }
 .tl-frame-del:hover { color: #fff; transform: scale(1.15); }
+.font-bar .fb-style svg { width: 15px; height: 15px; display: block; }
+.font-bar .fb-style { display: inline-grid; place-items: center; }
