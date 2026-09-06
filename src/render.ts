@@ -1361,7 +1361,8 @@ export class Renderer {
       ctx.font = '600 11px "Libre Franklin Variable", sans-serif';
       ctx.fillStyle = 'rgba(42,36,26,0.55)';
       ctx.textAlign = 'right';
-      ctx.fillText(`${this.fps}fps · ${pct}%${this.input.zoomLocked ? ' locked' : ''}${extra}`, vw - 14, vh - 12);
+      // bottom centre-right: the undo/redo bar owns the corner
+      ctx.fillText(`${this.fps}fps · ${pct}%${this.input.zoomLocked ? ' locked' : ''}${extra}`, vw - 96, vh - 12);
     }
   }
 

@@ -997,13 +997,13 @@ export function buildUI(
     const copyStyle = document.createElement('button');
     copyStyle.className = 'fb-style';
     copyStyle.title = 'Copy style (typeface, size, colour)';
-    copyStyle.innerHTML = svg('<path d="M14 4 L20 10 M12 6 L18 12 M6 18 L13 11 L15.5 13.5 L8.5 20.5 L4 20.5 L3.5 16 Z"/>');
+    copyStyle.innerHTML = svg('<path d="M4 5h9M8.5 5v10"/><rect x="13" y="12" width="7" height="7" rx="1"/><path d="M16.5 12V9.5H19"/>');
     copyStyle.addEventListener('pointerdown', (e) => e.preventDefault());
     copyStyle.addEventListener('click', () => { writeStyleClip({ font: family, fontSize, color }); pasteStyle.hidden = false; toast('Style copied'); ta.focus(); });
     const pasteStyle = document.createElement('button');
     pasteStyle.className = 'fb-style';
     pasteStyle.title = 'Paste style';
-    pasteStyle.innerHTML = svg('<path d="M4 20 C6 14 9 12 14 8 L16 10 C12 15 10 18 4 20 Z"/><path d="M14 8 L19 3 L21 5 L16 10"/>');
+    pasteStyle.innerHTML = svg('<path d="M4 5h9M8.5 5v10"/><path d="M17 10v9M14 16l3 3 3-3"/>');
     pasteStyle.hidden = !readStyleClip();
     pasteStyle.addEventListener('pointerdown', (e) => e.preventDefault());
     pasteStyle.addEventListener('click', () => {
@@ -2556,8 +2556,8 @@ export function buildUI(
     <button id="sm-paste" title="Paste (⌘V)">${svg('<rect x="5" y="4" width="14" height="17" rx="1.5"/><path d="M9 4 A3 3 0 0 1 15 4"/><path d="M9 12 h6 M9 16 h6"/>')}</button>
     <button id="sm-back" title="Send to back">${svg('<rect x="8" y="8" width="12" height="12" rx="1"/><path d="M4 12 V5.5 A1.5 1.5 0 0 1 5.5 4 H12"/><path d="M14 11 L14 17 M11.5 14.5 L14 17 L16.5 14.5"/>')}</button>
     <button id="sm-rot" title="Rotate pattern 15° (shift-click: 45°)">${svg('<path d="M19 12 a7 7 0 1 1 -2.05 -4.95"/><path d="M19 4 v4 h-4"/><circle cx="12" cy="12" r="2"/>')}</button>
-    <button id="sm-cstyle" title="Copy text style">{svg('<path d="M14 4 L20 10 M12 6 L18 12 M6 18 L13 11 L15.5 13.5 L8.5 20.5 L4 20.5 L3.5 16 Z"/>')}</button>
-    <button id="sm-pstyle" title="Paste text style onto the selected text">{svg('<path d="M4 20 C6 14 9 12 14 8 L16 10 C12 15 10 18 4 20 Z"/><path d="M14 8 L19 3 L21 5 L16 10"/>')}</button>
+    <button id="sm-cstyle" title="Copy text style">${svg('<path d="M4 5h9M8.5 5v10"/><rect x="13" y="12" width="7" height="7" rx="1"/><path d="M16.5 12V9.5H19"/>')}</button>
+    <button id="sm-pstyle" title="Paste text style onto the selected text">${svg('<path d="M4 5h9M8.5 5v10"/><path d="M17 10v9M14 16l3 3 3-3"/>')}</button>
     <button id="sm-front" title="Bring to front">${svg('<rect x="4" y="4" width="12" height="12" rx="1"/><path d="M20 12 V18.5 A1.5 1.5 0 0 1 18.5 20 H12"/><path d="M10 13 L10 7 M7.5 9.5 L10 7 L12.5 9.5"/>')}</button>
     <button id="sm-del" title="Delete">${svg('<path d="M4 7 H20 M9 7 V5 A1 1 0 0 1 10 4 H14 A1 1 0 0 1 15 5 V7 M6.5 7 L7.5 20 H16.5 L17.5 7"/>')}</button>
   `;

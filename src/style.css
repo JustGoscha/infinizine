@@ -897,7 +897,9 @@ body.tl-docked-side .topbar { z-index: 40; }
   position: fixed;
   right: 14px;
   top: 50%;
-  transform: translateY(-50%);
+  transform: translateY(-60%); /* sits a little high so a long menu never reaches the undo/redo corner */
+  max-height: calc(100vh - 260px);
+  overflow-y: auto;
   display: flex;
   flex-direction: column;
   gap: 4px;
@@ -913,7 +915,7 @@ body.tl-docked-side .topbar { z-index: 40; }
 .hist-bar {
   position: fixed;
   right: 14px;
-  bottom: 112px;
+  bottom: 14px;
   display: flex;
   flex-direction: column;
   gap: 6px;
