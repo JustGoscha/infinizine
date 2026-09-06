@@ -1496,10 +1496,13 @@ export class Renderer {
     ctx.restore();
   }
 
-  /** Copy-style ("A" + cards) and, when a copied style would change this box, paste-style ("A" + brush). */
+  /** Style handles on a text box: an eyedropper picks the style up; when a picked-up style
+   * would change this box, a paint roller below it applies it. */
+  private static ICON_PIPETTE = new Path2D('M2 22l1-1h3l9-9 M3 21v-3l9-9 M15 6l3.4-3.4a2.1 2.1 0 1 1 3 3L18 9l.4.4a2.1 2.1 0 1 1-3 3l-3.8-3.8a2.1 2.1 0 1 1 3-3l.4.4Z');
+  private static ICON_ROLLER = new Path2D('M4 2h12a2 2 0 0 1 2 2v2a2 2 0 0 1-2 2H4a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2Z M10 16v-2a2 2 0 0 1 2-2h8a2 2 0 0 0 2-2V7a2 2 0 0 0-2-2h-2 M9 16h2a1 1 0 0 1 1 1v4a1 1 0 0 1-1 1H9a1 1 0 0 1-1-1v-4a1 1 0 0 1 1-1Z');
   private drawStyleHandles(el: TextBox, z: number) {
     const { ctx } = this;
-    const draw = (r: { x: number; y: number; s: number }, paste: boolean) => {
+    const draw = (r: { x: number; y: number; s: number }, icon: Path2D, paste: boolean) => {
       ctx.save();
       ctx.fillStyle = paste ? '#7048e8' : '#FDFCF8';
       ctx.strokeStyle = paste ? '#7048e8' : 'rgba(90,75,50,0.6)';
@@ -1508,31 +1511,19 @@ export class Renderer {
       ctx.roundRect(r.x, r.y, r.s, r.s, r.s * 0.16);
       ctx.fill();
       ctx.stroke();
-      const ink = paste ? '#fff' : '#2A241A';
-      ctx.fillStyle = ink;
-      ctx.strokeStyle = ink;
-      ctx.font = `800 ${r.s * 0.62}px "Libre Franklin Variable", sans-serif`;
-      ctx.textAlign = 'left';
-      ctx.textBaseline = 'alphabetic';
-      ctx.fillText('A', r.x + r.s * 0.12, r.y + r.s * 0.72);
-      const u = r.s / 24;
-      ctx.lineWidth = 1.4 * u;
+      // the 24-unit icon, inset
+      const k = (r.s * 0.7) / 24;
+      ctx.translate(r.x + r.s * 0.15, r.y + r.s * 0.15);
+      ctx.scale(k, k);
+      ctx.strokeStyle = paste ? '#fff' : '#2A241A';
+      ctx.lineWidth = 1.8;
       ctx.lineCap = 'round';
       ctx.lineJoin = 'round';
-      if (!paste) {
-        // two cards
-        ctx.strokeRect(r.x + 14 * u, r.y + 11 * u, 7 * u, 8 * u);
-        ctx.beginPath(); ctx.moveTo(r.x + 16.5 * u, r.y + 11 * u); ctx.lineTo(r.x + 16.5 * u, r.y + 8.5 * u); ctx.lineTo(r.x + 21 * u, r.y + 8.5 * u); ctx.stroke();
-      } else {
-        // brush
-        ctx.beginPath(); ctx.moveTo(r.x + 21 * u, r.y + 6.5 * u); ctx.lineTo(r.x + 15.5 * u, r.y + 12 * u); ctx.stroke();
-        ctx.beginPath(); ctx.moveTo(r.x + 13.5 * u, r.y + 14.5 * u); ctx.bezierCurveTo(r.x + 11.5 * u, r.y + 14.5 * u, r.x + 10.5 * u, r.y + 16 * u, r.x + 10 * u, r.y + 18.5 * u);
-        ctx.bezierCurveTo(r.x + 12.5 * u, r.y + 18 * u, r.x + 14 * u, r.y + 17 * u, r.x + 14 * u, r.y + 15 * u); ctx.closePath(); ctx.fill();
-      }
+      ctx.stroke(icon);
       ctx.restore();
     };
-    draw(copyStyleHandleRect(el.x, el.y, el.w, z), false);
-    if (this.input.stylePasteFor(el)) draw(pasteStyleHandleRect(el.x, el.y, el.w, z), true);
+    draw(copyStyleHandleRect(el.x, el.y, el.w, z), Renderer.ICON_PIPETTE, false);
+    if (this.input.stylePasteFor(el)) draw(pasteStyleHandleRect(el.x, el.y, el.w, z), Renderer.ICON_ROLLER, true);
   }
 
   private drawPattern(vw: number, vh: number, paper: string) {
