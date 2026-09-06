@@ -3,7 +3,7 @@
 
 import { Camera, baseZoom } from './camera';
 import { AnimArea, Element, FillShape, Page, Stroke, StrokePoint } from './types';
-import { strokeOutline, pencilOutlines, markerPaths, outlineToPath, elementBBox, bboxIntersects, densify, filterPressure, easeP, easeTilt, LiveDenoiser, denoiseClosed, pressure, BBox } from './geometry';
+import { strokeOutline, pencilOutlines, markerPaths, outlineToPath, elementBBox, bboxIntersects, densify, filterPressure, easeP, easeTilt, LiveDenoiser, LiveOutliner, hasPressure, denoiseClosed, pressure, BBox } from './geometry';
 import { layoutText, fontFor, segWidth, LINE_HEIGHT } from './text';
 import { moveHandleRect, moveAllHandleRect, deleteHandleRect, eyeHandleRect, type InputState } from './input';
 import { Store, ChangeInfo } from './store';
@@ -65,6 +65,13 @@ export class Renderer {
     return pat;
   }
   private liveSmooth = new LiveDenoiser(); // vector live stroke
+  private liveOutliner = new LiveOutliner(); // chunked outline of the live stroke
+  // performance readout: input→paint latency (event timestamp → end of the frame that showed it), live cost, frame cost
+  private perfLat: number[] = [];
+  private perfLive = 0;
+  private perfFrame = 0;
+  private perfText = '';
+  private perfAt = 0;
   private livePencilSmooth = new LiveDenoiser(); // pencil live stroke (separate: stamped incrementally)
   private dirty = true;
   private fps = 0;
@@ -924,9 +931,19 @@ export class Renderer {
       }
       ctx.globalAlpha = live.opacity;
       ctx.fillStyle = this.inkStyle(live, z);
-      if (live.tool === 'marker') ctx.fill(markerPaths(shown.points, live.baseWidth, this.detail()).fill);
-      else ctx.fill(outlineToPath(strokeOutline(shown, this.detail(), true)));
+      const detail = this.detail();
+      if (live.tool === 'marker' || live.tool === 'fineliner' || hasPressure(shown.points)) {
+        // pressure outlines: only the tail is recomputed each frame (see LiveOutliner)
+        const outline = live.tool === 'marker'
+          ? (pts: StrokePoint[]) => markerPaths(pts, live.baseWidth, detail).fill
+          : (pts: StrokePoint[]) => outlineToPath(strokeOutline({ ...live, points: pts }, detail, true));
+        ctx.fill(this.liveOutliner.path(shown, this.liveSmooth.settled, detail, outline));
+      } else {
+        ctx.fill(outlineToPath(strokeOutline(shown, detail, true))); // pressureless (finger/mouse): perfect-freehand
+      }
     };
+    const drawLiveRaw = drawLive;
+    const drawLiveTimed = () => { const t0 = performance.now(); drawLiveRaw(); this.perfLive = performance.now() - t0; };
     // Animation: each layer runs its own timeline. Deselected areas always play;
     // in the edited area, the active layer holds on the active frame and the other
     // layers hold at the same tick position.
@@ -1084,7 +1101,7 @@ export class Renderer {
       drawTimedWith(el, (t) => r - start - t * tk.fps);
     };
 
-    if (live?.layer === 'back') drawLive(); // live back-ink previews behind existing front ink
+    if (live?.layer === 'back') drawLiveTimed(); // live back-ink previews behind existing front ink
     if (useStatic) {
       blitFront(); // the front layer covers the live back-stroke, as committed ink would
       // bodies are in the static layers; only handles/selection outlines here
@@ -1175,7 +1192,7 @@ export class Renderer {
       if (area.clip) ctx.restore();
       dimFactor = 1;
     }
-    if (live && live.layer !== 'back') drawLive();
+    if (live && live.layer !== 'back') drawLiveTimed();
     ctx.globalAlpha = 1;
 
     // Page borders sit on top of everything
@@ -1322,13 +1339,28 @@ export class Renderer {
       this.dirty = true;
     }
 
-    // Zoom badge: 100% = the first page fits the screen
+    // Zoom badge: 100% = the first page fits the screen (+ performance readout when enabled)
     if (!presenting) {
       const pct = Math.round((z / baseZoom()) * 100);
+      let extra = '';
+      if (this.input.perfHud) {
+        const now = performance.now();
+        this.perfFrame = now - frameStart;
+        if (live && this.input.lastSampleAt) this.perfLat.push(now - this.input.lastSampleAt);
+        if (now - this.perfAt > 500) {
+          this.perfAt = now;
+          const lat = this.perfLat.sort((a, b) => a - b);
+          const med = lat.length ? lat[lat.length >> 1] : 0, worst = lat.length ? lat[lat.length - 1] : 0;
+          this.perfText = ` · in→paint ${med.toFixed(0)}/${worst.toFixed(0)}ms · live ${this.perfLive.toFixed(1)}ms · frame ${this.perfFrame.toFixed(1)}ms`;
+          this.perfLat = [];
+        }
+        extra = this.perfText;
+        this.dirty = true; // keep the numbers fresh
+      }
       ctx.font = '600 11px "Libre Franklin Variable", sans-serif';
       ctx.fillStyle = 'rgba(42,36,26,0.55)';
       ctx.textAlign = 'right';
-      ctx.fillText(`${this.fps}fps · ${pct}%${this.input.zoomLocked ? ' locked' : ''}`, vw - 14, vh - 12);
+      ctx.fillText(`${this.fps}fps · ${pct}%${this.input.zoomLocked ? ' locked' : ''}${extra}`, vw - 14, vh - 12);
     }
   }
 

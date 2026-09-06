@@ -256,6 +256,8 @@ export function buildUI(
         <div class="seg" id="set-lock"><button data-v="1">Locked</button><button data-v="0">Free</button></div></div>
       <div class="set-row"><span>Two-finger tap</span>
         <div class="seg" id="set-fundo"><button data-v="1">Undo · redo</button><button data-v="0">Off</button></div></div>
+      <div class="set-row"><span>Performance readout</span>
+        <div class="seg" id="set-perf"><button data-v="1">On</button><button data-v="0">Off</button></div></div>
       <div class="set-row set-sub"><span class="set-title">Typefaces</span>
         <div class="seg" id="set-faces-scope"><button data-v="zine">This zine</button><button data-v="app">App-wide</button></div></div>
       <div class="set-fonts" id="set-fonts"></div>
@@ -3099,7 +3101,16 @@ export function buildUI(
     settingsPop.querySelectorAll<HTMLElement>('#set-adaptive button').forEach((b) => b.classList.toggle('active', b.dataset.v === (state.adaptiveSize ? '1' : '0')));
     settingsPop.querySelectorAll<HTMLElement>('#set-lock button').forEach((b) => b.classList.toggle('active', b.dataset.v === (state.zoomLocked ? '1' : '0')));
     settingsPop.querySelectorAll<HTMLElement>('#set-fundo button').forEach((b) => b.classList.toggle('active', b.dataset.v === (state.fingerUndo ? '1' : '0')));
+    settingsPop.querySelectorAll<HTMLElement>('#set-perf button').forEach((b) => b.classList.toggle('active', b.dataset.v === (state.perfHud ? '1' : '0')));
   };
+  settingsPop.querySelector('#set-perf')!.addEventListener('click', (e) => {
+    const v = (e.target as HTMLElement).closest('button')?.dataset.v;
+    if (!v) return;
+    state.perfHud = v === '1';
+    writePref('infinizine-perf', v);
+    syncSettings();
+    invalidate();
+  });
   settingsPop.querySelector('#set-fundo')!.addEventListener('click', (e) => {
     const v = (e.target as HTMLElement).closest('button')?.dataset.v;
     if (!v) return;

@@ -211,6 +211,10 @@ export class InputState {
   playingAreas = false;
   onionMuted = false; // onion skin hidden while flipping through frames with the jog
   recording = false; // record button: plays the area and captures live lines as you draw
+  /** event timestamp of the newest live-stroke sample (input→paint latency readout) */
+  lastSampleAt = 0;
+  /** performance readout in the corner (settings) */
+  perfHud = readPref('infinizine-perf') === '1';
   playEpoch = 0; // performance.now()/1000 when playback started
   onAnimOpen: (area: import('./types').AnimArea) => void = () => {};
   onTextEdit: (
@@ -793,6 +797,7 @@ export function attachInput(
           a, r,
         });
       }
+      state.lastSampleAt = e.timeStamp || performance.now(); // for the input→paint readout
       return; // renderer redraws while live is set
     }
     if (state.tool === 'eraser' && erased !== null && e.buttons !== 0) {

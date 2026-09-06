@@ -374,6 +374,8 @@ export class LiveDenoiser {
   private id = '';
   private final: StrokePoint[] = [];
   private arc: number[] = [];
+  /** how many leading points are final (their smoothing window is complete) */
+  get settled(): number { return this.final.length; }
   update(id: string, points: StrokePoint[], sigma: number): StrokePoint[] {
     const n = points.length;
     if (id !== this.id || this.arc.length > n) { this.id = id; this.final = []; this.arc = []; }
@@ -393,6 +395,37 @@ export class LiveDenoiser {
     while (nf < n && arc[n - 1] - arc[nf] >= reach) nf++;
     for (let i = f; i < nf; i++) this.final.push(result[i]);
     return result;
+  }
+}
+
+/** Incremental live outline. The stroke is outlined in overlapping chunks of
+ * samples; chunks well behind the tip — past the denoiser's settled point, so
+ * they can't change any more — are frozen as Path2Ds and only the tail is
+ * outlined again each frame. Everything goes into one Path2D filled with the
+ * non-zero rule, so the overlaps never double-cover (a translucent marker stays
+ * flat). Cost per frame is constant however long the stroke gets. */
+export class LiveOutliner {
+  private id = '';
+  private detail = 0;
+  private frozen: Path2D[] = [];
+  private start = 0; // first sample of the live tail
+  private static readonly CHUNK = 24;
+  private static readonly OVERLAP = 6;
+  path(stroke: Stroke, settled: number, detail: number, outline: (pts: StrokePoint[]) => Path2D): Path2D {
+    if (stroke.id !== this.id || detail !== this.detail) {
+      this.id = stroke.id; this.detail = detail; this.frozen = []; this.start = 0;
+    }
+    const pts = stroke.points, n = pts.length;
+    const { CHUNK, OVERLAP } = LiveOutliner;
+    if (this.start > n) { this.frozen = []; this.start = 0; } // stroke shrank (shouldn't happen): start over
+    while (n - this.start > 2 * CHUNK && this.start + CHUNK + OVERLAP <= settled) {
+      this.frozen.push(outline(pts.slice(this.start, this.start + CHUNK + OVERLAP)));
+      this.start += CHUNK;
+    }
+    const out = new Path2D();
+    for (const f of this.frozen) out.addPath(f);
+    out.addPath(outline(pts.slice(this.start))); // the tail overlaps the last frozen chunk by OVERLAP samples
+    return out;
   }
 }
 
