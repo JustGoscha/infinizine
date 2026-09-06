@@ -1846,3 +1846,10 @@ body.presenting .pages-panel { z-index: 60; }
 .tip-bubble::after { content: ''; position: absolute; left: 50%; top: 100%; transform: translateX(-50%); border: 5px solid transparent; border-top-color: var(--ink); }
 .tip-bubble.show { opacity: 1; transform: translate(-50%, -100%) translateY(0); }
 .font-bar .fb-style { position: relative; }
+
+.perf-hud {
+  position: fixed; top: 64px; left: 50%; transform: translateX(-50%); z-index: 30;
+  background: rgba(42,36,26,0.88); color: #fff; font: 600 14px/1 'Libre Franklin Variable', ui-monospace, monospace;
+  font-variant-numeric: tabular-nums; padding: 8px 14px; border-radius: 4px; white-space: pre; pointer-events: none;
+}
+.perf-hud[hidden] { display: none; }

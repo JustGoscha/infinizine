@@ -1353,10 +1353,10 @@ export class Renderer {
           this.perfAt = now;
           const lat = this.perfLat.sort((a, b) => a - b);
           const med = lat.length ? lat[lat.length >> 1] : 0, worst = lat.length ? lat[lat.length - 1] : 0;
-          this.perfText = ` · in→paint ${med.toFixed(0)}/${worst.toFixed(0)}ms · live ${this.perfLive.toFixed(1)}ms · frame ${this.perfFrame.toFixed(1)}ms`;
+          this.perfText = `${this.fps} fps   in→paint ${med.toFixed(0)} / ${worst.toFixed(0)} ms   live ${this.perfLive.toFixed(1)} ms   frame ${this.perfFrame.toFixed(1)} ms`;
           this.perfLat = [];
         }
-        extra = this.perfText;
+        this.input.perfLine = this.perfText; // shown by the UI in its own readout, not under the toolbar
         this.dirty = true; // keep the numbers fresh
       }
       ctx.font = '600 11px "Libre Franklin Variable", sans-serif';

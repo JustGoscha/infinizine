@@ -3192,6 +3192,15 @@ export function buildUI(
     settingsPop.querySelectorAll<HTMLElement>('#set-fundo button').forEach((b) => b.classList.toggle('active', b.dataset.v === (state.fingerUndo ? '1' : '0')));
     settingsPop.querySelectorAll<HTMLElement>('#set-perf button').forEach((b) => b.classList.toggle('active', b.dataset.v === (state.perfHud ? '1' : '0')));
   };
+  // performance readout: a legible pill under the top bar (the canvas badge is too small and sits under the toolbar)
+  const perfHud = document.createElement('div');
+  perfHud.className = 'perf-hud';
+  perfHud.hidden = true;
+  document.body.appendChild(perfHud);
+  setInterval(() => {
+    perfHud.hidden = !state.perfHud;
+    if (state.perfHud) perfHud.textContent = state.perfLine || 'draw something…';
+  }, 250);
   settingsPop.querySelector('#set-perf')!.addEventListener('click', (e) => {
     const v = (e.target as HTMLElement).closest('button')?.dataset.v;
     if (!v) return;

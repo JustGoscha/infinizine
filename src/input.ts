@@ -243,6 +243,7 @@ export class InputState {
   lastSampleAt = 0;
   /** performance readout in the corner (settings) */
   perfHud = readPref('infinizine-perf') === '1';
+  perfLine = ''; // the renderer's latest numbers
   playEpoch = 0; // performance.now()/1000 when playback started
   onAnimOpen: (area: import('./types').AnimArea) => void = () => {};
   onTextEdit: (
@@ -375,6 +376,7 @@ export function attachInput(
   let dragPageStart = { x: 0, y: 0 };
   let dragDesired = { x: 0, y: 0 }; // un-snapped position the finger implies
   let dragSelection = false;
+  let dragCopy: string[] | null = null; // ids of the originals when the drag moves fresh duplicates
   let dragStartWorld = { x: 0, y: 0 };
   let dragTotal = { x: 0, y: 0 };
 
@@ -439,6 +441,7 @@ export function attachInput(
 
   function startAction(e: PointerEvent, toolOverride?: Tool) {
     const activeTool = toolOverride ?? state.tool;
+    dragCopy = null;
     // Presentation mode: any drag pans, no drawing/tools
     if (state.presenting) {
       panLast = { x: e.clientX, y: e.clientY };
@@ -752,7 +755,8 @@ export function attachInput(
       .filter((el) => state.selection.has(el.id))
       .map((el) => Object.assign(structuredClone(el) as Element, { id: uid('cp') }));
     if (!els.length) return;
-    store.addElements(els);
+    dragCopy = [...state.selection];
+    store.addElements(els); // provisional: the drag's pointerup re-commits copy + move as one step
     state.selection = new Set(els.map((el) => el.id));
     if (state.hoverText && !state.selection.has(state.hoverText)) state.hoverText = null;
     if (state.hoverImage && !state.selection.has(state.hoverImage)) state.hoverImage = null;
@@ -1053,7 +1057,22 @@ export function attachInput(
         translateElement(el, -dragTotal.x, -dragTotal.y);
         dropCache(el.id);
       }
-      store.moveElements(ids, dragTotal.x, dragTotal.y);
+      if (dragCopy) {
+        // copy + move is one undo step: take back the provisional in-place copies and
+        // add them where they were dropped (a copy that didn't move is discarded)
+        const originals = dragCopy;
+        dragCopy = null;
+        const clones = store.doc.elements.filter((el) => state.selection.has(el.id));
+        store.undo();
+        if (Math.hypot(dragTotal.x, dragTotal.y) > 0.5) {
+          for (const c of clones) translateElement(c, dragTotal.x, dragTotal.y);
+          store.addElements(clones);
+        } else {
+          state.selection = new Set(originals);
+        }
+      } else {
+        store.moveElements(ids, dragTotal.x, dragTotal.y);
+      }
       dragSelection = false;
       return;
     }
@@ -1859,7 +1878,10 @@ export function attachInput(
   document.addEventListener('wheel', (e) => {
     if (!inScope()) return;
     const zooming = e.ctrlKey || e.metaKey;
-    if (e.target !== canvas && !zooming) return;
+    // the text editor and its bars float over the canvas: scrolling there pans too (the
+    // overlay tracks the camera), so editing never traps the trackpad
+    const overEditor = !!(e.target as HTMLElement).closest?.('.text-editor, .font-bar, .weight-pop');
+    if (e.target !== canvas && !zooming && !overEditor) return;
     e.preventDefault();
     const r = canvas.getBoundingClientRect();
     if (zooming) {
