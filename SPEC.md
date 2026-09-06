@@ -46,6 +46,8 @@ Name: InfiniZine.
 
 Ink, marker, lasso-fill shapes, droppable images, videos, typed text (Figma/Excalidraw-style textboxes). No embedded links in v1.
 
+Text uses five typeface roles (Sans, Serif, Mono, Comic, Shout); each role maps to a bundled face picked in settings. A dice on the textbox re-rolls that one box within its role from a curated pool (~600 Google Fonts, OFL/Apache, `scripts/facepool.ts`), fetched on demand from jsDelivr's Fontsource CDN — the app's only network request. The box stores the face id; a face that cannot be fetched draws in the role's bundled face.
+
 ## Transcription
 
 On-demand only: "convert page to text" button per page (on-device Vision handwriting recognition). Surfaced primarily in export options. No always-on recognition.
