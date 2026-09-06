@@ -941,6 +941,14 @@ body.tl-docked-side .topbar { z-index: 40; }
 .hist-bar button svg { width: 24px; height: 24px; }
 .hist-bar button:active { background: var(--ink); color: var(--card); }
 body.left-hand .hist-bar, body.left-hand .sel-menu { right: auto; left: 14px; }
+/* a docked timeline pushes the floating menus off the edge it occupies (vars set by the timeline) */
+.hist-bar { bottom: calc(14px + var(--tl-bottom, 0px)); right: calc(14px + var(--tl-right, 0px)); }
+.sel-menu {
+  right: calc(14px + var(--tl-right, 0px));
+  top: calc(50% + (var(--tl-top, 0px) - var(--tl-bottom, 0px)) / 2);
+  max-height: calc(100vh - 260px - var(--tl-top, 0px) - var(--tl-bottom, 0px));
+}
+body.left-hand .hist-bar, body.left-hand .sel-menu { right: auto; left: calc(14px + var(--tl-left, 0px)); }
 .sel-menu button {
   width: 40px;
   height: 40px;

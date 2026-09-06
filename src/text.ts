@@ -129,24 +129,31 @@ export function fontFor(family: string, size: number, bold = false, italic = fal
   return `${italic ? 'italic ' : ''}${w} ${size}px ${css}`;
 }
 
-export interface Seg { t: string; b: boolean; i: boolean; u?: boolean; f?: string; w?: number }
+export interface Seg { t: string; b: boolean; i: boolean; u?: boolean; f?: string; face?: string; w?: number }
+/** Family key a segment draws with: its own role/face span, else the box's. */
+export function segFamily(seg: { f?: string; face?: string }, family: string): string {
+  if (!seg.f && !seg.face) return family;
+  const role = seg.f ?? roleOf(family);
+  return seg.face ? `${role}@${seg.face}` : role;
+}
 export interface RichLine { segs: Seg[]; size: number }
 
 export const ROLE_IDS = ['franklin', 'serif', 'mono', 'comic', 'shout'] as const;
-const SPAN_OPEN = /^\{([a-z0-9 ]+)\|/;
+const SPAN_OPEN = /^\{([a-z0-9 @-]+)\|/;
 
 /** Inline markdown in one pass: **bold**, *italic*, __underline__, and
- * `{attrs|text}` spans where attrs are a role (comic, serif, …) and/or a
- * weight (w100…w900); spans nest, inner attrs override, marks flow across. */
+ * `{attrs|text}` spans where attrs are a role (comic, serif, …), a rolled face
+ * (@lobster-two) and/or a weight (w100…w900); spans nest, inner attrs override,
+ * marks flow across. */
 export function parseInline(s: string): Seg[] {
   const segs: Seg[] = [];
   let b = false, i = false, u = false, buf = '';
-  const stack: { f?: string; w?: number }[] = [];
+  const stack: { f?: string; face?: string; w?: number }[] = [];
   const cur = () => stack[stack.length - 1] ?? {};
   const flush = () => {
     if (!buf) return;
     const c = cur();
-    segs.push({ t: buf, b, i, u: u || undefined, f: c.f, w: c.w });
+    segs.push({ t: buf, b, i, u: u || undefined, f: c.f, face: c.face, w: c.w });
     buf = '';
   };
   for (let k = 0; k < s.length; k++) {
@@ -156,7 +163,8 @@ export function parseInline(s: string): Seg[] {
         flush();
         const c = { ...cur() };
         for (const a of m[1].split(' ')) {
-          if ((ROLE_IDS as readonly string[]).includes(a)) c.f = a;
+          if ((ROLE_IDS as readonly string[]).includes(a)) { c.f = a; c.face = undefined; }
+          else if (a.startsWith('@') && a.length > 1) c.face = a.slice(1);
           else if (/^w[1-9]00$/.test(a)) c.w = Number(a.slice(1));
         }
         stack.push(c);
@@ -195,12 +203,12 @@ export function layoutText(text: string, family: string, fontSize: number, maxW:
       const words = g.t.split(' ');
       words.forEach((wd, idx) => {
         const t = idx < words.length - 1 ? `${wd} ` : wd;
-        if (t) tokens.push({ t, b: g.b || forceBold, i: g.i, u: g.u, f: g.f, w: g.w });
+        if (t) tokens.push({ t, b: g.b || forceBold, i: g.i, u: g.u, f: g.f, face: g.face, w: g.w });
       });
     }
 
     const width = (seg: Seg) => {
-      mctx.font = fontFor(seg.f ?? family, size, seg.b, seg.i, seg.w);
+      mctx.font = fontFor(segFamily(seg, family), size, seg.b, seg.i, seg.w);
       return mctx.measureText(seg.t).width;
     };
     const lead: Seg[] = bullet ? [{ t: '•  ', b: false, i: false }] : [];
@@ -222,6 +230,19 @@ export function layoutText(text: string, family: string, fontSize: number, maxW:
   return out;
 }
 
+/** Width lines wrap at: auto boxes wrap at their drawn width (or never), fixed boxes at their width. */
+export function wrapWidth(el: { auto?: boolean; wrapW?: number; w: number }): number {
+  return el.auto ? el.wrapW ?? 1e6 : el.w;
+}
+/** Box extents for `text`: an auto box hugs its content (within its wrap width);
+ * a hand-sized box keeps its width and grows in height only as needed. */
+export function fitBox(text: string, family: string, fontSize: number, el: { auto?: boolean; wrapW?: number; w: number; h: number }): { w: number; h: number } {
+  const lines = layoutText(text || ' ', family, fontSize, wrapWidth(el));
+  if (!el.auto) return { w: el.w, h: Math.max(el.h, layoutHeight(lines)) };
+  const w = Math.max(40, Math.min(el.wrapW ?? Infinity, layoutWidth(lines, family) + 4));
+  return { w, h: layoutHeight(lines) };
+}
+
 export function layoutHeight(lines: RichLine[]): number {
   return lines.reduce((a, l) => a + l.size * LINE_HEIGHT, 0);
 }
@@ -238,6 +259,6 @@ export function layoutWidth(lines: RichLine[], family: string): number {
 }
 
 export function segWidth(family: string, line: RichLine, seg: Seg): number {
-  mctx.font = fontFor(seg.f ?? family, line.size, seg.b, seg.i, seg.w);
+  mctx.font = fontFor(segFamily(seg, family), line.size, seg.b, seg.i, seg.w);
   return mctx.measureText(seg.t).width;
 }

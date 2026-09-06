@@ -100,7 +100,8 @@ export interface TextBox {
   font?: string; // typeface key (see text.ts FONTS); default 'franklin'
   face?: string; // rolled face (facepool id) overriding the role's face for this box
   text: string; // markdown: # headings, - bullets, **bold**, *italic*
-  auto?: boolean; // width follows the content (tap-created box) until the user resizes it
+  auto?: boolean; // box hugs its content until the user resizes it by hand
+  wrapW?: number; // auto boxes drawn as a rectangle: lines wrap at this width (tap-created boxes never wrap)
   layer?: Layer;
   frame?: string;
   alayer?: string;

@@ -7,8 +7,9 @@ import { Store } from './store';
 import { AnimArea, Stroke, FillShape, Element, ImageBox, Page, TextBox, uid } from './types';
 import { hitElement, elementsInLasso, denoise, denoiseClosed, pressure, strokeOutline } from './geometry';
 import { isPixelPattern, migratePatternId } from './patterns';
-import { layoutText, layoutHeight, layoutWidth, boxFamily, roleOf } from './text';
+import { layoutText, layoutHeight, boxFamily, roleOf, fitBox } from './text';
 import { rollFace, loadFace } from './facepool';
+import { clipboardToMarkdown } from './richedit';
 
 const CLIP_KEY = 'infinizine-clipboard';
 export const CLIP_PENDING_KEY = 'infinizine-clip-pending'; // '1' while the clip hasn't been pasted yet
@@ -229,6 +230,10 @@ export class InputState {
   areaRect: { x: number; y: number; w: number; h: number } | null = null; // area being drawn
   activeAreaId: string | null = null; // timeline open for this area
   activeFrameId: string | null = null;
+  /** position in the edited area, in ticks from its start (null = the active frame's start).
+   * Flipping moves this across the whole animation; the active frame is whichever frame of
+   * the active layer covers it, so a held frame can be viewed at each tick it spans. */
+  editTick: number | null = null;
   activeLayerId: string | null = null;
   onionSkin = true; // on by default; 3 frames back (red) and 3 forward (green)
   liveInkLife = 6; // ticks a stroke drawn during playback stays visible
@@ -316,7 +321,7 @@ export function attachInput(
   // textbox resize/scale (Excalidraw-style handles on a hovered/selected textbox)
   let resizeText: TextBox | null = null;
   let resizeMode: 'width' | 'width-left' | 'height' | 'scale' = 'width';
-  let resizeStart = { x: 0, w: 0, h: 0, fontSize: 0, wx: 0, wy: 0 };
+  let resizeStart = { x: 0, w: 0, h: 0, fontSize: 0, wx: 0, wy: 0, auto: undefined as boolean | undefined };
   // positions are recorded raw; all smoothing happens after the fact
   // (screen-space denoise, see geometry.denoise) so nothing lags the tip
   let ema: { x: number; y: number } | null = null;
@@ -526,7 +531,8 @@ export function attachInput(
         state.selection = new Set([el.id]);
         resizeText = el;
         resizeMode = mode;
-        resizeStart = { x: el.x, w: el.w, h: el.h, fontSize: el.fontSize, wx: w.x, wy: w.y };
+        resizeStart = { x: el.x, w: el.w, h: el.h, fontSize: el.fontSize, wx: w.x, wy: w.y, auto: el.auto };
+        el.auto = false; // sizing by hand: the box stops hugging its content (live; committed on release)
         invalidate();
       };
       if (Math.hypot(w.x - (el.x + el.w), w.y - (el.y + el.h)) < r) { grab('scale'); return; }
@@ -1165,8 +1171,8 @@ export function attachInput(
       // resizing by hand fixes the size: the box stops following its content
       const after = { x: el.x, w: el.w, h: el.h, fontSize: el.fontSize, auto: false };
       // revert live mutation, commit as one undoable op
-      el.x = resizeStart.x; el.w = resizeStart.w; el.h = resizeStart.h; el.fontSize = resizeStart.fontSize;
-      store.resizeText(el.id, { x: resizeStart.x, w: resizeStart.w, h: resizeStart.h, fontSize: resizeStart.fontSize, auto: el.auto }, after);
+      el.x = resizeStart.x; el.w = resizeStart.w; el.h = resizeStart.h; el.fontSize = resizeStart.fontSize; el.auto = resizeStart.auto;
+      store.resizeText(el.id, { x: resizeStart.x, w: resizeStart.w, h: resizeStart.h, fontSize: resizeStart.fontSize, auto: resizeStart.auto }, after);
       return;
     }
     erased = [];
@@ -1202,13 +1208,11 @@ export function attachInput(
     if (state.textRect) {
       let r = state.textRect;
       state.textRect = null;
-      let auto = false;
-      if (r.w < 12 || r.h < 12) {
-        // a tap: an auto-sizing box that grows with what you type
-        r = { x: textDragStart.x, y: textDragStart.y, w: 40, h: 30 };
-        auto = true;
-      }
-      state.onTextEdit(null, r, auto);
+      // a tap: a box that grows with what you type, never wrapping; a drawn rectangle
+      // wraps at its width but likewise hugs the text (until resized by hand)
+      const tap = r.w < 12 || r.h < 12;
+      if (tap) r = { x: textDragStart.x, y: textDragStart.y, w: 40, h: 30 };
+      state.onTextEdit(null, r, tap);
       invalidate();
       return;
     }
@@ -1355,9 +1359,7 @@ export function attachInput(
     const live = store.doc.elements.find((e) => e.id === el.id);
     if (!live || live.kind !== 'text' || face === live.face) { invalidate(); return; }
     // the new face has its own metrics: re-measure the box like an edit would
-    const fam = boxFamily({ font: live.font, face });
-    const w = live.auto ? Math.max(40, layoutWidth(layoutText(live.text || ' ', fam, live.fontSize, 1e6), fam) + 4) : live.w;
-    const h = Math.max(live.auto ? 0 : live.h, layoutHeight(layoutText(live.text || ' ', fam, live.fontSize, w)));
+    const { w, h } = fitBox(live.text, boxFamily({ font: live.font, face }), live.fontSize, live);
     store.updateText(
       live.id,
       { text: live.text, w: live.w, h: live.h, face: live.face ?? null },
@@ -1366,19 +1368,24 @@ export function attachInput(
     invalidate();
   }
 
-  function addTextFromString(text: string) {
+  function addTextFromString(text: string, style?: { font: string; face?: string; fontSize?: number; color?: string }) {
     const wBox = 220;
-    const h = Math.max(30, layoutHeight(layoutText(text, state.font, state.textSize, wBox)));
+    const font = style?.font ?? state.font, face = style?.face;
+    const fontSize = style?.fontSize ?? state.textSize;
+    const { w, h } = fitBox(text, boxFamily({ font, face }), fontSize, { auto: true, wrapW: wBox, w: wBox, h: 0 });
     const el: Element = {
       id: uid('tx'),
       kind: 'text',
-      x: camera.x - wBox / 2,
+      x: camera.x - w / 2,
       y: camera.y - h / 2,
-      w: wBox,
+      w,
       h,
-      color: state.color,
-      fontSize: state.textSize,
-      font: state.font,
+      auto: true,
+      wrapW: wBox,
+      color: style?.color ?? state.color,
+      fontSize,
+      font,
+      face,
       text,
       frame: state.activeFrameId ?? undefined,
       alayer: state.activeFrameId ? state.activeLayerId ?? undefined : undefined,
@@ -1406,6 +1413,11 @@ export function attachInput(
             fr.onload = () => addImageFromDataURL(fr.result as string);
             fr.readAsDataURL(blob);
             return;
+          }
+          if (it.types.includes('text/html')) {
+            // text copied out of a text editor: a new box in the source's style
+            const got = clipboardToMarkdown(await (await it.getType('text/html')).text());
+            if (got && got.md.trim()) { addTextFromString(got.md, got.style); return; }
           }
         }
       }

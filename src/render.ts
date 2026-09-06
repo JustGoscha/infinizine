@@ -4,7 +4,7 @@
 import { Camera, baseZoom } from './camera';
 import { AnimArea, Element, FillShape, Page, Stroke, StrokePoint, TextBox } from './types';
 import { strokeOutline, pencilOutlines, markerPaths, outlineToPath, elementBBox, bboxIntersects, densify, filterPressure, easeP, easeTilt, LiveDenoiser, LiveOutliner, hasPressure, denoiseClosed, pressure, BBox } from './geometry';
-import { layoutText, fontFor, segWidth, LINE_HEIGHT, boxFamily } from './text';
+import { layoutText, fontFor, segWidth, LINE_HEIGHT, boxFamily, segFamily, wrapWidth } from './text';
 import { moveHandleRect, moveAllHandleRect, deleteHandleRect, eyeHandleRect, diceHandleRect, copyHandleRect, copyStyleHandleRect, pasteStyleHandleRect, type InputState } from './input';
 import { Store, ChangeInfo } from './store';
 import { formatLabel } from './formats';
@@ -386,10 +386,10 @@ export class Renderer {
       ctx.textBaseline = 'top';
       const family = boxFamily(el);
       let ty = el.y;
-      for (const line of layoutText(el.text, family, el.fontSize, el.w)) {
+      for (const line of layoutText(el.text, family, el.fontSize, wrapWidth(el))) {
         let tx = el.x;
         for (const seg of line.segs) {
-          ctx.font = fontFor(seg.f ?? family, line.size, seg.b, seg.i, seg.w);
+          ctx.font = fontFor(segFamily(seg, family), line.size, seg.b, seg.i, seg.w);
           ctx.fillText(seg.t, tx, ty);
           const sw = segWidth(family, line, seg);
           if (seg.u) ctx.fillRect(tx, ty + line.size * 1.02, sw, Math.max(0.5, line.size * 0.06));
@@ -988,7 +988,7 @@ export class Renderer {
       playTick = area.loop ? ((playTick % areaTotal) + areaTotal) % areaTotal : Math.min(playTick, areaTotal - 1);
       areaTick.set(area.id, { tick: playTick, rawTick, total: areaTotal, loop: area.loop, fps: area.fps });
 
-      // tick position of the active frame's start (for holding other layers in edit mode)
+      // edit position: the flipped-to tick, else the active frame's start (other layers hold there)
       let editTick = 0;
       let activeLayerId: string | null = null;
       if (editing && this.input.activeFrameId) {
@@ -1004,6 +1004,7 @@ export class Renderer {
           }
           if (activeLayerId) break;
         }
+        if (this.input.editTick !== null) editTick = Math.max(0, Math.min(areaTotal - 1, this.input.editTick));
       }
 
       for (const l of area.layers) {

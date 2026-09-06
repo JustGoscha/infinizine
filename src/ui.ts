@@ -10,9 +10,9 @@ import { isPattern, patternPreviewCSS, patternLabel, patternLevels, patternVaria
 import type { ExportOptions } from './export';
 import { UNITS_PER_MM, uid, FORMAT_VERSION, FILL_BLENDS } from './types';
 import { type Fmt, PRIMARY_FORMATS, FORMAT_GROUPS, MORE_FORMATS, fitPage, customFormats, saveCustomFormat, mm } from './formats';
-import { layoutText, layoutHeight, layoutWidth, FONTS, FACES, chosenFaces, appFaces, setFace, setDocFaces, weightRange, cssOf, ROLE_IDS, boxFamily, type FontRole } from './text';
+import { layoutText, layoutHeight, fitBox, FONTS, FACES, chosenFaces, appFaces, setFace, setDocFaces, weightRange, cssOf, ROLE_IDS, boxFamily, type FontRole } from './text';
 import { pressure, savePressure, resetPressure, loadPressure, exportPressure, importPressure, easeP, curveAt, type Curve, type CurveNode } from './geometry';
-import { markdownToHtml, htmlToMarkdown, autoTransform, caretToEnd, applyInlineStyle } from './richedit';
+import { markdownToHtml, htmlToMarkdown, autoTransform, caretToEnd, applyInlineStyle, selectionToClipboard, clipboardToMarkdown, markdownToPasteHtml } from './richedit';
 
 function toast(msg: string) {
   window.dispatchEvent(new CustomEvent('izine-toast', { detail: msg }));
@@ -138,7 +138,10 @@ function pressDrag(
   },
 ) {
   el.addEventListener('pointerdown', (e) => {
-    const touchy = e.pointerType !== 'mouse';
+    // fingers hold before dragging so a swipe can still scroll the strip; a pen taps and
+    // drags like a mouse (a pencil tap wobbles and may lift a little off the tile — with
+    // immediate capture the pointerup still reaches us and counts as the tap)
+    const touchy = e.pointerType === 'touch';
     const startX = e.clientX, startY = e.clientY;
     let lifted = !touchy;
     let dragging = false;
@@ -869,9 +872,7 @@ export function buildUI(
   const styleOf = (el: import('./types').TextBox): TextStyle => ({ font: el.font ?? 'franklin', face: el.face, fontSize: el.fontSize, color: el.color });
   const sameStyle = (a: TextStyle, b: TextStyle) => a.font === b.font && (a.face ?? '') === (b.face ?? '') && Math.abs(a.fontSize - b.fontSize) < 0.01 && a.color.toLowerCase() === b.color.toLowerCase();
   const restyleText = (el: import('./types').TextBox, s: TextStyle) => {
-    const fam = boxFamily({ font: s.font, face: s.face });
-    const w = el.auto ? Math.max(40, layoutWidth(layoutText(el.text || ' ', fam, s.fontSize, 1e6), fam) + 4) : el.w;
-    const h = layoutHeight(layoutText(el.text || ' ', fam, s.fontSize, w));
+    const { w, h } = fitBox(el.text, boxFamily({ font: s.font, face: s.face }), s.fontSize, el);
     store.updateText(
       el.id,
       { text: el.text, w: el.w, h: el.h, font: el.font ?? 'franklin', fontSize: el.fontSize, face: el.face ?? null },
@@ -885,7 +886,11 @@ export function buildUI(
   state.stylePasteFor = (el) => { const s = readStyleClip(); return !!s && !!FONTS[s.font] && !sameStyle(s, styleOf(el)); };
 
   state.onTextEdit = (target, rect, autoFlag) => {
-    const auto = autoFlag ?? target?.auto ?? false; // width follows content until resized
+    // new boxes hug their text: a tap never wraps, a drawn rectangle wraps at its width;
+    // both stay auto until resized by hand
+    const auto = target ? !!target.auto : true;
+    const wrapW = target ? target.wrapW : autoFlag ? undefined : rect.w;
+    const box = () => ({ auto, wrapW, w: rect.w, h: rect.h });
     let fontSize = target ? target.fontSize : state.textSize;
     let color = target ? target.color : state.color;
     let family = target?.font ?? state.font;
@@ -1048,11 +1053,10 @@ export function buildUI(
     bar.append(copyStyle, pasteStyle);
     document.body.appendChild(bar);
     // auto boxes: width = widest line (+ a hair so greedy wrapping never kicks in)
-    const curW = () =>
-      auto ? Math.max(40, layoutWidth(layoutText(value() || ' ', family, fontSize, 1e6), family) + 4) : rect.w;
-    const contentH = () =>
-      Math.max(auto ? 0 : rect.h, layoutHeight(layoutText(value() || ' ', family, fontSize, curW())));
-    if (auto) ta.style.whiteSpace = 'pre'; // never wrap while auto-sizing
+    // the field is as wide as lines may get (drawn/fixed width); a tap box grows with its text
+    const curW = () => (auto && wrapW === undefined ? fitBox(value(), fam(), fontSize, box()).w : wrapW ?? rect.w);
+    const contentH = () => fitBox(value(), fam(), fontSize, box()).h;
+    if (auto && wrapW === undefined) ta.style.whiteSpace = 'pre'; // never wrap while auto-sizing
     const place = () => {
       const r = (document.getElementById('canvas') as HTMLCanvasElement).getBoundingClientRect();
       const s = camera.worldToScreen(rect.x, rect.y, r.width, r.height);
@@ -1104,8 +1108,7 @@ export function buildUI(
       bar.remove();
       if (target) state.hidden.delete(target.id);
       const text = value().replace(/\s+$/, '');
-      const w = auto ? Math.max(40, layoutWidth(layoutText(text || ' ', fam(), fontSize, 1e6), fam()) + 4) : rect.w;
-      const h = Math.max(auto ? 0 : rect.h, layoutHeight(layoutText(text || ' ', fam(), fontSize, w)));
+      const { w, h } = fitBox(text, fam(), fontSize, box());
       if (target) {
         if (color !== target.color) store.recolorElements([target.id], color);
         if (text === target.text && family === (target.font ?? 'franklin') && face === target.face && fontSize === target.fontSize && w === target.w) {
@@ -1125,7 +1128,7 @@ export function buildUI(
         store.addElement({
           id: uid('tx'),
           kind: 'text', x: rect.x, y: rect.y, w, h,
-          color, fontSize, font: family, text, auto: auto || undefined,
+          color, fontSize, font: family, text, auto: auto || undefined, wrapW,
           layer: state.paintBehind ? 'back' : 'front',
           frame: state.activeFrameId ?? undefined,
           alayer: state.activeLayerId ?? undefined,
@@ -1134,6 +1137,26 @@ export function buildUI(
       invalidate();
     };
     ta.addEventListener('blur', commit);
+    // copied text carries its look (typeface, rolled face, size, colour, marks) so a
+    // paste into another box keeps it; foreign clipboard content pastes as the browser does
+    const toClipboard = (e: ClipboardEvent) => {
+      const clip = selectionToClipboard(ta, { font: family, face, fontSize, color });
+      if (!clip || !e.clipboardData) return false;
+      e.clipboardData.setData('text/html', clip.html);
+      e.clipboardData.setData('text/plain', clip.text);
+      e.preventDefault();
+      return true;
+    };
+    ta.addEventListener('copy', toClipboard);
+    ta.addEventListener('cut', (e) => { if (toClipboard(e)) { document.execCommand('delete'); place(); } });
+    ta.addEventListener('paste', (e) => {
+      const html = e.clipboardData?.getData('text/html') ?? '';
+      const got = clipboardToMarkdown(html, { font: family, face });
+      if (!got) return;
+      e.preventDefault();
+      document.execCommand('insertHTML', false, markdownToPasteHtml(got.md));
+      place();
+    });
     // the canvas swallows pointer events (no blur on touch): a tap anywhere that
     // isn't the editor or its controls finishes editing
     const outside = (e: PointerEvent) => {
@@ -1210,6 +1233,34 @@ export function buildUI(
   document.body.appendChild(tl);
   let tlAreaId: string | null = null;
   let tlStep: (d: number) => void = () => {}; // frame stepper of the current render (arrow keys, jog)
+  type Frames = { id: string; duration: number }[];
+  const layerTotal = (frames: Frames) => frames.reduce((a, f) => a + f.duration, 0);
+  /** frame of a layer showing at `tick` (holds the last frame past the layer's end) */
+  const frameAtTick = (frames: Frames, tick: number): string | null => {
+    if (!frames.length) return null;
+    let t = Math.max(0, Math.min(tick, layerTotal(frames) - 1));
+    for (const f of frames) { t -= f.duration; if (t < 0) return f.id; }
+    return frames[frames.length - 1].id;
+  };
+  const frameSpan = (frames: Frames, fid: string): { start: number; end: number } | null => {
+    let acc = 0;
+    for (const f of frames) { if (f.id === fid) return { start: acc, end: acc + f.duration }; acc += f.duration; }
+    return null;
+  };
+  /** the whole animation's length in ticks: longest keyframe track, extended by non-looping live lines (as playback) */
+  const areaTotalTicks = (area: import('./types').AnimArea): number => {
+    let total = Math.max(1, ...area.layers.filter((l) => l.kind !== 'live').map((l) => layerTotal(l.frames)));
+    for (const l of area.layers) {
+      if (l.kind !== 'live' || l.loop !== false) continue;
+      for (const el of store.doc.elements) {
+        if (el.kind !== 'stroke' || el.alayer !== l.id) continue;
+        const drawn = (el.points[el.points.length - 1]?.t ?? 0) * area.fps;
+        total = Math.max(total, Math.ceil((el.animStart ?? 0) + drawn + Math.max(1, el.animLife ?? 6)));
+      }
+    }
+    return total;
+  };
+  let lastTlFid: string | null = null; // active frame at the last render (detects an explicit frame pick)
   window.addEventListener('keydown', (e) => {
     if (!tlAreaId || tl.classList.contains('hidden') || state.presenting) return;
     const t = e.target as HTMLElement | null;
@@ -1230,9 +1281,11 @@ export function buildUI(
     document.body.classList.remove('tl-docked-bottom', 'tl-docked-top', 'tl-docked-side');
     state.activeAreaId = null;
     state.activeFrameId = null;
+    state.editTick = null;
     state.activeLayerId = null;
     state.playingAreas = false;
     tl.classList.add('hidden');
+    syncTlInsets();
     invalidate();
   }
 
@@ -1247,10 +1300,26 @@ export function buildUI(
     const top = area.layers[area.layers.length - 1];
     state.activeLayerId = top?.id ?? null;
     state.activeFrameId = top?.frames[0]?.id ?? null;
+    state.editTick = 0;
     tl.classList.remove('hidden');
     renderTimeline();
     invalidate();
+    syncTlInsets();
   };
+
+  // A docked timeline must not bury the floating menus (undo/redo, selection) in its corner:
+  // publish its extent per screen edge so they slide out of the way (style.css reads the vars).
+  function syncTlInsets() {
+    const st = document.body.style;
+    const shown = !tl.classList.contains('hidden') && tlDock !== 'float';
+    const r = shown ? tl.getBoundingClientRect() : null;
+    st.setProperty('--tl-bottom', r && tlDock === 'bottom' ? `${r.height}px` : '0px');
+    st.setProperty('--tl-top', r && tlDock === 'top' ? `${r.height}px` : '0px');
+    st.setProperty('--tl-left', r && tlDock === 'left' ? `${r.width}px` : '0px');
+    st.setProperty('--tl-right', r && tlDock === 'right' ? `${r.width}px` : '0px');
+  }
+  new ResizeObserver(() => syncTlInsets()).observe(tl);
+  window.addEventListener('resize', syncTlInsets);
 
   function setDock(mode: 'float' | 'bottom' | 'top' | 'left' | 'right') {
     tlDock = mode;
@@ -1269,6 +1338,7 @@ export function buildUI(
     tl.style.right = '';
     tl.style.bottom = '';
     renderTimeline();
+    syncTlInsets();
   }
 
   // dock preview: an expanding zone shows where the timeline will snap
@@ -1482,13 +1552,31 @@ export function buildUI(
     }
     // an undo can leave the area without layers or the active frame gone: never crash, just show what's there
     const activeLayer = area.layers.find((l) => l.id === state.activeLayerId);
-    if (activeLayer && !activeLayer.frames.some((f) => f.id === state.activeFrameId)) {
-      state.activeFrameId = activeLayer.frames[0]?.id ?? null;
+    const total = areaTotalTicks(area);
+    if (state.editTick !== null) state.editTick = Math.max(0, Math.min(total - 1, state.editTick));
+    if (activeLayer && activeLayer.frames.length) {
+      const frames = activeLayer.frames;
+      if (!frames.some((f) => f.id === state.activeFrameId)) {
+        // the frame is gone (deleted / undone) or another layer was picked: stay at the position
+        state.activeFrameId = frameAtTick(frames, state.editTick ?? 0);
+      } else if (state.activeFrameId !== lastTlFid) {
+        // a frame was picked outright: land on its start unless the position already lies inside it
+        const span = frameSpan(frames, state.activeFrameId!)!;
+        const end = state.activeFrameId === frames[frames.length - 1].id ? Math.max(span.end, total) : span.end; // the last frame holds to the end
+        if (state.editTick === null || state.editTick < span.start || state.editTick >= end) state.editTick = span.start;
+      } else if (state.editTick !== null) {
+        state.activeFrameId = frameAtTick(frames, state.editTick);
+      }
+      if (state.editTick === null) state.editTick = frameSpan(frames, state.activeFrameId!)?.start ?? 0;
+    } else if (activeLayer) {
+      state.activeFrameId = null;
     }
     if (!activeLayer) state.activeFrameId = null;
+    lastTlFid = state.activeFrameId;
     const fid = state.activeFrameId ?? '';
     const lid = state.activeLayerId ?? '';
     const frameIdx = activeLayer ? activeLayer.frames.findIndex((f) => f.id === fid) : -1;
+    const posLabel = () => `${(state.editTick ?? 0) + 1} / ${total}`;
     const nFrameLayers = area.layers.filter((l) => l.kind !== 'live').length;
     const nLiveLayers = area.layers.filter((l) => l.kind === 'live').length;
     tl.innerHTML = `
@@ -1552,7 +1640,7 @@ export function buildUI(
         <button id="tl-rec" class="tl-nav-rec${state.recording ? ' on' : ''}" title="Record: plays the area and keeps every line you draw as a live line">${svg('<circle cx="12" cy="12" r="6" fill="currentColor" stroke="none"/>')}</button>
         ${activeLayer && activeLayer.kind !== 'live'
           ? `<button id="tl-prev" title="Previous frame (←)">${svg('<path d="M14.5 6 L8.5 12 L14.5 18"/>')}</button>
-        <div class="tl-jog" id="tl-jog" title="Swipe or scroll to flip through the frames"><span class="tl-jog-ticks"></span><span class="tl-pos" id="tl-pos">${frameIdx + 1} / ${activeLayer.frames.length}</span><span class="tl-time" id="tl-time"></span></div>
+        <div class="tl-jog" id="tl-jog" title="Swipe or scroll to flip through the animation"><span class="tl-jog-ticks"></span><span class="tl-pos" id="tl-pos" title="Position in the animation · frame ${frameIdx + 1} of this layer">${posLabel()}</span><span class="tl-time" id="tl-time"></span></div>
         <button id="tl-next" title="Next frame (→)">${svg('<path d="M9.5 6 L15.5 12 L9.5 18"/>')}</button>
         <button id="tl-addnext" title="New frame after this one">${svg('<path d="M12 6v12M6 12h12"/>')}</button>`
           : `<div class="tl-jog tl-jog-off"><span class="tl-pos">live lines</span><span class="tl-time" id="tl-time"></span></div>`}
@@ -1684,10 +1772,10 @@ export function buildUI(
           state.blinkLayerId = null;
           const topFrames = [...area.layers].reverse().find((x) => x.kind !== 'live');
           state.activeLayerId = topFrames?.id ?? null;
-          state.activeFrameId = topFrames?.frames[0]?.id ?? null;
+          state.activeFrameId = topFrames ? frameAtTick(topFrames.frames, state.editTick ?? 0) : null;
         } else {
           state.activeLayerId = l.id;
-          state.activeFrameId = l.frames[0]?.id ?? null;
+          state.activeFrameId = frameAtTick(l.frames, state.editTick ?? 0); // stay at the position
         }
         renderTimeline();
         invalidate();
@@ -1757,7 +1845,7 @@ export function buildUI(
               state.blinkLayerId = null;
               const topFrames = [...area.layers].reverse().find((x) => x.kind !== 'live');
               state.activeLayerId = topFrames?.id ?? l.id;
-              state.activeFrameId = topFrames?.frames[0]?.id ?? null;
+              state.activeFrameId = topFrames ? frameAtTick(topFrames.frames, state.editTick ?? 0) : null;
             } else {
               // select the layer's strokes and blink them so it's obvious which ink this is
               state.selection = new Set(strokes.map((st) => st.id));
@@ -1846,6 +1934,7 @@ export function buildUI(
             marker = null;
             state.activeLayerId = l.id;
             state.activeFrameId = f.id;
+            state.editTick = null; // settle on the moved frame's new start
             store.moveFrame(area.id, l.id, i, insertIndex(ev.clientX).to);
             renderTimeline();
             invalidate();
@@ -1857,6 +1946,7 @@ export function buildUI(
             marker = null;
             state.activeLayerId = l.id;
             state.activeFrameId = f.id;
+            state.editTick = frameSpan(l.frames, f.id)?.start ?? 0;
             renderTimeline();
             invalidate();
           },
@@ -1893,7 +1983,7 @@ export function buildUI(
         const nl = store.addAnimLayer(area.id);
         if (nl) {
           state.activeLayerId = nl.id;
-          state.activeFrameId = nl.frames[0]?.id ?? null;
+          state.activeFrameId = frameAtTick(nl.frames, state.editTick ?? 0);
         }
         renderTimeline();
         invalidate();
@@ -2013,12 +2103,14 @@ export function buildUI(
     // `light`: while jogging, only the tile highlight and counter update — the panel isn't rebuilt under the finger
     const stepFrame = (d: number, light = false) => {
       if (!activeLayer || activeLayer.kind === 'live' || !activeLayer.frames.length) return;
-      const cur = activeLayer.frames.findIndex((f) => f.id === state.activeFrameId);
-      const n = activeLayer.frames.length;
-      // a looping area flips round like a flipbook: past the last frame comes the first
-      const i = area.loop ? (((cur + d) % n) + n) % n : Math.max(0, Math.min(n - 1, cur + d));
-      if (i === cur) return;
-      state.activeFrameId = activeLayer.frames[i].id;
+      // the position walks the whole animation tick by tick (every layer moves underneath);
+      // a looping area flips round like a flipbook: past the end comes the start
+      const cur = state.editTick ?? frameSpan(activeLayer.frames, fid)?.start ?? 0;
+      const t = area.loop ? (((cur + d) % total) + total) % total : Math.max(0, Math.min(total - 1, cur + d));
+      if (t === cur) return;
+      state.editTick = t;
+      state.activeFrameId = frameAtTick(activeLayer.frames, t);
+      lastTlFid = state.activeFrameId;
       if (light) {
         tracksDiv.querySelectorAll('.tl-frame.active').forEach((t) => t.classList.remove('active'));
         const tile = tracksDiv.querySelector<HTMLElement>(`.tl-frame[data-fid="${state.activeFrameId}"]`);
@@ -2030,7 +2122,7 @@ export function buildUI(
           else if (fr.right > tr.right) tracksDiv.scrollLeft += fr.right - tr.right + 24;
         }
         const pos = tl.querySelector('#tl-pos');
-        if (pos) pos.textContent = `${i + 1} / ${activeLayer.frames.length}`;
+        if (pos) pos.textContent = posLabel();
         invalidate();
         return;
       }
@@ -2147,7 +2239,7 @@ export function buildUI(
       const nl = store.addAnimLayer(area.id);
       if (nl) {
         state.activeLayerId = nl.id;
-        state.activeFrameId = nl.frames[0]?.id ?? null;
+        state.activeFrameId = frameAtTick(nl.frames, state.editTick ?? 0);
       }
       renderTimeline();
       invalidate();
