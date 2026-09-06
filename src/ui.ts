@@ -17,6 +17,21 @@ import { markdownToHtml, htmlToMarkdown, autoTransform, caretToEnd, applyInlineS
 function toast(msg: string) {
   window.dispatchEvent(new CustomEvent('izine-toast', { detail: msg }));
 }
+/** A small bubble that pops up right above a point on screen and fades. */
+let tipEl: HTMLElement | null = null;
+let tipTimer = 0;
+function tip(x: number, y: number, text: string) {
+  if (!tipEl) { tipEl = document.createElement('div'); tipEl.className = 'tip-bubble'; document.body.appendChild(tipEl); }
+  tipEl.textContent = text;
+  tipEl.classList.remove('show');
+  void tipEl.offsetWidth; // restart the animation
+  tipEl.style.left = `${Math.max(8, Math.min(window.innerWidth - 8, x))}px`;
+  tipEl.style.top = `${Math.max(8, y)}px`;
+  tipEl.classList.add('show');
+  window.clearTimeout(tipTimer);
+  tipTimer = window.setTimeout(() => tipEl?.classList.remove('show'), 1300);
+}
+const tipAt = (el: Element, text: string) => { const r = el.getBoundingClientRect(); tip(r.left + r.width / 2, r.top - 6, text); };
 
 const svg = (inner: string) =>
   `<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round">${inner}</svg>`;
@@ -865,8 +880,8 @@ export function buildUI(
     if (s.color !== el.color) store.recolorElements([el.id], s.color);
   };
   // handles on the text rect (under the dice): copy this box's style; paste the copied one
-  state.onCopyStyle = (el) => { writeStyleClip(styleOf(el)); toast('Style copied'); };
-  state.onPasteStyle = (el) => { const s = readStyleClip(); if (s && FONTS[s.font]) { restyleText(el, s); invalidate(); } };
+  state.onCopyStyle = (el, cx, cy) => { writeStyleClip(styleOf(el)); tip(cx, cy - 18, 'Style copied'); };
+  state.onPasteStyle = (el, cx, cy) => { const s = readStyleClip(); if (s && FONTS[s.font]) { restyleText(el, s); tip(cx, cy - 18, 'Style applied'); invalidate(); } };
   state.stylePasteFor = (el) => { const s = readStyleClip(); return !!s && !!FONTS[s.font] && !sameStyle(s, styleOf(el)); };
 
   state.onTextEdit = (target, rect, autoFlag) => {
@@ -1010,12 +1025,13 @@ export function buildUI(
     copyStyle.title = 'Pick up this style (typeface, size, colour)';
     copyStyle.innerHTML = svg('<path d="M2 22l1-1h3l9-9 M3 21v-3l9-9 M15 6l3.4-3.4a2.1 2.1 0 1 1 3 3L18 9l.4.4a2.1 2.1 0 1 1-3 3l-3.8-3.8a2.1 2.1 0 1 1 3-3l.4.4Z"/>');
     copyStyle.addEventListener('pointerdown', (e) => e.preventDefault());
-    copyStyle.addEventListener('click', () => { writeStyleClip({ font: family, face, fontSize, color }); pasteStyle.hidden = false; toast('Style copied'); ta.focus(); });
+    copyStyle.addEventListener('click', () => { writeStyleClip({ font: family, face, fontSize, color }); pasteStyle.hidden = false; pasteStyle.classList.add('badged'); tipAt(copyStyle, 'Style copied'); ta.focus(); });
     const pasteStyle = document.createElement('button');
     pasteStyle.className = 'fb-style';
     pasteStyle.title = 'Apply the picked-up style';
     pasteStyle.innerHTML = svg('<path d="M4 2h12a2 2 0 0 1 2 2v2a2 2 0 0 1-2 2H4a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2Z M10 16v-2a2 2 0 0 1 2-2h8a2 2 0 0 0 2-2V7a2 2 0 0 0-2-2h-2 M9 16h2a1 1 0 0 1 1 1v4a1 1 0 0 1-1 1H9a1 1 0 0 1-1-1v-4a1 1 0 0 1 1-1Z"/>');
     pasteStyle.hidden = !readStyleClip();
+    pasteStyle.classList.toggle('badged', !!readStyleClip());
     pasteStyle.addEventListener('pointerdown', (e) => e.preventDefault());
     pasteStyle.addEventListener('click', () => {
       const s = readStyleClip();
@@ -1026,6 +1042,7 @@ export function buildUI(
       bar.querySelectorAll<HTMLElement>('.fb-font').forEach((o) => o.classList.toggle('active', o.textContent === FONTS[s.font].name));
       bar.querySelectorAll<HTMLElement>('button').forEach((o) => { const ts = TEXT_SIZES.find((x) => x.label === o.textContent); if (ts) o.classList.toggle('active', Math.abs(ts.size - fontSize) < 0.01); });
       place();
+      tipAt(pasteStyle, 'Style applied');
       ta.focus();
     });
     bar.append(copyStyle, pasteStyle);
@@ -2590,12 +2607,13 @@ export function buildUI(
   });
   (selMenu.querySelector('#sm-cstyle') as HTMLButtonElement).addEventListener('click', () => {
     const t = store.doc.elements.find((el) => el.kind === 'text' && state.selection.has(el.id));
-    if (t && t.kind === 'text') { writeStyleClip(styleOf(t)); toast('Style copied'); }
+    if (t && t.kind === 'text') { writeStyleClip(styleOf(t)); tipAt(selMenu.querySelector('#sm-cstyle')!, 'Style copied'); }
   });
   (selMenu.querySelector('#sm-pstyle') as HTMLButtonElement).addEventListener('click', () => {
     const s = readStyleClip();
     if (!s || !FONTS[s.font]) return;
     for (const el of store.doc.elements) if (el.kind === 'text' && state.selection.has(el.id)) restyleText(el, s);
+    tipAt(selMenu.querySelector('#sm-pstyle')!, 'Style applied');
     invalidate();
   });
   (selMenu.querySelector('#sm-del') as HTMLButtonElement).addEventListener('click', () => {
@@ -2627,7 +2645,9 @@ export function buildUI(
     (selMenu.querySelector('#sm-front') as HTMLButtonElement).hidden = !hasSel;
     const selTexts = hasSel ? store.doc.elements.filter((el) => el.kind === 'text' && state.selection.has(el.id)).length : 0;
     (selMenu.querySelector('#sm-cstyle') as HTMLButtonElement).hidden = selTexts !== 1;
-    (selMenu.querySelector('#sm-pstyle') as HTMLButtonElement).hidden = !(selTexts > 0 && readStyleClip());
+    const pstyle = selMenu.querySelector('#sm-pstyle') as HTMLButtonElement;
+    pstyle.hidden = !(selTexts > 0 && readStyleClip());
+    pstyle.classList.toggle('badged', !!readStyleClip());
     const pasteBtn = selMenu.querySelector('#sm-paste') as HTMLButtonElement;
     // touch devices can't peek at the system clipboard (a screenshot, say): with a
     // selection tool active the paste button is always offered; tapping it asks iOS

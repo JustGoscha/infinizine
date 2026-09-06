@@ -957,7 +957,7 @@ body.left-hand .hist-bar, body.left-hand .sel-menu { right: auto; left: 14px; }
 #sm-del { color: #c0392b; }
 /* red bubble: something is waiting to be pasted */
 #sm-paste { position: relative; }
-#sm-paste.badged::after {
+#sm-paste.badged::after, #sm-pstyle.badged::after, .fb-style.badged::after {
   content: '';
   position: absolute;
   top: 5px;
@@ -1835,3 +1835,14 @@ body.presenting .pages-panel { z-index: 60; }
 .tl-frame-del:hover { color: #fff; transform: scale(1.15); }
 .font-bar .fb-style svg { width: 15px; height: 15px; display: block; }
 .font-bar .fb-style { display: inline-grid; place-items: center; }
+
+/* little confirmation bubble above a button or handle */
+.tip-bubble {
+  position: fixed; transform: translate(-50%, -100%) translateY(4px); z-index: 80;
+  background: var(--ink); color: var(--card); font-size: 12px; font-weight: 600;
+  padding: 4px 9px; border-radius: 3px; pointer-events: none; opacity: 0; white-space: nowrap;
+  transition: opacity 0.15s ease, transform 0.15s ease;
+}
+.tip-bubble::after { content: ''; position: absolute; left: 50%; top: 100%; transform: translateX(-50%); border: 5px solid transparent; border-top-color: var(--ink); }
+.tip-bubble.show { opacity: 1; transform: translate(-50%, -100%) translateY(0); }
+.font-bar .fb-style { position: relative; }

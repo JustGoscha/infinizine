@@ -214,8 +214,8 @@ export class InputState {
   /** textboxes whose dice is rolling → pip face shown (1–6), flipped while the new typeface loads */
   rolling = new Map<string, number>();
   /** text style clipboard handles on the rect (wired by the UI) */
-  onCopyStyle: (el: TextBox) => void = () => {};
-  onPasteStyle: (el: TextBox) => void = () => {};
+  onCopyStyle: (el: TextBox, clientX: number, clientY: number) => void = () => {};
+  onPasteStyle: (el: TextBox, clientX: number, clientY: number) => void = () => {};
   stylePasteFor: (el: TextBox) => boolean = () => false;
   hoverArea: string | null = null; // anim area under the mouse (shows its handles)
   hoverPage: string | null = null; // page under the mouse (shows its grabbers)
@@ -499,13 +499,13 @@ export function attachInput(
       }
       if (inRect(w, copyStyleHandleRect(el.x, el.y, el.w, z))) {
         state.selection = new Set([el.id]);
-        state.onCopyStyle(el);
+        state.onCopyStyle(el, e.clientX, e.clientY);
         invalidate();
         return;
       }
       if (state.stylePasteFor(el) && inRect(w, pasteStyleHandleRect(el.x, el.y, el.w, z))) {
         state.selection = new Set([el.id]);
-        state.onPasteStyle(el);
+        state.onPasteStyle(el, e.clientX, e.clientY);
         return;
       }
       const hr = textHandleRect(el, z);
