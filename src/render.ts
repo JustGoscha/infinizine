@@ -2,10 +2,10 @@
 // culling + cached outlines), live stroke, lasso/selection overlays.
 
 import { Camera, baseZoom } from './camera';
-import { AnimArea, Element, FillShape, Page, Stroke, StrokePoint } from './types';
+import { AnimArea, Element, FillShape, Page, Stroke, StrokePoint, TextBox } from './types';
 import { strokeOutline, pencilOutlines, markerPaths, outlineToPath, elementBBox, bboxIntersects, densify, filterPressure, easeP, easeTilt, LiveDenoiser, LiveOutliner, hasPressure, denoiseClosed, pressure, BBox } from './geometry';
 import { layoutText, fontFor, segWidth, LINE_HEIGHT, boxFamily } from './text';
-import { moveHandleRect, moveAllHandleRect, deleteHandleRect, eyeHandleRect, diceHandleRect, copyHandleRect, type InputState } from './input';
+import { moveHandleRect, moveAllHandleRect, deleteHandleRect, eyeHandleRect, diceHandleRect, copyHandleRect, copyStyleHandleRect, pasteStyleHandleRect, type InputState } from './input';
 import { Store, ChangeInfo } from './store';
 import { formatLabel } from './formats';
 import { patternTile, patternTileSize, patternCellSize, cellPath, motifPath, isPixelPattern, PIXEL_CELL } from './patterns';
@@ -452,6 +452,7 @@ export class Renderer {
       const hovered = el.kind === 'text' ? this.input.hoverText === el.id : this.input.hoverImage === el.id;
       if (hovered || selected) this.drawBoxHandles(el.x, el.y, el.w, el.h, z, true);
       if (el.kind === 'text' && (hovered || selected || this.input.rolling.has(el.id))) this.drawDice(el.x, el.y, el.w, z, this.input.rolling.get(el.id));
+      if (el.kind === 'text' && (hovered || selected)) this.drawStyleHandles(el, z);
       if (selected) {
         ctx.globalAlpha = 0.9;
         ctx.strokeStyle = '#E8590C';
@@ -1493,6 +1494,45 @@ export class Renderer {
       ctx.fill();
     }
     ctx.restore();
+  }
+
+  /** Copy-style ("A" + cards) and, when a copied style would change this box, paste-style ("A" + brush). */
+  private drawStyleHandles(el: TextBox, z: number) {
+    const { ctx } = this;
+    const draw = (r: { x: number; y: number; s: number }, paste: boolean) => {
+      ctx.save();
+      ctx.fillStyle = paste ? '#7048e8' : '#FDFCF8';
+      ctx.strokeStyle = paste ? '#7048e8' : 'rgba(90,75,50,0.6)';
+      ctx.lineWidth = 1.2 / z;
+      ctx.beginPath();
+      ctx.roundRect(r.x, r.y, r.s, r.s, r.s * 0.16);
+      ctx.fill();
+      ctx.stroke();
+      const ink = paste ? '#fff' : '#2A241A';
+      ctx.fillStyle = ink;
+      ctx.strokeStyle = ink;
+      ctx.font = `800 ${r.s * 0.62}px "Libre Franklin Variable", sans-serif`;
+      ctx.textAlign = 'left';
+      ctx.textBaseline = 'alphabetic';
+      ctx.fillText('A', r.x + r.s * 0.12, r.y + r.s * 0.72);
+      const u = r.s / 24;
+      ctx.lineWidth = 1.4 * u;
+      ctx.lineCap = 'round';
+      ctx.lineJoin = 'round';
+      if (!paste) {
+        // two cards
+        ctx.strokeRect(r.x + 14 * u, r.y + 11 * u, 7 * u, 8 * u);
+        ctx.beginPath(); ctx.moveTo(r.x + 16.5 * u, r.y + 11 * u); ctx.lineTo(r.x + 16.5 * u, r.y + 8.5 * u); ctx.lineTo(r.x + 21 * u, r.y + 8.5 * u); ctx.stroke();
+      } else {
+        // brush
+        ctx.beginPath(); ctx.moveTo(r.x + 21 * u, r.y + 6.5 * u); ctx.lineTo(r.x + 15.5 * u, r.y + 12 * u); ctx.stroke();
+        ctx.beginPath(); ctx.moveTo(r.x + 13.5 * u, r.y + 14.5 * u); ctx.bezierCurveTo(r.x + 11.5 * u, r.y + 14.5 * u, r.x + 10.5 * u, r.y + 16 * u, r.x + 10 * u, r.y + 18.5 * u);
+        ctx.bezierCurveTo(r.x + 12.5 * u, r.y + 18 * u, r.x + 14 * u, r.y + 17 * u, r.x + 14 * u, r.y + 15 * u); ctx.closePath(); ctx.fill();
+      }
+      ctx.restore();
+    };
+    draw(copyStyleHandleRect(el.x, el.y, el.w, z), false);
+    if (this.input.stylePasteFor(el)) draw(pasteStyleHandleRect(el.x, el.y, el.w, z), true);
   }
 
   private drawPattern(vw: number, vh: number, paper: string) {

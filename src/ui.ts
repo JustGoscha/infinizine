@@ -10,7 +10,7 @@ import { isPattern, patternPreviewCSS, patternLabel, patternLevels, patternVaria
 import type { ExportOptions } from './export';
 import { UNITS_PER_MM, uid, FORMAT_VERSION, FILL_BLENDS } from './types';
 import { type Fmt, PRIMARY_FORMATS, FORMAT_GROUPS, MORE_FORMATS, fitPage, customFormats, saveCustomFormat, mm } from './formats';
-import { layoutText, layoutHeight, layoutWidth, FONTS, FACES, chosenFaces, appFaces, setFace, setDocFaces, weightRange, cssOf, ROLE_IDS, type FontRole } from './text';
+import { layoutText, layoutHeight, layoutWidth, FONTS, FACES, chosenFaces, appFaces, setFace, setDocFaces, weightRange, cssOf, ROLE_IDS, boxFamily, type FontRole } from './text';
 import { pressure, savePressure, resetPressure, loadPressure, exportPressure, importPressure, easeP, curveAt, type Curve, type CurveNode } from './geometry';
 import { markdownToHtml, htmlToMarkdown, autoTransform, caretToEnd, applyInlineStyle } from './richedit';
 
@@ -848,15 +848,26 @@ export function buildUI(
   ];
 
   // text style clipboard: typeface, size and colour of one box, ready to apply to another
-  type TextStyle = { font: string; fontSize: number; color: string };
+  type TextStyle = { font: string; face?: string; fontSize: number; color: string }; // role, rolled face, size, colour
   const readStyleClip = (): TextStyle | null => { try { return JSON.parse(readPref('infinizine-text-style') ?? 'null'); } catch { return null; } };
   const writeStyleClip = (s: TextStyle) => writePref('infinizine-text-style', JSON.stringify(s));
+  const styleOf = (el: import('./types').TextBox): TextStyle => ({ font: el.font ?? 'franklin', face: el.face, fontSize: el.fontSize, color: el.color });
+  const sameStyle = (a: TextStyle, b: TextStyle) => a.font === b.font && (a.face ?? '') === (b.face ?? '') && Math.abs(a.fontSize - b.fontSize) < 0.01 && a.color.toLowerCase() === b.color.toLowerCase();
   const restyleText = (el: import('./types').TextBox, s: TextStyle) => {
-    const w = el.auto ? Math.max(40, layoutWidth(layoutText(el.text || ' ', s.font, s.fontSize, 1e6), s.font) + 4) : el.w;
-    const h = layoutHeight(layoutText(el.text || ' ', s.font, s.fontSize, w));
-    store.updateText(el.id, { text: el.text, w: el.w, h: el.h, font: el.font ?? 'franklin', fontSize: el.fontSize }, { text: el.text, w, h, font: s.font, fontSize: s.fontSize });
+    const fam = boxFamily({ font: s.font, face: s.face });
+    const w = el.auto ? Math.max(40, layoutWidth(layoutText(el.text || ' ', fam, s.fontSize, 1e6), fam) + 4) : el.w;
+    const h = layoutHeight(layoutText(el.text || ' ', fam, s.fontSize, w));
+    store.updateText(
+      el.id,
+      { text: el.text, w: el.w, h: el.h, font: el.font ?? 'franklin', fontSize: el.fontSize, face: el.face ?? null },
+      { text: el.text, w, h, font: s.font, fontSize: s.fontSize, face: s.face ?? null },
+    );
     if (s.color !== el.color) store.recolorElements([el.id], s.color);
   };
+  // handles on the text rect (under the dice): copy this box's style; paste the copied one
+  state.onCopyStyle = (el) => { writeStyleClip(styleOf(el)); toast('Style copied'); };
+  state.onPasteStyle = (el) => { const s = readStyleClip(); if (s && FONTS[s.font]) { restyleText(el, s); invalidate(); } };
+  state.stylePasteFor = (el) => { const s = readStyleClip(); return !!s && !!FONTS[s.font] && !sameStyle(s, styleOf(el)); };
 
   state.onTextEdit = (target, rect, autoFlag) => {
     const auto = autoFlag ?? target?.auto ?? false; // width follows content until resized
@@ -997,19 +1008,19 @@ export function buildUI(
     const copyStyle = document.createElement('button');
     copyStyle.className = 'fb-style';
     copyStyle.title = 'Copy style (typeface, size, colour)';
-    copyStyle.innerHTML = svg('<path d="M4 5h9M8.5 5v10"/><rect x="13" y="12" width="7" height="7" rx="1"/><path d="M16.5 12V9.5H19"/>');
+    copyStyle.innerHTML = svg('<text x="3" y="17.5" font-size="15" font-weight="800" font-family="Libre Franklin Variable, sans-serif" fill="currentColor" stroke="none">A</text><rect x="14" y="11" width="7" height="8" rx="1"/><path d="M16.5 11V8.5a1 1 0 0 1 1-1H21"/>');
     copyStyle.addEventListener('pointerdown', (e) => e.preventDefault());
-    copyStyle.addEventListener('click', () => { writeStyleClip({ font: family, fontSize, color }); pasteStyle.hidden = false; toast('Style copied'); ta.focus(); });
+    copyStyle.addEventListener('click', () => { writeStyleClip({ font: family, face, fontSize, color }); pasteStyle.hidden = false; toast('Style copied'); ta.focus(); });
     const pasteStyle = document.createElement('button');
     pasteStyle.className = 'fb-style';
     pasteStyle.title = 'Paste style';
-    pasteStyle.innerHTML = svg('<path d="M4 5h9M8.5 5v10"/><path d="M17 10v9M14 16l3 3 3-3"/>');
+    pasteStyle.innerHTML = svg('<text x="3" y="17.5" font-size="15" font-weight="800" font-family="Libre Franklin Variable, sans-serif" fill="currentColor" stroke="none">A</text><path d="M21 6.5 L15.5 12 M13.5 14.5 c-2 0 -3 1.5 -3.5 4 c2.5 -0.5 4 -1.5 4 -3.5 z"/>');
     pasteStyle.hidden = !readStyleClip();
     pasteStyle.addEventListener('pointerdown', (e) => e.preventDefault());
     pasteStyle.addEventListener('click', () => {
       const s = readStyleClip();
       if (!s || !FONTS[s.font]) return;
-      family = s.font; face = undefined; state.font = s.font;
+      family = s.font; face = s.face; state.font = s.font;
       fontSize = s.fontSize; state.textSize = s.fontSize;
       color = s.color;
       bar.querySelectorAll<HTMLElement>('.fb-font').forEach((o) => o.classList.toggle('active', o.textContent === FONTS[s.font].name));
@@ -2556,8 +2567,8 @@ export function buildUI(
     <button id="sm-paste" title="Paste (⌘V)">${svg('<rect x="5" y="4" width="14" height="17" rx="1.5"/><path d="M9 4 A3 3 0 0 1 15 4"/><path d="M9 12 h6 M9 16 h6"/>')}</button>
     <button id="sm-back" title="Send to back">${svg('<rect x="8" y="8" width="12" height="12" rx="1"/><path d="M4 12 V5.5 A1.5 1.5 0 0 1 5.5 4 H12"/><path d="M14 11 L14 17 M11.5 14.5 L14 17 L16.5 14.5"/>')}</button>
     <button id="sm-rot" title="Rotate pattern 15° (shift-click: 45°)">${svg('<path d="M19 12 a7 7 0 1 1 -2.05 -4.95"/><path d="M19 4 v4 h-4"/><circle cx="12" cy="12" r="2"/>')}</button>
-    <button id="sm-cstyle" title="Copy text style">${svg('<path d="M4 5h9M8.5 5v10"/><rect x="13" y="12" width="7" height="7" rx="1"/><path d="M16.5 12V9.5H19"/>')}</button>
-    <button id="sm-pstyle" title="Paste text style onto the selected text">${svg('<path d="M4 5h9M8.5 5v10"/><path d="M17 10v9M14 16l3 3 3-3"/>')}</button>
+    <button id="sm-cstyle" title="Copy text style">${svg('<text x="3" y="17.5" font-size="15" font-weight="800" font-family="Libre Franklin Variable, sans-serif" fill="currentColor" stroke="none">A</text><rect x="14" y="11" width="7" height="8" rx="1"/><path d="M16.5 11V8.5a1 1 0 0 1 1-1H21"/>')}</button>
+    <button id="sm-pstyle" title="Paste text style onto the selected text">${svg('<text x="3" y="17.5" font-size="15" font-weight="800" font-family="Libre Franklin Variable, sans-serif" fill="currentColor" stroke="none">A</text><path d="M21 6.5 L15.5 12 M13.5 14.5 c-2 0 -3 1.5 -3.5 4 c2.5 -0.5 4 -1.5 4 -3.5 z"/>')}</button>
     <button id="sm-front" title="Bring to front">${svg('<rect x="4" y="4" width="12" height="12" rx="1"/><path d="M20 12 V18.5 A1.5 1.5 0 0 1 18.5 20 H12"/><path d="M10 13 L10 7 M7.5 9.5 L10 7 L12.5 9.5"/>')}</button>
     <button id="sm-del" title="Delete">${svg('<path d="M4 7 H20 M9 7 V5 A1 1 0 0 1 10 4 H14 A1 1 0 0 1 15 5 V7 M6.5 7 L7.5 20 H16.5 L17.5 7"/>')}</button>
   `;
@@ -2579,7 +2590,7 @@ export function buildUI(
   });
   (selMenu.querySelector('#sm-cstyle') as HTMLButtonElement).addEventListener('click', () => {
     const t = store.doc.elements.find((el) => el.kind === 'text' && state.selection.has(el.id));
-    if (t && t.kind === 'text') { writeStyleClip({ font: t.font ?? 'franklin', fontSize: t.fontSize, color: t.color }); toast('Style copied'); }
+    if (t && t.kind === 'text') { writeStyleClip(styleOf(t)); toast('Style copied'); }
   });
   (selMenu.querySelector('#sm-pstyle') as HTMLButtonElement).addEventListener('click', () => {
     const s = readStyleClip();

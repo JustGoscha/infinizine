@@ -107,6 +107,15 @@ export function diceHandleRect(x: number, y: number, w: number, zoom: number) {
   const s = 22 / zoom;
   return { x: x + w + 4 / zoom, y: y + 2 / zoom, s };
 }
+/** Copy-style handle under the dice; paste-style handle under that (shown when a style is copied). */
+export function copyStyleHandleRect(x: number, y: number, w: number, zoom: number) {
+  const s = 22 / zoom;
+  return { x: x + w + 4 / zoom, y: y + 28 / zoom, s };
+}
+export function pasteStyleHandleRect(x: number, y: number, w: number, zoom: number) {
+  const s = 22 / zoom;
+  return { x: x + w + 4 / zoom, y: y + 54 / zoom, s };
+}
 
 function inRect(w: { x: number; y: number }, r: { x: number; y: number; s: number }): boolean {
   return w.x >= r.x && w.x <= r.x + r.s && w.y >= r.y && w.y <= r.y + r.s;
@@ -204,6 +213,10 @@ export class InputState {
   hoverText: string | null = null; // textbox under the mouse (shows its move handle)
   /** textboxes whose dice is rolling → pip face shown (1–6), flipped while the new typeface loads */
   rolling = new Map<string, number>();
+  /** text style clipboard handles on the rect (wired by the UI) */
+  onCopyStyle: (el: TextBox) => void = () => {};
+  onPasteStyle: (el: TextBox) => void = () => {};
+  stylePasteFor: (el: TextBox) => boolean = () => false;
   hoverArea: string | null = null; // anim area under the mouse (shows its handles)
   hoverPage: string | null = null; // page under the mouse (shows its grabbers)
   hoverImage: string | null = null; // image under the mouse (shows its handles)
@@ -482,6 +495,17 @@ export function attachInput(
       if (inRect(w, diceHandleRect(el.x, el.y, el.w, z))) {
         state.selection = new Set([el.id]);
         void rollTextFace(el);
+        return;
+      }
+      if (inRect(w, copyStyleHandleRect(el.x, el.y, el.w, z))) {
+        state.selection = new Set([el.id]);
+        state.onCopyStyle(el);
+        invalidate();
+        return;
+      }
+      if (state.stylePasteFor(el) && inRect(w, pasteStyleHandleRect(el.x, el.y, el.w, z))) {
+        state.selection = new Set([el.id]);
+        state.onPasteStyle(el);
         return;
       }
       const hr = textHandleRect(el, z);
@@ -1582,7 +1606,7 @@ export function attachInput(
         const hr = textHandleRect(el, z);
         const inHandle = w.x >= hr.x && w.x <= hr.x + hr.s && w.y >= hr.y && w.y <= hr.y + hr.s;
         const inDel = inRect(w, deleteHandleRect(el.x, el.y, el.w, z));
-        const inDice = inRect(w, diceHandleRect(el.x, el.y, el.w, z));
+        const inDice = inRect(w, diceHandleRect(el.x, el.y, el.w, z)) || inRect(w, copyStyleHandleRect(el.x, el.y, el.w, z)) || (state.stylePasteFor(el) && inRect(w, pasteStyleHandleRect(el.x, el.y, el.w, z)));
         const inCopy = inRect(w, copyHandleRect(el.x, el.y, z));
         const inBox = w.x >= el.x && w.x <= el.x + el.w && w.y >= el.y && w.y <= el.y + el.h;
         // resize handles straddle the border: their outer half must keep the box hovered
