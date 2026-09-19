@@ -1264,22 +1264,23 @@ export class Store {
     if (items.length) this.commit({ type: 'pattern-angle', items });
   }
 
-  /** ink coverage of pattern fills (undoable) */
+  /** ink coverage of fills (undoable) */
   setInk(ids: string[], ink: number) {
     const items = ids
       .map((id) => this.doc.elements.find((e) => e.id === id))
-      .filter((e): e is Extract<Element, { kind: 'fill' }> => !!e && e.kind === 'fill' && !!e.pattern && (e.ink ?? 1) !== ink)
+      .filter((e): e is Extract<Element, { kind: 'fill' }> => !!e && e.kind === 'fill' && (e.ink ?? 1) !== ink)
       .map((e) => ({ id: e.id, before: e.ink, after: ink }));
     if (items.length) this.commit({ type: 'fill-ink', items });
   }
 
-  /** blend mode of pattern fills (undoable); 'multiply' is stored as undefined (the default) */
+  /** blend mode of fills (undoable); each fill's default is stored as undefined
+   * ('multiply' for pattern fills, 'source-over' for solid ones) */
   setBlend(ids: string[], blend: FillBlend) {
-    const want = blend === 'multiply' ? undefined : blend;
     const items = ids
       .map((id) => this.doc.elements.find((e) => e.id === id))
-      .filter((e): e is Extract<Element, { kind: 'fill' }> => !!e && e.kind === 'fill' && !!e.pattern && (e.blend ?? undefined) !== want)
-      .map((e) => ({ id: e.id, before: e.blend, after: want }));
+      .filter((e): e is Extract<Element, { kind: 'fill' }> => !!e && e.kind === 'fill')
+      .map((e) => ({ id: e.id, before: e.blend, after: blend === (e.pattern ? 'multiply' : 'source-over') ? undefined : blend }))
+      .filter((it) => (it.before ?? undefined) !== it.after);
     if (items.length) this.commit({ type: 'fill-blend', items });
   }
 

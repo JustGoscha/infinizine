@@ -453,15 +453,19 @@ export class Renderer {
       ctx.fillStyle = patterned && !e.solid
         ? this.fillPattern(el.pattern!, el.color, isPixelPattern(el.pattern!) ? 0 : el.patternAngle ?? 0) // dithers never rotate
         : el.color;
-      // tones overprint like process ink: multiply at the fill's ink coverage —
-      // paper × (1 − ink·(1 − colour)) — so overlaps mix and darken (CMYK-like)
-      if (patterned) {
+      // fills can overprint like process ink: multiply at the fill's ink coverage —
+      // paper × (1 − ink·(1 − colour)) — so overlaps mix and darken (CMYK-like).
+      // Pattern fills do so by default; solid fills only when they say so (older solid fills are opaque).
+      const op = el.kind === 'fill' ? el.blend ?? (patterned ? 'multiply' : 'source-over') : 'source-over';
+      const ink = el.kind === 'fill' ? el.ink ?? 1 : 1;
+      const blending = op !== 'source-over' || ink < 1;
+      if (blending) {
         ctx.save();
-        ctx.globalCompositeOperation = (el.kind === 'fill' && el.blend) || 'multiply';
-        ctx.globalAlpha = el.opacity * dim * (el.kind === 'fill' ? el.ink ?? 1 : 1);
+        ctx.globalCompositeOperation = op;
+        ctx.globalAlpha = el.opacity * dim * ink;
       }
       ctx.fill(e.path);
-      if (patterned) ctx.restore();
+      if (blending) ctx.restore();
     }
     return true;
   }
@@ -1381,7 +1385,7 @@ export class Renderer {
       ctx.strokeStyle = filling ? this.input.color : '#E8590C';
       if (filling) {
         ctx.save();
-        ctx.globalAlpha = 0.25 * (this.input.fillPattern ? this.input.inkDensity : 1);
+        ctx.globalAlpha = 0.25 * this.input.inkDensity;
         ctx.fillStyle = this.input.fillPattern ? this.fillPattern(this.input.fillPattern, this.input.color) : this.input.color;
         ctx.fill();
         ctx.restore();

@@ -491,7 +491,7 @@ export function buildUI(
               return `<button class="pat-sw${state.fillPattern === id ? ' active' : ''}" data-id="${id}" title="${patternLevels(f.fam) === 1 ? f.label : `${f.label} ${k}`}" style="background:${patternPreviewCSS(id, state.color, 3)}"></button>`;
             }).join('')}</div>
           </div>`).join('')}`).join('')}
-      <div class="set-note">Patterns paint with the fill tool, in the current colour. With Subtract they overprint like process ink: below 100% opacity the paper shows through, so overlapping tones mix and darken (red over yellow → orange-red). Manga tones can be rotated on a selected fill; dithers stay on one fixed pixel grid at every zoom.</div>`;
+      <div class="set-note">Fills — solid or patterned — paint in the current colour. With Subtract they overprint like process ink: below 100% opacity the paper shows through, so overlapping tones mix and darken (red over yellow → orange-red). Manga tones can be rotated on a selected fill; dithers stay on one fixed pixel grid at every zoom.</div>`;
     patternPop.querySelector('#pat-rand')!.addEventListener('click', (e) => {
       const v = (e.target as HTMLElement).closest('button')?.dataset.v;
       if (!v) return;
@@ -505,7 +505,7 @@ export function buildUI(
       state.fillBlend = v;
       writePref('infinizine-fill-blend', v);
       patternPop.querySelectorAll<HTMLElement>('#pat-blend button').forEach((b) => b.classList.toggle('active', b.dataset.v === v));
-      const ids = store.doc.elements.filter((el) => el.kind === 'fill' && el.pattern && state.selection.has(el.id)).map((el) => el.id);
+      const ids = store.doc.elements.filter((el) => el.kind === 'fill' && state.selection.has(el.id)).map((el) => el.id);
       if (ids.length) store.setBlend(ids, v);
       invalidate();
     });
@@ -514,7 +514,7 @@ export function buildUI(
       state.inkDensity = Number(inkSlider.value);
       (inkSlider.nextElementSibling as HTMLElement).textContent = `${Math.round(state.inkDensity * 100)}%`;
       writePref('infinizine-fill-opacity', String(state.inkDensity));
-      const ids = store.doc.elements.filter((el) => el.kind === 'fill' && el.pattern && state.selection.has(el.id)).map((el) => el.id);
+      const ids = store.doc.elements.filter((el) => el.kind === 'fill' && state.selection.has(el.id)).map((el) => el.id);
       if (ids.length) store.setInk(ids, state.inkDensity);
       invalidate();
     });
