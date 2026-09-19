@@ -4,7 +4,20 @@
 /** Timeline item interaction. Mouse: drag right away. Pen/finger: moving lets
  * the tracks scroll natively; holding still for 0.5s "lifts" the item, then it
  * drags (scroll is blocked for that gesture). A short tap without moving = tap. */
-const HOLD_MS = 500;
+const HOLD_MS = 500; // press still this long: the item lifts
+const HOLD2_MS = 450; // keep holding after the lift: the hold menu opens under the finger
+
+/** A ring that fills around the pointer over `ms` — the wait for a hold made visible. */
+function showHoldRing(x: number, y: number, ms: number): () => void {
+  const ring = document.createElement('div');
+  ring.className = 'hold-ring';
+  ring.style.left = `${x}px`;
+  ring.style.top = `${y}px`;
+  ring.style.setProperty('--hold-ms', `${ms}ms`);
+  document.body.appendChild(ring);
+  return () => ring.remove();
+}
+
 export function pressDrag(
   el: HTMLElement,
   h: {
@@ -12,7 +25,10 @@ export function pressDrag(
     onMove: (ev: PointerEvent, dx: number) => void;
     onEnd: (ev: PointerEvent) => void; // dragged
     onTap: (ev: PointerEvent) => void; // no drag
-    onHold?: (ev: PointerEvent) => void; // held still for HOLD_MS, then released without dragging
+    /** held still for HOLD_MS (the ring fills, the item lifts), then either kept still for
+     * HOLD2_MS more (`down` = true: the pointer is still down, the caller may track it) or
+     * released in place */
+    onHold?: (ev: PointerEvent, down: boolean) => void;
   },
 ) {
   el.addEventListener('pointerdown', (e) => {
@@ -22,16 +38,19 @@ export function pressDrag(
     const touchy = e.pointerType === 'touch';
     const startX = e.clientX, startY = e.clientY;
     let lifted = !touchy;
-    let held = false; // stayed put for HOLD_MS (touch: lifted by the timer; pen/mouse: hold timer)
+    let held = false; // stayed put for HOLD_MS
+    let menu = false; // the hold menu opened while still down
     let dragging = false;
     let done = false;
     let timer = 0;
+    let hideRing: (() => void) | null = null;
     // while lifted, the strip must not scroll natively: a pencil also raises touch events on
     // iPad, so the block applies to it too (or Safari pans the strip and cancels the drag)
     const blockScroll = (te: TouchEvent) => { if (lifted) te.preventDefault(); };
     const cleanup = () => {
       done = true;
       clearTimeout(timer);
+      hideRing?.(); hideRing = null;
       el.classList.remove('lifted');
       el.removeEventListener('pointermove', onMove);
       el.removeEventListener('pointerup', onUp);
@@ -44,31 +63,42 @@ export function pressDrag(
         if (Math.hypot(dx, dy) > 8) cleanup(); // finger moved before the hold: it's a scroll
         return;
       }
-      if (!held && Math.hypot(dx, dy) > 8) clearTimeout(timer); // moved: not a hold
-      if (!dragging && Math.abs(dx) > (touchy ? 2 : 8)) dragging = true;
+      if (menu) return; // the menu tracks the pointer itself
+      if (!held && Math.hypot(dx, dy) > 8) { clearTimeout(timer); hideRing?.(); hideRing = null; } // moved: not a hold
+      if (!dragging && Math.abs(dx) > (touchy ? 2 : 8)) { dragging = true; clearTimeout(timer); }
       if (dragging) h.onMove(ev, dx);
     };
     const onUp = (ev: PointerEvent) => {
-      const wasDragging = dragging, wasHeld = held;
+      const wasDragging = dragging, wasHeld = held, hadMenu = menu;
       cleanup();
+      if (hadMenu) return; // the menu handles the release
       if (wasDragging) h.onEnd(ev);
-      else if (wasHeld && h.onHold) h.onHold(ev);
+      else if (wasHeld && h.onHold) h.onHold(ev, false);
       else h.onTap(ev);
     };
     const onCancel = () => cleanup();
     if (e.pointerType !== 'mouse') document.addEventListener('touchmove', blockScroll, { passive: false });
-    if (touchy) {
+    const wantsHold = touchy || !!h.onHold;
+    if (!touchy) el.setPointerCapture(e.pointerId);
+    if (wantsHold) {
+      hideRing = showHoldRing(e.clientX, e.clientY, HOLD_MS);
       timer = window.setTimeout(() => {
-        if (done) return;
-        lifted = true;
+        if (done || dragging) return;
+        hideRing?.(); hideRing = null;
         held = true;
+        lifted = true;
         el.classList.add('lifted');
-        try { el.setPointerCapture(e.pointerId); } catch { /* pointer may be gone */ }
+        if (touchy) try { el.setPointerCapture(e.pointerId); } catch { /* pointer may be gone */ }
         h.onLift?.();
+        if (h.onHold) {
+          // keep holding: the menu opens under the finger
+          timer = window.setTimeout(() => {
+            if (done || dragging) return;
+            menu = true;
+            h.onHold!(e, true);
+          }, HOLD2_MS);
+        }
       }, HOLD_MS);
-    } else {
-      el.setPointerCapture(e.pointerId);
-      if (h.onHold) timer = window.setTimeout(() => { if (!done && !dragging) held = true; }, HOLD_MS);
     }
     el.addEventListener('pointermove', onMove);
     el.addEventListener('pointerup', onUp);

@@ -326,30 +326,50 @@ export function buildTimeline(state: InputState, store: Store, invalidate: () =>
     if (!(e.target as HTMLElement).closest?.('.tl-kebab')) kebab.classList.add('hidden');
   });
 
-  // hold a frame tile (without dragging it): a small ring of frame actions around the finger
+  // hold a frame tile (without dragging it): a fan of frame actions opens around the finger.
+  // Wedges (screen angles, 0° = right, counter-clockwise): left = empty before, upper-left =
+  // copy before, upper-right = copy after, right = empty after.
   const radial = document.createElement('div');
   radial.className = 'tl-radial hidden';
-  radial.innerHTML = `
-    <button data-a="copy-before" class="rd-nw" title="Copy this frame before it">${svg('<path d="M11 8 L5 12 L11 16"/><rect x="12" y="8.5" width="8" height="8" rx="1"/><path d="M9.5 13.5V6.5a1 1 0 0 1 1-1H17"/>')}</button>
-    <button data-a="copy-after" class="rd-ne" title="Copy this frame after it">${svg('<rect x="4" y="8.5" width="8" height="8" rx="1"/><path d="M1.5 13.5V6.5a1 1 0 0 1 1-1H9"/><path d="M13 8 L19 12 L13 16"/>')}</button>
-    <button data-a="empty-before" class="rd-w" title="Insert an empty frame before">${svg('<path d="M10 8 L4 12 L10 16"/><rect x="12" y="6" width="8" height="12" rx="1"/><path d="M16 9.5v5M13.5 12h5"/>')}</button>
-    <button data-a="empty-after" class="rd-e" title="Insert an empty frame after">${svg('<rect x="4" y="6" width="8" height="12" rx="1"/><path d="M8 9.5v5M5.5 12h5"/><path d="M14 8 L20 12 L14 16"/>')}</button>
-    <span class="rd-center"></span>
-  `;
+  const R0 = 30, R1 = 84, GAP = 3; // inner / outer radius, gap between wedges (degrees)
+  const wedges: { a: string; from: number; to: number; title: string; icon: string }[] = [
+      { a: 'empty-before', from: 145, to: 195, title: 'Insert an empty frame before', icon: '<path d="M10 8 L4 12 L10 16"/><rect x="12" y="6" width="8" height="12" rx="1"/><path d="M16 9.5v5M13.5 12h5"/>' },
+      { a: 'copy-before', from: 92, to: 142, title: 'Copy this frame before it', icon: '<path d="M11 8 L5 12 L11 16"/><rect x="12" y="8.5" width="8" height="8" rx="1"/><path d="M9.5 13.5V6.5a1 1 0 0 1 1-1H17"/>' },
+      { a: 'copy-after', from: 38, to: 88, title: 'Copy this frame after it', icon: '<rect x="4" y="8.5" width="8" height="8" rx="1"/><path d="M1.5 13.5V6.5a1 1 0 0 1 1-1H9"/><path d="M13 8 L19 12 L13 16"/>' },
+      { a: 'empty-after', from: -15, to: 35, title: 'Insert an empty frame after', icon: '<rect x="4" y="6" width="8" height="12" rx="1"/><path d="M8 9.5v5M5.5 12h5"/><path d="M14 8 L20 12 L14 16"/>' },
+    ];
+    const pt = (r: number, deg: number) => [r * Math.cos((deg * Math.PI) / 180), -r * Math.sin((deg * Math.PI) / 180)] as const;
+    const wedge = (w: (typeof wedges)[number]) => {
+      const f = w.from + GAP / 2, t = w.to - GAP / 2;
+      const [x1, y1] = pt(R1, f), [x2, y2] = pt(R1, t), [x3, y3] = pt(R0, t), [x4, y4] = pt(R0, f);
+      const [ix, iy] = pt((R0 + R1) / 2, (f + t) / 2);
+      return `<g class="rd-wedge" data-a="${w.a}"><title>${w.title}</title>
+        <path class="rd-shape" d="M${x1} ${y1} A${R1} ${R1} 0 0 0 ${x2} ${y2} L${x3} ${y3} A${R0} ${R0} 0 0 1 ${x4} ${y4} Z"/>
+        <g class="rd-icon" transform="translate(${ix - 12} ${iy - 12})">${w.icon}</g></g>`;
+    };
+  radial.innerHTML = `<svg viewBox="-90 -90 180 180" width="180" height="180">${wedges.map(wedge).join('')}<circle class="rd-center" r="9"/></svg>`;
   document.body.appendChild(radial);
   let radialTarget: { areaId: string; layerId: string; frameId: string } | null = null;
-  function openFrameRadial(e: { clientX: number; clientY: number }, areaId: string, layerId: string, frameId: string) {
-    radialTarget = { areaId, layerId, frameId };
-    radial.classList.remove('hidden');
-    const R = 74; // keep the whole ring on screen
-    radial.style.left = `${Math.max(R, Math.min(window.innerWidth - R, e.clientX))}px`;
-    radial.style.top = `${Math.max(R, Math.min(window.innerHeight - R, e.clientY))}px`;
-  }
-  radial.addEventListener('click', (e) => {
-    const a = (e.target as HTMLElement).closest('button')?.dataset.a;
-    const t = radialTarget;
+  let radialAt = { x: 0, y: 0 }; // the fan's centre on screen
+  /** the wedge under a screen point, by angle and radius from the centre (robust to overlays and the pop-in) */
+  const wedgeAt = (x: number, y: number): string | null => {
+    const dx = x - radialAt.x, dy = radialAt.y - y;
+    const r = Math.hypot(dx, dy);
+    if (r < R0 * 0.8 || r > R1 + 16) return null;
+    let deg = (Math.atan2(dy, dx) * 180) / Math.PI;
+    if (deg > 190) deg -= 360;
+    return wedges.find((w) => deg >= w.from && deg <= w.to)?.a ?? null;
+  };
+  const closeRadial = () => {
     radial.classList.add('hidden');
+    radial.querySelectorAll('.rd-wedge.hot').forEach((w) => w.classList.remove('hot'));
     radialTarget = null;
+    document.removeEventListener('pointermove', trackRadial);
+    document.removeEventListener('pointerup', releaseRadial);
+  };
+  const runRadial = (a: string | undefined) => {
+    const t = radialTarget;
+    closeRadial();
     if (!a || !t) return;
     const l = store.animLayer(t.areaId, t.layerId);
     const idx = l ? l.frames.findIndex((f) => f.id === t.frameId) : -1;
@@ -366,9 +386,37 @@ export function buildTimeline(state: InputState, store: Store, invalidate: () =>
     }
     renderTimeline();
     invalidate();
+  };
+  // opened while the finger is still down: the wedge under the finger lights up, releasing on it picks it
+  const trackRadial = (e: PointerEvent) => {
+    const a = wedgeAt(e.clientX, e.clientY);
+    radial.querySelectorAll<SVGGElement>('.rd-wedge').forEach((g) => g.classList.toggle('hot', g.dataset.a === a));
+  };
+  const releaseRadial = (e: PointerEvent) => {
+    const a = wedgeAt(e.clientX, e.clientY);
+    document.removeEventListener('pointermove', trackRadial);
+    document.removeEventListener('pointerup', releaseRadial);
+    if (a) runRadial(a); // released elsewhere: the fan stays for a tap
+    else radial.querySelectorAll('.rd-wedge.hot').forEach((g) => g.classList.remove('hot'));
+  };
+  function openFrameRadial(e: { clientX: number; clientY: number }, areaId: string, layerId: string, frameId: string, down: boolean) {
+    radialTarget = { areaId, layerId, frameId };
+    radial.classList.remove('hidden');
+    const R = 90; // keep the whole fan on screen
+    radialAt = { x: Math.max(R, Math.min(window.innerWidth - R, e.clientX)), y: Math.max(R, Math.min(window.innerHeight - 20, e.clientY)) };
+    radial.style.left = `${radialAt.x}px`;
+    radial.style.top = `${radialAt.y}px`;
+    if (down) {
+      document.addEventListener('pointermove', trackRadial);
+      document.addEventListener('pointerup', releaseRadial);
+    }
+  }
+  radial.addEventListener('click', (e) => {
+    const w = (e.target as Element).closest?.('.rd-wedge') as SVGGElement | null;
+    if (w) runRadial(w.dataset.a);
   });
   document.addEventListener('pointerdown', (e) => {
-    if (!(e.target as HTMLElement).closest?.('.tl-radial')) radial.classList.add('hidden');
+    if (!(e.target as HTMLElement).closest?.('.tl-radial')) closeRadial();
   });
 
   /** moves the playhead line across the tracks (set by each render; null hides it) */
@@ -784,8 +832,9 @@ export function buildTimeline(state: InputState, store: Store, invalidate: () =>
             renderTimeline();
             invalidate();
           },
-          onHold: (ev) => {
-            // held still and let go: pick the frame and offer copies / empties around it
+          onHold: (ev, down) => {
+            // held still (and kept holding, or let go in place): pick the frame and fan out
+            // copies / empties around the finger
             b.classList.remove('dragging');
             b.style.transform = '';
             marker?.remove();
@@ -795,7 +844,7 @@ export function buildTimeline(state: InputState, store: Store, invalidate: () =>
             state.editTick = frameSpan(l.frames, f.id)?.start ?? 0;
             renderTimeline();
             invalidate();
-            openFrameRadial(ev, area.id, l.id, f.id);
+            openFrameRadial(ev, area.id, l.id, f.id, down);
           },
         });
         strip.appendChild(b);
