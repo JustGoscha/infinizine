@@ -1054,7 +1054,7 @@ export function attachInput(
           frame: state.activeFrameId ?? undefined,
           alayer: state.activeLayerId ?? undefined,
           // same screen-space smoothing as the brushes (3px at drawing zoom; the blob rounds off more)
-          points: denoiseClosed(loop.map((p) => ({ x: p.x, y: p.y })), (blob ? 5 : 3) / camera.zoom),
+          points: denoiseClosed(loop.map((p) => ({ x: p.x, y: p.y })), 3 / camera.zoom),
         };
         store.addElement(fill);
       }

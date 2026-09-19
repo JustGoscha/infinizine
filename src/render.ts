@@ -1371,7 +1371,7 @@ export class Renderer {
       // preview with the same smoothing the fill gets on commit
       const filling = FILL_TOOLS.has(this.input.tool);
       const lasso = filling && lassoRaw.length > 3
-        ? denoiseClosed(this.input.tool === 'lasso-blob' ? closeBlob(lassoRaw) : lassoRaw, (this.input.tool === 'lasso-blob' ? 5 : 3) / camera.zoom)
+        ? denoiseClosed(this.input.tool === 'lasso-blob' ? closeBlob(lassoRaw) : lassoRaw, 3 / camera.zoom)
         : lassoRaw;
       ctx.beginPath();
       ctx.moveTo(lasso[0].x, lasso[0].y);

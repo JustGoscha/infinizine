@@ -74,10 +74,11 @@ export function denoiseClosed(points: { x: number; y: number }[], sigma: number)
  * Gaussian reach behind the tip can never change again, so they're kept;
  * each frame only the tail is recomputed. Same result as denoise() on commit. */
 /** Blob lasso closure. A lasso ends where the pen lifts; the plain fill closes it with a
- * straight cut from there back to the start. The blob closes with the same cut, then melts
- * the seam: points near it are pulled toward a heavily smoothed copy of the loop, so the two
- * corners round off into one soft curve and the drawn part further away stays as drawn.
- * (Extending the pen's motion instead was tried: it leaves a nook at each corner.) */
+ * straight cut from there back to the start. The blob closes along a cubic Bézier that leaves
+ * the end the way the pen was travelling and arrives at the start the way it set off — with
+ * both directions leaned toward the cut and short handles, so the curve bulges gently the way
+ * the hand was going and never swings out and back (that left a nook at each corner). The
+ * drawn part is returned untouched. */
 export function closeBlob(pts: { x: number; y: number }[]): { x: number; y: number }[] {
   const n = pts.length;
   if (n < 4) return pts;
@@ -85,37 +86,34 @@ export function closeBlob(pts: { x: number; y: number }[]): { x: number; y: numb
   const gap = Math.hypot(first.x - last.x, first.y - last.y);
   let drawn = 0;
   for (let i = 1; i < n; i++) drawn += Math.hypot(pts[i].x - pts[i - 1].x, pts[i].y - pts[i - 1].y);
-  const spacing = drawn / (n - 1);
-  if (gap < spacing * 2) return pts; // already closed
-  // 1. the cut, sampled at the path's own spacing so the smoothing sees it as a run of points
-  const loop = pts.slice();
-  const k = Math.max(2, Math.round(gap / spacing));
-  for (let i = 1; i < k; i++) loop.push({ x: last.x + (first.x - last.x) * (i / k), y: last.y + (first.y - last.y) * (i / k) });
-  const m = loop.length;
-  // 2. arc positions around the loop; the seam sits at the middle of the cut
-  const arc = new Float64Array(m + 1);
-  for (let i = 1; i <= m; i++) {
-    const a = loop[i - 1], b = loop[i % m];
-    arc[i] = arc[i - 1] + Math.hypot(b.x - a.x, b.y - a.y);
-  }
-  const L = arc[m];
-  const seam = (arc[n - 1] + L) / 2; // halfway along the cut (from last back to first)
-  const circ = (d: number) => { d = Math.abs(d) % L; return Math.min(d, L - d); };
-  const sigma = Math.max(gap * 0.45, spacing * 2); // rounding radius of the seam
-  const reach = gap * 1.1; // how far the melt fades along the drawn path
-  const out = loop.map((q) => ({ x: q.x, y: q.y }));
-  for (let i = 0; i < m; i++) {
-    const d = circ(arc[i] - seam);
-    const w = Math.exp(-((d / reach) ** 2));
-    if (w < 0.01) continue;
-    let sx = 0, sy = 0, sw = 0;
-    for (let j = 0; j < m; j++) {
-      const dj = circ(arc[j] - arc[i]);
-      if (dj > sigma * 3) continue;
-      const g = Math.exp(-(dj * dj) / (2 * sigma * sigma));
-      sx += loop[j].x * g; sy += loop[j].y * g; sw += g;
+  if (gap < (drawn / (n - 1)) * 2) return pts; // already closed
+  const unit = (dx: number, dy: number) => { const l = Math.hypot(dx, dy) || 1; return { x: dx / l, y: dy / l }; };
+  // travel direction over a run of samples about half the gap long (the lift-off wobble is noise)
+  const reach = Math.max(gap * 0.5, 2);
+  const runFrom = (i: number, step: 1 | -1) => {
+    let j = i, len = 0;
+    while (j + step >= 0 && j + step < n && len < reach) {
+      len += Math.hypot(pts[j + step].x - pts[j].x, pts[j + step].y - pts[j].y);
+      j += step;
     }
-    out[i] = { x: loop[i].x + (sx / sw - loop[i].x) * w, y: loop[i].y + (sy / sw - loop[i].y) * w };
+    return pts[j];
+  };
+  const tail = runFrom(n - 1, -1), head = runFrom(0, 1);
+  const chord = unit(first.x - last.x, first.y - last.y); // the cut, end → start
+  const lean = (t: { x: number; y: number }) => unit(t.x * 0.5 + chord.x * 0.5, t.y * 0.5 + chord.y * 0.5);
+  const tEnd = lean(unit(last.x - tail.x, last.y - tail.y)); // leave the end carrying on
+  const tStart = lean(unit(head.x - first.x, head.y - first.y)); // arrive at the start the way it set off
+  const h = gap * 0.35;
+  const c1 = { x: last.x + tEnd.x * h, y: last.y + tEnd.y * h };
+  const c2 = { x: first.x - tStart.x * h, y: first.y - tStart.y * h };
+  const k = Math.max(6, Math.min(48, Math.round(gap / 3)));
+  const out = pts.slice();
+  for (let i = 1; i < k; i++) {
+    const t = i / k, u = 1 - t;
+    out.push({
+      x: u * u * u * last.x + 3 * u * u * t * c1.x + 3 * u * t * t * c2.x + t * t * t * first.x,
+      y: u * u * u * last.y + 3 * u * u * t * c1.y + 3 * u * t * t * c2.y + t * t * t * first.y,
+    });
   }
   return out;
 }
