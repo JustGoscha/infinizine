@@ -100,6 +100,17 @@ export function installPenTaps() {
   document.addEventListener('pointercancel', () => { press = null; }, true);
 }
 
+/** The fat bar sliders fill up to their value: keep the --fill custom property in step
+ * (on every input event, and after code sets a value). */
+export function syncRangeFill(input: HTMLInputElement) {
+  const min = Number(input.min) || 0, max = Number(input.max) || 100;
+  const f = max > min ? (Number(input.value) - min) / (max - min) : 0;
+  input.style.setProperty('--fill', `${Math.round(Math.max(0, Math.min(1, f)) * 1000) / 10}%`);
+}
+export function syncRangeFills(root: ParentNode = document) {
+  root.querySelectorAll<HTMLInputElement>('input[type="range"]').forEach(syncRangeFill);
+}
+
 /** Range sliders driven by the pointer directly: on iPad a finger or pen on a native
  * <input type=range> often just scrolls or does nothing. The value follows the pointer's
  * x across the track and the usual `input` / `change` events fire. */
@@ -107,6 +118,8 @@ export function installPointerSliders() {
   const isRange = (t: EventTarget | null): t is HTMLInputElement =>
     t instanceof HTMLInputElement && t.type === 'range';
   document.addEventListener('touchstart', (e) => { if (isRange(e.target)) e.preventDefault(); }, { passive: false, capture: true });
+  document.addEventListener('input', (e) => { if (isRange(e.target)) syncRangeFill(e.target); }, true);
+  document.addEventListener('pointerdown', (e) => { if (isRange(e.target)) syncRangeFill(e.target); }, true);
   document.addEventListener('pointerdown', (e) => {
     if (e.pointerType === 'mouse' || !isRange(e.target)) return;
     const input = e.target;

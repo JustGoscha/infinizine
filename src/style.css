@@ -206,7 +206,7 @@ html, body {
 #size-dot { display: block; border-radius: 50%; background: var(--ink); }
 .size-flyout { align-items: center; padding: 10px; gap: 8px; }
 .size-presets { display: flex; align-items: center; gap: 2px; }
-#size-fader { width: 110px; accent-color: var(--accent); }
+#size-fader { width: 150px; }
 .chip.chip-text { font-size: 12px; font-weight: 700; letter-spacing: 0.02em; }
 .size-adaptive {
   display: inline-flex;
@@ -1471,7 +1471,7 @@ body.presenting .popover { display: none; }
 .pg-row { display: grid; grid-template-columns: 74px 1fr 44px; align-items: center; gap: 6px; }
 .pg-row[hidden] { display: none; }
 .pg-row b { font-weight: 600; color: var(--ink-soft); font-variant-numeric: tabular-nums; }
-.pg-row input { width: 100%; accent-color: var(--ink); margin: 0; }
+.pg-row input { width: 100%; min-width: 0; margin: 0; }
 .pg-actions { display: flex; gap: 6px; flex-wrap: wrap; }
 .pg-actions[hidden] { display: none; }
 .pg-actions .pg-primary { background: var(--ink); color: var(--card); }
@@ -1858,7 +1858,35 @@ body.presenting .pages-panel { z-index: 60; }
 
 /* ---------- feedback round: pen/finger chrome ---------- */
 /* range sliders are driven by the pointer (see installPointerSliders): no native panning over them */
-input[type="range"] { touch-action: none; }
+/* fat bar sliders: a thick track that fills up to the value, with a bar for a thumb — fingers
+   land on them easily (the value is driven by pointer position, see installPointerSliders) */
+input[type="range"] {
+  -webkit-appearance: none;
+  appearance: none;
+  height: 34px;
+  min-width: 120px;
+  margin: 0;
+  padding: 0;
+  border: var(--panel-border);
+  border-radius: 4px;
+  background: linear-gradient(to right, var(--accent) 0 var(--fill, 50%), var(--card) var(--fill, 50%));
+  box-shadow: var(--shadow);
+  cursor: pointer;
+  touch-action: none;
+}
+input[type="range"]::-webkit-slider-runnable-track { height: 30px; background: transparent; border: none; }
+input[type="range"]::-webkit-slider-thumb {
+  -webkit-appearance: none;
+  width: 12px;
+  height: 30px;
+  margin-top: 0;
+  border: none;
+  border-radius: 2px;
+  background: var(--ink);
+  box-shadow: 0 0 0 2px var(--card);
+}
+input[type="range"]::-moz-range-track { height: 30px; background: transparent; border: none; }
+input[type="range"]::-moz-range-thumb { width: 12px; height: 30px; border: none; border-radius: 2px; background: var(--ink); box-shadow: 0 0 0 2px var(--card); }
 
 /* draw-tool flyout: icon · colour/pattern swatch · sample line per tool */
 .draw-wrap .tool-flyout { align-items: stretch; }

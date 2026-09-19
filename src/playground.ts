@@ -8,6 +8,7 @@ import { attachInput, setModalOpen } from './input';
 import { InputState, type Tool } from './state';
 import { svg, ICONS, SIZES, cursorFor } from './icons';
 import { toast } from './feedback';
+import { syncRangeFills } from './pointer-ui';
 import { pressure, savePressure, resetPressure, loadPressure, exportPressure, importPressure, easeP, curveAt, type Curve, type CurveNode } from './pressure';
 
 export function buildPlayground(root: HTMLElement, state: InputState, store: Store) {
@@ -329,6 +330,7 @@ export function buildPlayground(root: HTMLElement, state: InputState, store: Sto
   window.addEventListener('resize', () => { if (!pg.classList.contains('hidden')) drawCurve(); });
 
   function syncPg() {
+    queueMicrotask(() => syncRangeFills(pg)); // after the values below are set
     const k = pressure[pgTool];
     pgCurve.style.opacity = pgTool === 'marker' ? '0.35' : '1';
     for (const sl of SLIDERS) {

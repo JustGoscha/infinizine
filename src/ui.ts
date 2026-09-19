@@ -7,7 +7,7 @@
 import { InputState, Tool, FINGER_KEY, writePref, readPref } from './state';
 import { svg, ICONS, FINGER_ICON, cursorFor, TOOL_INFO, TOOL_GROUPS, SIZES } from './icons';
 import { toast, tip, tipAt } from './feedback';
-import { pressDrag, installPenTaps, installPointerSliders } from './pointer-ui';
+import { pressDrag, installPenTaps, installPointerSliders, syncRangeFills } from './pointer-ui';
 import { paintToolSample } from './toolsample';
 import { buildTimeline } from './timeline';
 import { buildPlayground } from './playground';
@@ -518,6 +518,7 @@ export function buildUI(
       if (ids.length) store.setInk(ids, state.inkDensity);
       invalidate();
     });
+    syncRangeFills(patternPop);
     patternPop.querySelectorAll<HTMLElement>('.pat-sw').forEach((b) => b.addEventListener('click', () => pickPattern(b.dataset.id!)));
     (patternPop.querySelector('#pat-clear') as HTMLButtonElement).addEventListener('click', () => pickPattern(null));
   }
@@ -647,11 +648,13 @@ export function buildUI(
     `;
     const slider = pagePop.querySelector('#cal-slider') as HTMLInputElement;
     slider.value = String(pxPerMm());
+    syncRangeFills(pagePop);
     const applyCal = (v: number | null) => {
       const before = baseZoom();
       setPxPerMm(v);
       camera.zoom *= baseZoom() / before; // keep the zoom percentage, not the pixels
       slider.value = String(pxPerMm());
+      syncRangeFills(pagePop);
       showCalCard();
       state.updateCursor();
       invalidate();
@@ -1449,6 +1452,7 @@ export function buildUI(
     sizeDot.style.width = `${d}px`;
     sizeDot.style.height = `${d}px`;
     (root.querySelector('#size-fader') as HTMLInputElement).value = String(state.baseWidth);
+    syncRangeFills(root);
     const drama = getPalette(store.doc.palette).drama;
     const pr = getPalette(store.doc.palette);
     const tops = pr.hues.slice(0, 6).map((h) => h.toLowerCase());
