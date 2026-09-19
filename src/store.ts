@@ -976,8 +976,8 @@ export class Store {
     return frame;
   }
 
-  /** Duplicate a frame in its layer, cloning the frame's elements. */
-  duplicateFrame(areaId: string, layerId: string, frameId: string): AnimFrame | null {
+  /** Duplicate a frame in its layer (after it, or before), cloning the frame's elements. */
+  duplicateFrame(areaId: string, layerId: string, frameId: string, at: 'before' | 'after' = 'after'): AnimFrame | null {
     const l = this.animLayer(areaId, layerId);
     if (!l) return null;
     const idx = l.frames.findIndex((f) => f.id === frameId);
@@ -986,7 +986,7 @@ export class Store {
     const clones = this.doc.elements
       .filter((e) => e.frame === frameId)
       .map((e) => ({ ...structuredClone(e), id: uid('el'), frame: frame.id }));
-    this.commit({ type: 'add-frame', areaId, layerId, frame, index: idx + 1, elements: clones });
+    this.commit({ type: 'add-frame', areaId, layerId, frame, index: at === 'before' ? idx : idx + 1, elements: clones });
     return frame;
   }
 

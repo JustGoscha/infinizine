@@ -1861,3 +1861,94 @@ body.presenting .pages-panel { z-index: 60; }
   font-variant-numeric: tabular-nums; padding: 8px 14px; border-radius: 4px; white-space: pre; pointer-events: none;
 }
 .perf-hud[hidden] { display: none; }
+
+/* ---------- feedback round: pen/finger chrome ---------- */
+/* range sliders are driven by the pointer (see installPointerSliders): no native panning over them */
+input[type="range"] { touch-action: none; }
+
+/* draw-tool flyout: icon · colour/pattern swatch · sample line per tool */
+.draw-wrap .tool-flyout { align-items: stretch; }
+.draw-wrap .tool-flyout .tool {
+  width: auto;
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 0 8px 0 4px;
+}
+.tool-swatch {
+  display: block;
+  width: 22px;
+  height: 22px;
+  border-radius: 4px;
+  border: 1.5px solid rgba(42, 36, 26, 0.35);
+  flex: none;
+}
+.tool-sample { display: block; width: 96px; height: 30px; flex: none; }
+.draw-wrap .tool-flyout .tool.active .tool-swatch { border-color: rgba(253, 252, 248, 0.7); }
+
+/* timeline playhead: a line down every track at the position / play clock */
+.tl-tracks { position: relative; }
+.tl-playhead {
+  position: absolute;
+  top: 0;
+  width: 2px;
+  margin-left: -1px;
+  background: var(--accent);
+  pointer-events: none;
+  z-index: 4;
+}
+.tl-playhead::before {
+  content: '';
+  position: absolute;
+  top: 0;
+  left: -4px;
+  border-left: 5px solid transparent;
+  border-right: 5px solid transparent;
+  border-top: 7px solid var(--accent);
+}
+.tl-playhead[hidden] { display: none; }
+
+/* radial frame menu: held frame tile → copies / empties before and after */
+.tl-radial {
+  position: fixed;
+  width: 0;
+  height: 0;
+  z-index: 70;
+}
+.tl-radial.hidden { display: none; }
+.tl-radial button {
+  position: absolute;
+  width: 44px;
+  height: 44px;
+  margin: -22px 0 0 -22px;
+  border: var(--panel-border);
+  border-radius: 50%;
+  background: var(--panel);
+  color: var(--ink);
+  box-shadow: var(--shadow);
+  display: grid;
+  place-items: center;
+  cursor: pointer;
+  animation: rd-pop 0.14s ease-out backwards;
+}
+.tl-radial button svg { width: 24px; height: 24px; }
+.tl-radial button:active { background: var(--ink); color: var(--card); }
+.tl-radial .rd-nw { left: -36px; top: -46px; }
+.tl-radial .rd-ne { left: 36px; top: -46px; animation-delay: 0.03s; }
+.tl-radial .rd-w { left: -58px; top: 6px; animation-delay: 0.06s; }
+.tl-radial .rd-e { left: 58px; top: 6px; animation-delay: 0.09s; }
+.tl-radial .rd-center {
+  position: absolute;
+  left: -7px;
+  top: -7px;
+  width: 14px;
+  height: 14px;
+  border-radius: 50%;
+  background: #7048e8;
+  border: 2px solid var(--card);
+  pointer-events: none;
+}
+@keyframes rd-pop {
+  from { transform: scale(0.4); opacity: 0; }
+  to { transform: scale(1); opacity: 1; }
+}

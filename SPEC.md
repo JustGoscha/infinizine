@@ -32,10 +32,13 @@ Name: InfiniZine.
 - **Fineliner** — fixed width, no pressure.
 - **Pressure pen** — pressure-sensitive width via perfect-freehand: tapering, smoothing, and outlier-pressure filtering (Doodely's `pUncertain` interpolation approach).
 - **Marker** — flat, semi-transparent.
-- **Lasso fill** — draw a region, it becomes a filled shape.
-- **Eraser** — whole-stroke deletion only.
+- **Lasso fill** — draw a region, it becomes a filled shape; the loop closes with a straight cut from where the pen lifted back to the start.
+- **Blob fill** — same, but the loop closes along a curve that carries the pen's motion on and arrives the way it set off (rounds off like a drop of ink).
+- **Eraser** — whole-stroke deletion only; its nib is the brush size (small by default) and shows as a ring under the pen.
 - **Lasso select** — selects whole strokes with any point inside; move selection by touch.
-- Palm rejection; pan/zoom with fingers.
+- Every ink tool remembers its own colour, size and pattern; the draw flyout previews each tool's line.
+- Palm rejection; pan/zoom with fingers. One-finger double tap flips eraser ↔ last ink tool; two-finger tap undoes.
+- Playback of animation areas pauses while ink is laid down (and 200 ms after) unless the edited area is playing/recording.
 
 ## Color
 

@@ -1,34 +1,28 @@
 // Pointer handling: pen draws, fingers pan/pinch-zoom (Notes-style),
 // mouse works for desktop/browser verification. Coalesced events used
 // for high-frequency stroke sampling.
+//
+// Around this file: state.ts (InputState, tool memory, prefs), handles.ts
+// (grabber rects), hover.ts (mouse hover), clipboard.ts (copy/paste),
+// dice.ts (typeface roll). attachInput wires the canvas events; startAction /
+// moveAction / endAction are the per-gesture state machine.
 
 import { Camera, baseZoom } from './camera';
 import { Store } from './store';
 import { AnimArea, Stroke, FillShape, Element, ImageBox, Page, TextBox, uid } from './types';
-import { hitElement, elementsInLasso, denoise, denoiseClosed, pressure, strokeOutline } from './geometry';
-import { isPixelPattern, migratePatternId } from './patterns';
-import { layoutText, layoutHeight, boxFamily, roleOf, fitBox } from './text';
-import { rollFace, loadFace } from './facepool';
-import { clipboardToMarkdown } from './richedit';
+import { hitElement, elementsInLasso, denoise, denoiseClosed, closeBlob, translateElement } from './geometry';
+import { pressure } from './pressure';
+import { strokeOutline } from './outline';
+import { animClock } from './clock';
+import { isPixelPattern } from './patterns';
+import { layoutText, layoutHeight, boxFamily } from './text';
+import { InputState, Tool, FILL_TOOLS, frameEditable, writePref, PEN_KEY, FINGER_KEY } from './state';
+import { inRect, moveHandleRect, moveAllHandleRect, eyeHandleRect, deleteHandleRect, copyHandleRect, diceHandleRect, copyStyleHandleRect, pasteStyleHandleRect, textHandleRect } from './handles';
+import { createClipboard } from './clipboard';
+import { rollTextFace } from './dice';
+import { hoverAt } from './hover';
 
-const CLIP_KEY = 'infinizine-clipboard';
-export const CLIP_PENDING_KEY = 'infinizine-clip-pending'; // '1' while the clip hasn't been pasted yet
-// Big selections blow the ~5MB localStorage quota; the in-memory clipboard
-// always holds the last copy so same-tab (and cross-zine) paste never fails.
-let memClip: string | null = null;
 
-const PEN_KEY = 'infinizine-pen-seen';
-const TOOL_MEM_KEY = 'infinizine-tool-memory';
-const REMEMBER_TOOLS = new Set(['pen', 'pencil', 'sketch', 'fineliner', 'marker', 'lasso-fill', 'text']);
-const BRUSH_TOOLS = new Set(['pen', 'pencil', 'sketch', 'fineliner', 'marker']);
-const FINGER_KEY = 'infinizine-finger-mode';
-export function readPref(k: string): string | null {
-  try { return localStorage.getItem(k); } catch { return null; }
-}
-export function writePref(k: string, v: string) {
-  try { localStorage.setItem(k, v); } catch { /* ignore */ }
-}
-export { FINGER_KEY };
 
 /** Lean direction (azimuth) in radians, screen plane. Safari: azimuthAngle; others: from tiltX/Y. */
 function azimuthOf(e: PointerEvent): number | undefined {
@@ -52,211 +46,8 @@ function toast(msg: string) {
   window.dispatchEvent(new CustomEvent('izine-toast', { detail: msg }));
 }
 
-export type Tool = 'pen' | 'pencil' | 'sketch' | 'fineliner' | 'marker' | 'eraser' | 'cursor' | 'lasso-select' | 'lasso-fill' | 'text' | 'anim' | 'hand';
 
-/** While an anim area is selected, only the active frame's elements (and the
- * area's timed live-ink strokes) are editable; otherwise only untagged ones. */
-export function frameEditable(el: Element, state: InputState): boolean {
-  const area = el.kind === 'stroke' ? el.area : undefined;
-  if (state.activeAreaId) return el.frame === state.activeFrameId || area === state.activeAreaId;
-  return !el.frame && !area;
-}
 
-function translateElement(el: Element, dx: number, dy: number) {
-  if (el.kind === 'text' || el.kind === 'image') {
-    el.x += dx;
-    el.y += dy;
-  } else {
-    for (const p of el.points) { p.x += dx; p.y += dy; }
-  }
-}
-
-const ERASER_RADIUS = 6; // world units at zoom 1 (scaled by 1/zoom at use)
-
-/** Move-handle box at a box's top-left corner (world coords). */
-export function moveHandleRect(x: number, y: number, zoom: number) {
-  const s = 22 / zoom;
-  return { x: x - s - 4 / zoom, y: y - s - 4 / zoom, s };
-}
-
-/** Second grabber on anim areas: moves the frame WITH its content. Below the move handle. */
-export function moveAllHandleRect(x: number, y: number, zoom: number) {
-  const s = 22 / zoom;
-  return { x: x - s - 4 / zoom, y: y + 2 / zoom, s };
-}
-
-/** Page preview eye: below the two grabbers. */
-export function eyeHandleRect(x: number, y: number, zoom: number) {
-  const s = 22 / zoom;
-  return { x: x - s - 4 / zoom, y: y + s + 8 / zoom, s };
-}
-
-/** Delete-handle box at a box's top-right corner, away from the move handle. */
-export function deleteHandleRect(x: number, y: number, w: number, zoom: number) {
-  const s = 22 / zoom;
-  return { x: x + w + 4 / zoom, y: y - s - 4 / zoom, s };
-}
-
-/** Copy grabber on text/image boxes: under the move handle. Dragging it drags a duplicate
- * (the touch equivalent of alt-drag). */
-export function copyHandleRect(x: number, y: number, zoom: number) {
-  return moveAllHandleRect(x, y, zoom);
-}
-
-/** Dice (re-roll the typeface) on a textbox: right side, under the bin. */
-export function diceHandleRect(x: number, y: number, w: number, zoom: number) {
-  const s = 22 / zoom;
-  return { x: x + w + 4 / zoom, y: y + 2 / zoom, s };
-}
-/** Copy-style handle under the dice; paste-style handle under that (shown when a style is copied). */
-export function copyStyleHandleRect(x: number, y: number, w: number, zoom: number) {
-  const s = 22 / zoom;
-  return { x: x + w + 4 / zoom, y: y + 28 / zoom, s };
-}
-export function pasteStyleHandleRect(x: number, y: number, w: number, zoom: number) {
-  const s = 22 / zoom;
-  return { x: x + w + 4 / zoom, y: y + 54 / zoom, s };
-}
-
-function inRect(w: { x: number; y: number }, r: { x: number; y: number; s: number }): boolean {
-  return w.x >= r.x && w.x <= r.x + r.s && w.y >= r.y && w.y <= r.y + r.s;
-}
-
-/** Move-handle box at a textbox's top-left corner (world coords). */
-export function textHandleRect(el: TextBox, zoom: number) {
-  return moveHandleRect(el.x, el.y, zoom);
-}
-
-export class InputState {
-  private _tool: Tool = (() => {
-    const t = readPref('infinizine-last-tool');
-    return t && REMEMBER_TOOLS.has(t) ? (t as Tool) : 'pen'; // drawing tools only; never boot into eraser/anim
-  })();
-  /** per-tool colour + size memory: switching tools brings back what you last used with each */
-  private toolMem: Partial<Record<Tool, { color: string; baseWidth: number; behind?: boolean }>> = (() => {
-    try { return JSON.parse(readPref(TOOL_MEM_KEY) ?? '{}'); } catch { return {}; }
-  })();
-  get tool(): Tool { return this._tool; }
-  set tool(t: Tool) {
-    if (t === this._tool) return;
-    this.rememberTool();
-    this._tool = t;
-    const m = this.toolMem[t];
-    if (m) { this.color = m.color; this.baseWidth = m.baseWidth; }
-    // paint-behind is remembered per tool too; the marker highlights behind ink by default
-    if (REMEMBER_TOOLS.has(t)) { this.paintBehind = m?.behind ?? t === 'marker'; writePref('infinizine-last-tool', t); }
-  }
-  /** store the current colour/size under the current tool (called on switch and on edits) */
-  rememberTool() {
-    if (!REMEMBER_TOOLS.has(this._tool)) return;
-    this.toolMem[this._tool] = { color: this.color, baseWidth: this.baseWidth, behind: this.paintBehind };
-    writePref(TOOL_MEM_KEY, JSON.stringify(this.toolMem));
-  }
-  color = '#1a1a1a';
-  /** fill tool: active pattern (screentone, dither, …) drawn in `color`; null = solid */
-  fillPattern: string | null = (() => {
-    let p = readPref('infinizine-fill-pattern3');
-    if (p === null) {
-      // pre-format-3 preference: five levels per family → the finer ramp
-      const old = readPref('infinizine-fill-pattern');
-      p = old ? migratePatternId(old) : '';
-      writePref('infinizine-fill-pattern3', p);
-    }
-    return p && p.startsWith('pattern:') ? p : null;
-  })();
-  /** ink coverage for pattern fills (CMYK-style tint): 1 = solid ink, lower lets paper through so overlaps mix */
-  inkDensity = (() => { const v = Number(readPref('infinizine-fill-opacity')); return v >= 0.3 && v <= 1 ? v : 1; })();
-  /** pattern brush: with a pattern selected, the pens paint it — the stroke's outline
-   * becomes a pattern fill (pixel patterns edge in whole grid cells; tones keep whole dots) */
-  patternInk(): boolean { return !!this.fillPattern && BRUSH_TOOLS.has(this.tool); }
-  /** tone angle for the stroke being drawn (chosen at pen-down so the preview matches the commit) */
-  liveToneAngle = 0;
-  /** every new tone fill gets its own random angle (off: all fills share angle 0) */
-  toneRandom = readPref('infinizine-tone-random') !== '0';
-  /** two-finger tap = undo, three = redo (off: fingers only pan/zoom) */
-  fingerUndo = readPref('infinizine-finger-undo') !== '0';
-  /** how pattern fills composite with what's below */
-  fillBlend: import('./types').FillBlend = (() => {
-    const v = readPref('infinizine-fill-blend');
-    return v && ['multiply', 'source-over', 'darken', 'screen', 'difference'].includes(v) ? (v as import('./types').FillBlend) : 'multiply';
-  })();
-  baseWidth = 1.6; // world units at 100% (2 per mm)
-  adaptiveSize = readPref('infinizine-adaptive-size') === '1'; // keep on-screen size across zoom
-  /** brush width in world units for a stroke started at this zoom */
-  effectiveWidth(zoom: number): number {
-    return this.adaptiveSize ? this.baseWidth * (baseZoom() / zoom) : this.baseWidth;
-  }
-  paintBehind: boolean = this.toolMem[this._tool]?.behind ?? this._tool === 'marker'; // 'back' layer toggle for new strokes/fills
-  font = 'franklin'; // typeface for new textboxes
-  textSize = 8; // world units; Title 18 / Heading 12 / Body 8 / Sub 6
-  live: Stroke | null = null;
-  lasso: { x: number; y: number }[] | null = null;
-  selection = new Set<string>();
-  hidden = new Set<string>();
-  // remembered across sessions: once a pen has been seen, fingers pan by default
-  penDetected = readPref(PEN_KEY) === '1';
-  fingerMode: 'draw' | 'pan' | 'select' = (() => {
-    const m = readPref(FINGER_KEY);
-    if (m === 'draw' || m === 'pan' || m === 'select') return m;
-    return readPref(PEN_KEY) === '1' ? 'pan' : 'draw';
-  })();
-  fingerDraws = this.fingerMode === 'draw'; // legacy flag, kept in sync with fingerMode === 'draw'
-  zoomLocked = readPref('infinizine-zoom-lock') !== '0'; // Notes-style: paint with what you've got; unlock to zoom
-  armedPageDrag: Page | null = null; // set by the page menu's Move action
-  presenting = false; // presentation mode: render only page content
-  presentPage: Page | null = null; // the single page shown while presenting
-  onToolChange: () => void = () => {};
-  /** set while the text editor is open: a colour pick recolours the text being edited */
-  onEditColor: ((c: string) => void) | null = null;
-  onPageMenu: (page: Page, clientX: number, clientY: number) => void = () => {};
-  onPagePreview: (page: Page) => void = () => {};
-  textRect: { x: number; y: number; w: number; h: number } | null = null; // rect being drawn with the text tool
-  hoverText: string | null = null; // textbox under the mouse (shows its move handle)
-  /** textboxes whose dice is rolling → pip face shown (1–6), flipped while the new typeface loads */
-  rolling = new Map<string, number>();
-  /** text style clipboard handles on the rect (wired by the UI) */
-  onCopyStyle: (el: TextBox, clientX: number, clientY: number) => void = () => {};
-  onPasteStyle: (el: TextBox, clientX: number, clientY: number) => void = () => {};
-  stylePasteFor: (el: TextBox) => boolean = () => false;
-  hoverArea: string | null = null; // anim area under the mouse (shows its handles)
-  hoverPage: string | null = null; // page under the mouse (shows its grabbers)
-  hoverImage: string | null = null; // image under the mouse (shows its handles)
-  lastDrawTool: Tool = this._tool; // remembered so e.g. area creation can bounce back to it
-  onAnimClose: () => void = () => {};
-  toolCursor = 'crosshair'; // css cursor for the current tool (set by the UI)
-  updateCursor: () => void = () => {};
-  marquee: { x: number; y: number; w: number; h: number } | null = null; // cursor-tool rect select
-  // animation mode
-  areaRect: { x: number; y: number; w: number; h: number } | null = null; // area being drawn
-  activeAreaId: string | null = null; // timeline open for this area
-  activeFrameId: string | null = null;
-  /** position in the edited area, in ticks from its start (null = the active frame's start).
-   * Flipping moves this across the whole animation; the active frame is whichever frame of
-   * the active layer covers it, so a held frame can be viewed at each tick it spans. */
-  editTick: number | null = null;
-  activeLayerId: string | null = null;
-  onionSkin = true; // on by default; 3 frames back (red) and 3 forward (green)
-  liveInkLife = 6; // ticks a stroke drawn during playback stays visible
-  liveInkTaper = true; // its tail eats away over its lifetime
-  showLiveInk = false; // show live-ink strokes while editing (they always show in playback)
-  blinkLayerId: string | null = null; // layer briefly opacity-blinking (selection feedback)
-  blinkStart = 0;
-  playingAreas = false;
-  onionMuted = false; // onion skin hidden while flipping through frames with the jog
-  recording = false; // record button: plays the area and captures live lines as you draw
-  /** event timestamp of the newest live-stroke sample (input→paint latency readout) */
-  lastSampleAt = 0;
-  /** performance readout in the corner (settings) */
-  perfHud = readPref('infinizine-perf') === '1';
-  perfLine = ''; // the renderer's latest numbers
-  playEpoch = 0; // performance.now()/1000 when playback started
-  onAnimOpen: (area: import('./types').AnimArea) => void = () => {};
-  onTextEdit: (
-    target: import('./types').TextBox | null,
-    rect: { x: number; y: number; w: number; h: number },
-    auto?: boolean, // tap-created: width follows the content
-  ) => void = () => {};
-}
 
 interface TouchInfo { x: number; y: number; t: number; big: boolean }
 
@@ -436,6 +227,17 @@ export function attachInput(
     return null;
   }
 
+  /** an area's dashed border (a hand's width), for tap-selecting it with a finger or pen */
+  function areaBorderAt(w: { x: number; y: number }): AnimArea | null {
+    const r = 10 / camera.zoom;
+    for (const a of [...store.doc.areas].reverse()) {
+      const onX = (Math.abs(w.x - a.x) < r || Math.abs(w.x - (a.x + a.w)) < r) && w.y > a.y - r && w.y < a.y + a.h + r;
+      const onY = (Math.abs(w.y - a.y) < r || Math.abs(w.y - (a.y + a.h)) < r) && w.x > a.x - r && w.x < a.x + a.w + r;
+      if (onX || onY) return a;
+    }
+    return null;
+  }
+
   function pageLabelAt(w: { x: number; y: number }): Page | null {
     const z = camera.zoom;
     for (const p of [...store.doc.pages].reverse()) {
@@ -444,16 +246,10 @@ export function attachInput(
     return null;
   }
 
-  function startAction(e: PointerEvent, toolOverride?: Tool) {
-    const activeTool = toolOverride ?? state.tool;
-    dragCopy = null;
-    // Presentation mode: any drag pans, no drawing/tools
-    if (state.presenting) {
-      panLast = { x: e.clientX, y: e.clientY };
-      return;
-    }
-    const w = toWorld(e);
-
+  /** Chrome on the canvas: grabbers, resize handles, bins, labels of boxes / areas / pages.
+   * Any pointer may work these (a finger in pan mode included). Returns true when the
+   * press landed on one and an action (drag or tap) started. */
+  function startHandleAction(e: PointerEvent, w: { x: number; y: number }): boolean {
     // Image handles (any tool, on hovered/selected image)
     for (const el of store.doc.elements) {
       if (el.kind !== 'image') continue;
@@ -463,7 +259,7 @@ export function attachInput(
         state.selection.delete(el.id);
         if (state.hoverImage === el.id) state.hoverImage = null;
         store.deleteElements([el]);
-        return;
+        return true;
       }
       if (inRect(w, moveHandleRect(el.x, el.y, z)) || inRect(w, copyHandleRect(el.x, el.y, z))) {
         state.selection = new Set([el.id]);
@@ -472,7 +268,7 @@ export function attachInput(
         dragStartWorld = w;
         dragTotal = { x: 0, y: 0 };
         invalidate();
-        return;
+        return true;
       }
       const r = 12 / z;
       const grabImg = (mode: typeof imgMode) => {
@@ -482,10 +278,10 @@ export function attachInput(
         imgStart = { x: el.x, y: el.y, w: el.w, h: el.h, wx: w.x, wy: w.y };
         invalidate();
       };
-      if (Math.hypot(w.x - (el.x + el.w), w.y - (el.y + el.h)) < r) { grabImg('corner'); return; }
-      if (Math.abs(w.y - (el.y + el.h)) < r && Math.abs(w.x - (el.x + el.w / 2)) < r) { grabImg('h-bottom'); return; }
-      if (Math.abs(w.x - (el.x + el.w)) < r && Math.abs(w.y - (el.y + el.h / 2)) < r) { grabImg('w-right'); return; }
-      if (Math.abs(w.x - el.x) < r && Math.abs(w.y - (el.y + el.h / 2)) < r) { grabImg('w-left'); return; }
+      if (Math.hypot(w.x - (el.x + el.w), w.y - (el.y + el.h)) < r) { grabImg('corner'); return true; }
+      if (Math.abs(w.y - (el.y + el.h)) < r && Math.abs(w.x - (el.x + el.w / 2)) < r) { grabImg('h-bottom'); return true; }
+      if (Math.abs(w.x - (el.x + el.w)) < r && Math.abs(w.y - (el.y + el.h / 2)) < r) { grabImg('w-right'); return true; }
+      if (Math.abs(w.x - el.x) < r && Math.abs(w.y - (el.y + el.h / 2)) < r) { grabImg('w-left'); return true; }
     }
 
     // Textbox handles (any tool, on hovered/selected box):
@@ -498,23 +294,23 @@ export function attachInput(
         state.selection.delete(el.id);
         if (state.hoverText === el.id) state.hoverText = null;
         store.deleteElements([el]);
-        return;
+        return true;
       }
       if (inRect(w, diceHandleRect(el.x, el.y, el.w, z))) {
         state.selection = new Set([el.id]);
-        void rollTextFace(el);
-        return;
+        void rollTextFace(store, state, invalidate, el);
+        return true;
       }
       if (inRect(w, copyStyleHandleRect(el.x, el.y, el.w, z))) {
         state.selection = new Set([el.id]);
         state.onCopyStyle(el, e.clientX, e.clientY);
         invalidate();
-        return;
+        return true;
       }
       if (state.stylePasteFor(el) && inRect(w, pasteStyleHandleRect(el.x, el.y, el.w, z))) {
         state.selection = new Set([el.id]);
         state.onPasteStyle(el, e.clientX, e.clientY);
-        return;
+        return true;
       }
       const hr = textHandleRect(el, z);
       if (inRect(w, hr) || inRect(w, copyHandleRect(el.x, el.y, z))) {
@@ -524,7 +320,7 @@ export function attachInput(
         dragStartWorld = w;
         dragTotal = { x: 0, y: 0 };
         invalidate();
-        return;
+        return true;
       }
       const r = 12 / z;
       const grab = (mode: typeof resizeMode) => {
@@ -535,10 +331,10 @@ export function attachInput(
         el.auto = false; // sizing by hand: the box stops hugging its content (live; committed on release)
         invalidate();
       };
-      if (Math.hypot(w.x - (el.x + el.w), w.y - (el.y + el.h)) < r) { grab('scale'); return; }
-      if (Math.abs(w.y - (el.y + el.h)) < r && Math.abs(w.x - (el.x + el.w / 2)) < r) { grab('height'); return; }
-      if (Math.abs(w.x - (el.x + el.w)) < r && Math.abs(w.y - (el.y + el.h / 2)) < r) { grab('width'); return; }
-      if (Math.abs(w.x - el.x) < r && Math.abs(w.y - (el.y + el.h / 2)) < r) { grab('width-left'); return; }
+      if (Math.hypot(w.x - (el.x + el.w), w.y - (el.y + el.h)) < r) { grab('scale'); return true; }
+      if (Math.abs(w.y - (el.y + el.h)) < r && Math.abs(w.x - (el.x + el.w / 2)) < r) { grab('height'); return true; }
+      if (Math.abs(w.x - (el.x + el.w)) < r && Math.abs(w.y - (el.y + el.h / 2)) < r) { grab('width'); return true; }
+      if (Math.abs(w.x - el.x) < r && Math.abs(w.y - (el.y + el.h / 2)) < r) { grab('width-left'); return true; }
     }
 
     // Area handles (same set as textboxes) on the hovered/active area
@@ -551,7 +347,7 @@ export function attachInput(
         if (state.hoverArea === a.id) state.hoverArea = null;
         store.deleteArea(a);
         if (wasActive) state.onAnimClose();
-        return;
+        return true;
       }
       const mh = moveHandleRect(a.x, a.y, z);
       const mha = moveAllHandleRect(a.x, a.y, z);
@@ -570,19 +366,19 @@ export function attachInput(
           moveAllIds = store.areaContentIds(a.id);
           moveAllApplied = { x: 0, y: 0 };
         }
-        return;
+        return true;
       }
     }
 
-    // Page grabbers (hover): outlined = frame only, filled = frame with content
+    // Page grabbers (hovered or selected page): outlined = frame only, filled = frame with content
     for (const p of store.doc.pages) {
-      if (state.hoverPage !== p.id) continue;
+      if (state.hoverPage !== p.id && state.selectedPageId !== p.id) continue;
       const z = camera.zoom;
       const mh = moveHandleRect(p.x, p.y, z);
       const mha = moveAllHandleRect(p.x, p.y, z);
       if (inRect(w, eyeHandleRect(p.x, p.y, z))) {
         state.onPagePreview(p);
-        return;
+        return true;
       }
       const all = inRect(w, mha);
       if (inRect(w, mh) || all) {
@@ -600,17 +396,17 @@ export function attachInput(
           ];
           pageAllApplied = { x: 0, y: 0 };
         }
-        return;
+        return true;
       }
     }
 
-    // Animation area label: tap opens its timeline, drag moves the area frame
-    const areaHit = areaLabelAt(w);
+    // Animation area label or border: tap opens its timeline, drag moves the area frame
+    const areaHit = areaLabelAt(w) ?? areaBorderAt(w);
     if (areaHit) {
       dragArea = areaHit;
       dragAreaStart = { x: areaHit.x, y: areaHit.y };
       dragStartWorld = w;
-      return;
+      return true;
     }
 
     // Page label tab (or a Move armed from the page menu): drag moves the frame,
@@ -622,8 +418,25 @@ export function attachInput(
       dragPageStart = { x: page.x, y: page.y };
       dragDesired = { x: page.x, y: page.y };
       dragStartWorld = w;
+      return true;
+    }
+
+    return false;
+  }
+
+  function startAction(e: PointerEvent, toolOverride?: Tool) {
+    const activeTool = toolOverride ?? state.tool;
+    dragCopy = null;
+    // Presentation mode: any drag pans, no drawing/tools
+    if (state.presenting) {
+      panLast = { x: e.clientX, y: e.clientY };
       return;
     }
+    const w = toWorld(e);
+
+    if (startHandleAction(e, w)) return;
+    // a press on the canvas itself drops the page selection
+    if (state.selectedPageId) { state.selectedPageId = null; invalidate(); }
 
     switch (activeTool) {
       case 'hand':
@@ -657,7 +470,7 @@ export function attachInput(
             1,
             ...playingArea.layers.map((l) => l.frames.reduce((a, f) => a + f.duration, 0)),
           );
-          let tick = Math.floor((performance.now() / 1000 - state.playEpoch) * playingArea.fps);
+          let tick = Math.floor((animClock.now() - state.playEpoch) * playingArea.fps);
           tick = playingArea.loop ? ((tick % total) + total) % total : Math.min(tick, total - 1);
           anim = {
             area: playingArea.id,
@@ -720,6 +533,7 @@ export function attachInput(
         return;
       }
       case 'lasso-fill':
+      case 'lasso-blob':
         state.lasso = [w];
         return;
       case 'anim': {
@@ -776,7 +590,9 @@ export function attachInput(
   }
 
   function eraseAt(w: { x: number; y: number }) {
-    const r = ERASER_RADIUS / Math.min(1, camera.zoom) + ERASER_RADIUS;
+    const r = state.eraserRadius(camera.zoom);
+    state.eraserAt = w;
+    invalidate();
     for (const el of store.doc.elements) {
       if (state.hidden.has(el.id)) continue;
       if (!frameEditable(el, state)) continue;
@@ -1029,8 +845,9 @@ export function attachInput(
       dragPageAll = false;
       const tapThreshold = 3 / camera.zoom;
       if (!wasAll && Math.abs(dx) < tapThreshold && Math.abs(dy) < tapThreshold && e) {
-        // A tap, not a drag: open the page menu
+        // A tap, not a drag: select the page (its grabbers show) and open the page menu
         p.x = dragPageStart.x; p.y = dragPageStart.y;
+        state.selectedPageId = p.id;
         state.onPageMenu(p, e.clientX, e.clientY);
         invalidate();
         return;
@@ -1124,6 +941,7 @@ export function attachInput(
       }
       return;
     }
+    if (state.eraserAt && e?.pointerType !== 'mouse') { state.eraserAt = null; invalidate(); }
     if (erased.length) {
       const els = erased;
       erased = [];
@@ -1221,7 +1039,10 @@ export function attachInput(
       state.lasso = null;
       if (state.tool === 'lasso-select') {
         state.selection = new Set(elementsInLasso(store.doc.elements, lasso).map((e) => e.id));
-      } else if (state.tool === 'lasso-fill' && lasso.length > 2) {
+      } else if (FILL_TOOLS.has(state.tool) && lasso.length > 2) {
+        // blob: the loop closes along a curve that carries the pen's motion on, not a straight cut
+        const blob = state.tool === 'lasso-blob';
+        const loop = blob ? closeBlob(lasso) : lasso;
         const fill: FillShape = {
           id: uid('fl'), kind: 'fill', color: state.color, opacity: 1,
           pattern: state.fillPattern ?? undefined,
@@ -1232,8 +1053,8 @@ export function attachInput(
           layer: state.paintBehind ? 'back' : 'front',
           frame: state.activeFrameId ?? undefined,
           alayer: state.activeLayerId ?? undefined,
-          // same screen-space smoothing as the brushes (3px at drawing zoom)
-          points: denoiseClosed(lasso.map((p) => ({ x: p.x, y: p.y })), 3 / camera.zoom),
+          // same screen-space smoothing as the brushes (3px at drawing zoom; the blob rounds off more)
+          points: denoiseClosed(loop.map((p) => ({ x: p.x, y: p.y })), (blob ? 5 : 3) / camera.zoom),
         };
         store.addElement(fill);
       }
@@ -1241,317 +1062,19 @@ export function attachInput(
     }
   }
 
-  // ---- copy / cut / paste (works across zines via localStorage) ----
-  function copySelection(): boolean {
-    let payload: unknown = null;
-    if (state.selection.size) {
-      const els = store.doc.elements.filter((el) => state.selection.has(el.id));
-      if (els.length) payload = { app: 'infinizine-clip', kind: 'elements', elements: els };
-    } else if (state.activeAreaId) {
-      const area = store.doc.areas.find((a) => a.id === state.activeAreaId);
-      if (area) {
-        const ids = new Set(store.areaContentIds(area.id));
-        payload = {
-          app: 'infinizine-clip',
-          kind: 'area',
-          area,
-          elements: store.doc.elements.filter((el) => ids.has(el.id)),
-        };
-      }
-    }
-    if (!payload) {
-      toast('Nothing selected to copy');
-      return false;
-    }
-    const json = JSON.stringify(payload);
-    memClip = json;
-    try {
-      localStorage.setItem(CLIP_KEY, json);
-    } catch {
-      // too big for localStorage — drop the stale entry so other tabs don't paste old content
-      try { localStorage.removeItem(CLIP_KEY); } catch { /* ignore */ }
-    }
-    try { localStorage.setItem(CLIP_PENDING_KEY, '1'); } catch { /* ignore */ }
-    navigator.clipboard?.writeText(json).catch(() => {});
-    const p = payload as { kind: string; elements: Element[] };
-    toast(p.kind === 'area' ? 'Copied animation area' : `Copied ${p.elements.length} element${p.elements.length === 1 ? '' : 's'}`);
-    return true;
-  }
 
-  function cutSelection() {
-    if (!copySelection()) return;
-    const els = store.doc.elements.filter((el) => state.selection.has(el.id));
-    if (els.length) {
-      state.selection.clear();
-      store.deleteElements(els);
-      toast(`Cut ${els.length} element${els.length === 1 ? '' : 's'}`);
-    } else if (state.activeAreaId) {
-      const area = store.doc.areas.find((a) => a.id === state.activeAreaId);
-      if (area) {
-        store.deleteArea(area);
-        state.onAnimClose();
-        toast('Cut animation area');
-      }
-    }
-    invalidate();
-  }
 
-  function addImageFromDataURL(dataURL: string) {
-    const img = new Image();
-    img.onload = () => {
-      const MAX = 260; // world units
-      const scale = Math.min(1, MAX / Math.max(img.naturalWidth, img.naturalHeight));
-      const w = Math.max(10, img.naturalWidth * scale);
-      const h = Math.max(10, img.naturalHeight * scale);
-      const el: ImageBox = {
-        id: uid('img'),
-        kind: 'image',
-        x: camera.x - w / 2,
-        y: camera.y - h / 2,
-        w,
-        h,
-        src: dataURL,
-        frame: state.activeFrameId ?? undefined,
-        alayer: state.activeFrameId ? state.activeLayerId ?? undefined : undefined,
-      };
-      store.addElement(el);
-      state.selection = new Set([el.id]);
-      state.tool = 'cursor';
-      state.onToolChange();
-      toast('Pasted image');
-      invalidate();
-    };
-    img.src = dataURL;
-  }
-
-  /** The dice: pick another face of the box's role, spin until it has loaded, then apply (undoable). */
-  async function rollTextFace(el: TextBox) {
-    if (state.rolling.has(el.id)) return;
-    const role = roleOf(el.font ?? 'franklin');
-    const started = performance.now();
-    state.rolling.set(el.id, 1 + Math.floor(Math.random() * 6));
-    let last = started;
-    const spin = () => {
-      if (!state.rolling.has(el.id)) return;
-      const now = performance.now();
-      if (now - last > 90) {
-        last = now;
-        const cur = state.rolling.get(el.id)!;
-        let pip = 1 + Math.floor(Math.random() * 6);
-        if (pip === cur) pip = (pip % 6) + 1;
-        state.rolling.set(el.id, pip);
-        invalidate();
-      }
-      requestAnimationFrame(spin);
-    };
-    invalidate();
-    requestAnimationFrame(spin);
-    let face = el.face;
-    for (let tries = 0; tries < 4; tries++) {
-      const pick = rollFace(role, face);
-      if (!pick) break;
-      if (await loadFace(pick.id)) { face = pick.id; break; }
-    }
-    // a roll that came back instantly still shows its spin
-    const wait = 450 - (performance.now() - started);
-    if (wait > 0) await new Promise((r) => setTimeout(r, wait));
-    state.rolling.delete(el.id);
-    const live = store.doc.elements.find((e) => e.id === el.id);
-    if (!live || live.kind !== 'text' || face === live.face) { invalidate(); return; }
-    // the new face has its own metrics: re-measure the box like an edit would
-    const { w, h } = fitBox(live.text, boxFamily({ font: live.font, face }), live.fontSize, live);
-    store.updateText(
-      live.id,
-      { text: live.text, w: live.w, h: live.h, face: live.face ?? null },
-      { text: live.text, w, h, face },
-    );
-    invalidate();
-  }
-
-  function addTextFromString(text: string, style?: { font: string; face?: string; fontSize?: number; color?: string }) {
-    const wBox = 220;
-    const font = style?.font ?? state.font, face = style?.face;
-    const fontSize = style?.fontSize ?? state.textSize;
-    const { w, h } = fitBox(text, boxFamily({ font, face }), fontSize, { auto: true, wrapW: wBox, w: wBox, h: 0 });
-    const el: Element = {
-      id: uid('tx'),
-      kind: 'text',
-      x: camera.x - w / 2,
-      y: camera.y - h / 2,
-      w,
-      h,
-      auto: true,
-      wrapW: wBox,
-      color: style?.color ?? state.color,
-      fontSize,
-      font,
-      face,
-      text,
-      frame: state.activeFrameId ?? undefined,
-      alayer: state.activeFrameId ? state.activeLayerId ?? undefined : undefined,
-    };
-    store.addElement(el);
-    state.selection = new Set([el.id]);
-    state.tool = 'cursor';
-    state.onToolChange();
-    toast('Pasted text');
-    invalidate();
-  }
-
-  /** Smart paste: image from system clipboard → image element; plain text →
-   * textbox; zine content (ours) → elements/area. Falls back to the internal
-   * clipboard when the system one is unreadable. */
-  async function pasteSmart() {
-    try {
-      if (navigator.clipboard?.read) {
-        const items = await navigator.clipboard.read();
-        for (const it of items) {
-          const imgType = it.types.find((t) => t.startsWith('image/'));
-          if (imgType) {
-            const blob = await it.getType(imgType);
-            const fr = new FileReader();
-            fr.onload = () => addImageFromDataURL(fr.result as string);
-            fr.readAsDataURL(blob);
-            return;
-          }
-          if (it.types.includes('text/html')) {
-            // text copied out of a text editor: a new box in the source's style
-            const got = clipboardToMarkdown(await (await it.getType('text/html')).text());
-            if (got && got.md.trim()) { addTextFromString(got.md, got.style); return; }
-          }
-        }
-      }
-      const txt = await navigator.clipboard?.readText?.();
-      if (txt && txt.trim()) {
-        try {
-          const p = JSON.parse(txt);
-          if (p && p.app === 'infinizine-clip') {
-            memClip = txt;
-            try { localStorage.setItem(CLIP_KEY, txt); } catch { /* ignore */ }
-            pasteClipboard();
-            toast('Pasted');
-            return;
-          }
-        } catch { /* not ours — plain text */ }
-        addTextFromString(txt);
-        return;
-      }
-    } catch { /* clipboard unreadable (permissions) — fall back */ }
-    const had = memClip !== null ||
-      (() => { try { return !!localStorage.getItem(CLIP_KEY); } catch { return false; } })();
-    if (had) {
-      pasteClipboard();
-      toast('Pasted');
-    } else {
-      toast('Clipboard is empty');
-    }
-  }
-
-  function pasteClipboard() {
-    let raw: string | null = memClip;
-    if (!raw) {
-      try {
-        raw = localStorage.getItem(CLIP_KEY);
-      } catch { /* ignore */ }
-    }
-    if (!raw) return;
-    let payload: {
-      app?: string;
-      kind?: string;
-      elements?: Element[];
-      area?: AnimArea;
-    };
-    try {
-      payload = JSON.parse(raw);
-    } catch {
-      return;
-    }
-    if (payload.app !== 'infinizine-clip' || !payload.elements) return;
-
-    // paste centered on the current view, slightly offset
-    let minX = Infinity, minY = Infinity, maxX = -Infinity, maxY = -Infinity;
-    const grow = (x: number, y: number) => {
-      minX = Math.min(minX, x); minY = Math.min(minY, y);
-      maxX = Math.max(maxX, x); maxY = Math.max(maxY, y);
-    };
-    for (const el of payload.elements) {
-      if (el.kind === 'text' || el.kind === 'image') {
-        grow(el.x, el.y);
-        grow(el.x + el.w, el.y + el.h);
-      } else {
-        for (const pt of el.points) grow(pt.x, pt.y);
-      }
-    }
-    if (payload.kind === 'area' && payload.area) {
-      grow(payload.area.x, payload.area.y);
-      grow(payload.area.x + payload.area.w, payload.area.y + payload.area.h);
-    }
-    if (minX === Infinity) { minX = 0; minY = 0; maxX = 0; maxY = 0; }
-    const dx = camera.x - (minX + maxX) / 2 + 20;
-    const dy = camera.y - (minY + maxY) / 2 + 20;
-
-    if (payload.kind === 'area' && payload.area) {
-      // remap every id so the pasted area is fully independent
-      const area = structuredClone(payload.area) as AnimArea;
-      const idMap = new Map<string, string>();
-      const remap = (old: string) => {
-        let n = idMap.get(old);
-        if (!n) { n = uid('cp'); idMap.set(old, n); }
-        return n;
-      };
-      area.id = remap(area.id);
-      area.x += dx; area.y += dy;
-      for (const l of area.layers) {
-        l.id = remap(l.id);
-        l.frames = l.frames.map((f) => ({ ...f, id: remap(f.id) }));
-      }
-      const els = payload.elements.map((el) => {
-        const c = structuredClone(el) as Element;
-        c.id = uid('cp');
-        translateElement(c, dx, dy);
-        if (c.frame) c.frame = remap(c.frame);
-        if (c.alayer) c.alayer = remap(c.alayer);
-        if (c.kind === 'stroke' && c.area) c.area = remap(c.area);
-        return c;
-      });
-      store.addAreaWithContent(area, els);
-      state.selection.clear();
-      state.onAnimOpen(area); // activate the pasted area so it can be moved right away
-    } else {
-      const els = payload.elements.map((el) => {
-        const c = structuredClone(el) as Element;
-        c.id = uid('cp');
-        translateElement(c, dx, dy);
-        // plain-element pastes drop animation ties; retag to the open frame if any
-        c.frame = state.activeFrameId ?? undefined;
-        c.alayer = state.activeFrameId ? state.activeLayerId ?? undefined : undefined;
-        if (c.kind === 'stroke') {
-          c.area = undefined;
-          c.animStart = undefined;
-          c.animLife = undefined;
-          c.animTaper = undefined;
-        }
-        return c;
-      });
-      store.addElements(els);
-      state.selection = new Set(els.map((el) => el.id));
-      // land in the cursor tool so the pasted elements can be moved immediately
-      state.tool = 'cursor';
-      state.onToolChange();
-    }
-    try { localStorage.setItem(CLIP_PENDING_KEY, '0'); } catch { /* ignore */ }
-    invalidate();
-  }
 
   let dropCache: (id: string) => void = () => {};
   // live mutations of text/image boxes (resize previews) aren't store changes:
   // the renderer's static layer must be told to rebuild so the preview shows
   const invalidateStatic = () => { dropCache('*'); invalidate(); };
+  const clip = createClipboard(store, state, camera, invalidate);
   const api = {
     setDropCache(fn: (id: string) => void) { dropCache = fn; },
-    copySelection,
-    cutSelection,
-    pasteSmart,
+    copySelection: clip.copySelection,
+    cutSelection: clip.cutSelection,
+    pasteSmart: clip.pasteSmart,
   };
 
   canvas.addEventListener('pointerdown', (e) => {
@@ -1575,6 +1098,8 @@ export function attachInput(
         state.lasso = null;
         drawingPointer = null;
         panLast = null;
+        panStart = null; // a two-finger gesture is never a one-finger tap (no eraser flip, no select)
+        fingerTap = { t: 0, x: 0, y: 0 };
         const [a, b] = [...touches.values()];
         pinchDist = Math.hypot(a.x - b.x, a.y - b.y);
         pinchMid = { x: (a.x + b.x) / 2, y: (a.y + b.y) / 2 };
@@ -1592,19 +1117,10 @@ export function attachInput(
         return;
       }
       if (!isDrawPointer(e)) {
-        // pencil users: double-tap the canvas with one finger to flip eraser/draw
-        if (state.fingerMode === 'pan' && state.penDetected && !state.presenting && touches.size === 1) {
-          const now = performance.now();
-          if (
-            now - fingerTap.t < 300 &&
-            Math.hypot(e.clientX - fingerTap.x, e.clientY - fingerTap.y) < 30
-          ) {
-            state.tool = state.tool === 'eraser' ? state.lastDrawTool : 'eraser';
-            state.onToolChange();
-            fingerTap = { t: 0, x: 0, y: 0 };
-          } else {
-            fingerTap = { t: now, x: e.clientX, y: e.clientY };
-          }
+        // a finger works the canvas chrome too: grabbers, area / page labels and borders
+        if (state.fingerMode === 'pan' && !state.presenting && touches.size === 1 && startHandleAction(e, toWorld(e))) {
+          drawingPointer = e.pointerId;
+          return;
         }
         if (state.fingerMode === 'select' && !state.presenting) {
           // one finger selects (cursor semantics); two fingers pan/zoom
@@ -1626,142 +1142,26 @@ export function attachInput(
   });
 
   canvas.addEventListener('pointermove', (e) => {
-    // hover tracking for textbox move handles + cursor feedback (mouse only, not while dragging)
+    // hover tracking for box/area/page handles + cursor feedback (mouse only, not while dragging)
     if (e.pointerType === 'mouse' && e.buttons === 0 && !state.presenting) {
-      const w = toWorld(e);
-      const z = camera.zoom;
-      let hover: string | null = null;
-      let cursor = '';
-      for (const el of [...store.doc.elements].reverse()) {
-        if (el.kind !== 'text' || !frameEditable(el, state)) continue;
-        const hr = textHandleRect(el, z);
-        const inHandle = w.x >= hr.x && w.x <= hr.x + hr.s && w.y >= hr.y && w.y <= hr.y + hr.s;
-        const inDel = inRect(w, deleteHandleRect(el.x, el.y, el.w, z));
-        const inDice = inRect(w, diceHandleRect(el.x, el.y, el.w, z)) || inRect(w, copyStyleHandleRect(el.x, el.y, el.w, z)) || (state.stylePasteFor(el) && inRect(w, pasteStyleHandleRect(el.x, el.y, el.w, z)));
-        const inCopy = inRect(w, copyHandleRect(el.x, el.y, z));
-        const inBox = w.x >= el.x && w.x <= el.x + el.w && w.y >= el.y && w.y <= el.y + el.h;
-        // resize handles straddle the border: their outer half must keep the box hovered
-        const r = 12 / z;
-        const nearResize =
-          Math.hypot(w.x - (el.x + el.w), w.y - (el.y + el.h)) < r ||
-          (Math.abs(w.y - (el.y + el.h)) < r && Math.abs(w.x - (el.x + el.w / 2)) < r) ||
-          (Math.abs(w.y - (el.y + el.h / 2)) < r && (Math.abs(w.x - el.x) < r || Math.abs(w.x - (el.x + el.w)) < r));
-        if (inHandle || inBox || inDel || inDice || inCopy || nearResize) {
-          hover = el.id;
-          if (inHandle) cursor = 'grab';
-          if (inCopy) cursor = 'copy';
-          if (inDel || inDice) cursor = 'pointer';
-          if (Math.hypot(w.x - (el.x + el.w), w.y - (el.y + el.h)) < r) cursor = 'nwse-resize';
-          else if (Math.abs(w.y - (el.y + el.h)) < r && Math.abs(w.x - (el.x + el.w / 2)) < r) cursor = 'ns-resize';
-          else if (Math.abs(w.y - (el.y + el.h / 2)) < r &&
-            (Math.abs(w.x - el.x) < r || Math.abs(w.x - (el.x + el.w)) < r)) cursor = 'ew-resize';
-          break;
-        }
-      }
-      // image hover + handle cursors
-      let hoverImage: string | null = null;
-      if (!cursor) {
-        for (const el of [...store.doc.elements].reverse()) {
-          if (el.kind !== 'image' || !frameEditable(el, state)) continue;
-          const r = 12 / z;
-          const inBox = w.x >= el.x && w.x <= el.x + el.w && w.y >= el.y && w.y <= el.y + el.h;
-          const inMove = inRect(w, moveHandleRect(el.x, el.y, z));
-          const inCopy = inRect(w, copyHandleRect(el.x, el.y, z));
-          const inDel = inRect(w, deleteHandleRect(el.x, el.y, el.w, z));
-          const nearResize =
-            Math.hypot(w.x - (el.x + el.w), w.y - (el.y + el.h)) < r ||
-            (Math.abs(w.y - (el.y + el.h)) < r && Math.abs(w.x - (el.x + el.w / 2)) < r) ||
-            (Math.abs(w.y - (el.y + el.h / 2)) < r && (Math.abs(w.x - el.x) < r || Math.abs(w.x - (el.x + el.w)) < r));
-          if (inBox || inMove || inCopy || inDel || nearResize) {
-            hoverImage = el.id;
-            if (inMove) cursor = 'grab';
-            else if (inCopy) cursor = 'copy';
-            else if (inDel) cursor = 'pointer';
-            else if (Math.hypot(w.x - (el.x + el.w), w.y - (el.y + el.h)) < r) cursor = 'nwse-resize';
-            else if (Math.abs(w.y - (el.y + el.h)) < r && Math.abs(w.x - (el.x + el.w / 2)) < r) cursor = 'ns-resize';
-            else if (Math.abs(w.y - (el.y + el.h / 2)) < r &&
-              (Math.abs(w.x - el.x) < r || Math.abs(w.x - (el.x + el.w)) < r)) cursor = 'ew-resize';
-            break;
-          }
-        }
-      }
-      if (hoverImage !== state.hoverImage) {
-        state.hoverImage = hoverImage;
-        invalidate();
-      }
-      // area handles hover
-      let hoverArea: string | null = null;
-      if (!cursor) {
-        for (const a of [...store.doc.areas].reverse()) {
-          const r = 12 / z;
-          const mh = moveHandleRect(a.x, a.y, z);
-          const nearLabel = w.x >= a.x && w.x <= a.x + 160 / z && w.y >= a.y - 26 / z && w.y <= a.y;
-          const inMove = w.x >= mh.x && w.x <= mh.x + mh.s && w.y >= mh.y && w.y <= mh.y + mh.s;
-          const inMoveAll = inRect(w, moveAllHandleRect(a.x, a.y, z));
-          const inDel = inRect(w, deleteHandleRect(a.x, a.y, a.w, z));
-          const nearEdge =
-            (Math.abs(w.x - a.x) < r || Math.abs(w.x - (a.x + a.w)) < r) &&
-              w.y > a.y - r && w.y < a.y + a.h + r ||
-            (Math.abs(w.y - a.y) < r || Math.abs(w.y - (a.y + a.h)) < r) &&
-              w.x > a.x - r && w.x < a.x + a.w + r;
-          if (nearLabel || inMove || inMoveAll || inDel || nearEdge || state.activeAreaId === a.id) {
-            if (nearLabel || inMove || inMoveAll || inDel || nearEdge) hoverArea = a.id;
-            if (hoverArea || state.activeAreaId === a.id) {
-              if (inMove || inMoveAll) cursor = 'grab';
-              else if (inDel) cursor = 'pointer';
-              else if (Math.hypot(w.x - (a.x + a.w), w.y - (a.y + a.h)) < r) cursor = 'nwse-resize';
-              else if (Math.abs(w.y - (a.y + a.h)) < r && Math.abs(w.x - (a.x + a.w / 2)) < r) cursor = 'ns-resize';
-              else if (Math.abs(w.y - (a.y + a.h / 2)) < r &&
-                (Math.abs(w.x - a.x) < r || Math.abs(w.x - (a.x + a.w)) < r)) cursor = 'ew-resize';
-              else if (nearLabel) cursor = 'pointer'; // tap opens the timeline
-            }
-            if (hoverArea) break;
-          }
-        }
-      }
-      if (hoverArea !== state.hoverArea) {
-        state.hoverArea = hoverArea;
-        invalidate();
-      }
-      // page hover: near the label, the grabbers, or the border
-      let hoverPage: string | null = null;
-      if (!cursor && !hoverArea) {
-        for (const p of [...store.doc.pages].reverse()) {
-          const r = 10 / z;
-          const mh = moveHandleRect(p.x, p.y, z);
-          const mha = moveAllHandleRect(p.x, p.y, z);
-          const nearLabel = w.x >= p.x && w.x <= p.x + 140 / z && w.y >= p.y - 26 / z && w.y <= p.y;
-          const inGrab = inRect(w, mh) || inRect(w, mha);
-          const inEye = inRect(w, eyeHandleRect(p.x, p.y, z));
-          const nearEdge =
-            ((Math.abs(w.x - p.x) < r || Math.abs(w.x - (p.x + p.w)) < r) &&
-              w.y > p.y - r && w.y < p.y + p.h + r) ||
-            ((Math.abs(w.y - p.y) < r || Math.abs(w.y - (p.y + p.h)) < r) &&
-              w.x > p.x - r && w.x < p.x + p.w + r);
-          if (nearLabel || inGrab || inEye || nearEdge) {
-            hoverPage = p.id;
-            if (inGrab) cursor = 'grab';
-            else if (inEye || nearLabel) cursor = 'pointer';
-            break;
-          }
-        }
-      }
-      if (hoverPage !== state.hoverPage) {
-        state.hoverPage = hoverPage;
-        invalidate();
-      }
-      // anything selected under the cursor is grabbable
-      if (!cursor && state.selection.size && hitsSelection(w)) cursor = 'grab';
-      canvas.style.cursor = cursor || state.toolCursor;
-      if (hover !== state.hoverText) {
-        state.hoverText = hover;
-        invalidate();
-      }
+      const h = hoverAt(toWorld(e), camera.zoom, store, state);
+      let changed = false;
+      if (h.image !== state.hoverImage) { state.hoverImage = h.image; changed = true; }
+      if (h.area !== state.hoverArea) { state.hoverArea = h.area; changed = true; }
+      if (h.page !== state.hoverPage) { state.hoverPage = h.page; changed = true; }
+      if (h.text !== state.hoverText) { state.hoverText = h.text; changed = true; }
+      canvas.style.cursor = h.cursor || state.toolCursor;
+      if (changed) invalidate();
     }
     if (e.pointerType === 'mouse' && e.buttons !== 0 && (dragSelection || dragPage)) {
       canvas.style.cursor = 'grabbing';
     }
     if (e.pointerType === 'pen') lastPenAt = performance.now();
+    // no cursor on glass: the eraser's size shows as a ring under a hovering or erasing pen
+    if (e.pointerType !== 'mouse' && state.tool === 'eraser' && !state.presenting && drawingPointer === null) {
+      state.eraserAt = toWorld(e);
+      invalidate();
+    }
     if (e.pointerType === 'touch' && touches.has(e.pointerId)) {
       const ti = touches.get(e.pointerId)!;
       ti.x = e.clientX; ti.y = e.clientY;
@@ -1821,16 +1221,25 @@ export function attachInput(
         invalidate();
       }
     }
-    // a motionless one-finger tap in pan mode still selects what's under it
+    // a motionless one-finger tap in pan mode still selects what's under it;
+    // two such taps in a row (pencil users) flip between the eraser and the last ink tool
     if (e.pointerType === 'touch' && panLast && panStart && !state.presenting) {
       const moved = Math.hypot(e.clientX - panStart.x, e.clientY - panStart.y);
-      if (moved < 10 && performance.now() - panStart.t < 300) {
+      const now = performance.now();
+      if (moved < 10 && now - panStart.t < 300) {
         const w = toWorld(e);
-        const pg = pageLabelAt(w);
-        if (pg) { state.onPageMenu(pg, e.clientX, e.clientY); panStart = null; return; }
         const editable = store.doc.elements.filter((el) => frameEditable(el, state));
         const hit = [...editable].reverse().find((el) => hitElement(el, w.x, w.y, 8 / camera.zoom));
         state.selection = hit ? new Set([hit.id]) : new Set();
+        if (state.selectedPageId) state.selectedPageId = null;
+        if (state.penDetected && now - fingerTap.t < 350 && Math.hypot(e.clientX - fingerTap.x, e.clientY - fingerTap.y) < 30) {
+          state.tool = state.tool === 'eraser' ? state.lastDrawTool : 'eraser';
+          state.onToolChange();
+          toast(state.tool === 'eraser' ? 'Eraser' : 'Ink');
+          fingerTap = { t: 0, x: 0, y: 0 };
+        } else {
+          fingerTap = { t: now, x: e.clientX, y: e.clientY };
+        }
         invalidate();
       }
     }
@@ -1933,17 +1342,17 @@ export function attachInput(
     }
     const mod = e.metaKey || e.ctrlKey;
     if (mod && e.key === 'c') {
-      if (copySelection()) e.preventDefault();
+      if (clip.copySelection()) e.preventDefault();
       return;
     }
     if (mod && e.key === 'x') {
       e.preventDefault();
-      cutSelection();
+      clip.cutSelection();
       return;
     }
     if (mod && e.key === 'v') {
       e.preventDefault();
-      void pasteSmart();
+      void clip.pasteSmart();
       return;
     }
     if (mod && e.key === 'z') {
@@ -1962,7 +1371,7 @@ export function attachInput(
     if (mod) return;
     const map: Record<string, Tool> = {
       p: 'pen', f: 'fineliner', m: 'marker', e: 'eraser',
-      b: 'pencil', v: 'cursor', s: 'lasso-select', g: 'lasso-fill', t: 'text', a: 'anim', h: 'hand',
+      b: 'pencil', v: 'cursor', s: 'lasso-select', g: 'lasso-fill', o: 'lasso-blob', t: 'text', a: 'anim', h: 'hand',
     };
     const tool = map[e.key.toLowerCase()];
     if (tool) {

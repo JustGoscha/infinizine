@@ -3,9 +3,13 @@
 
 import { Camera, baseZoom } from './camera';
 import { AnimArea, Element, FillShape, Page, Stroke, StrokePoint, TextBox } from './types';
-import { strokeOutline, pencilOutlines, markerPaths, outlineToPath, elementBBox, bboxIntersects, densify, filterPressure, easeP, easeTilt, LiveDenoiser, LiveOutliner, hasPressure, denoiseClosed, pressure, BBox } from './geometry';
+import { elementBBox, bboxIntersects, LiveDenoiser, denoiseClosed, closeBlob, BBox } from './geometry';
+import { strokeOutline, pencilOutlines, markerPaths, outlineToPath, densify, filterPressure, LiveOutliner, hasPressure } from './outline';
+import { easeP, easeTilt, pressure } from './pressure';
 import { layoutText, fontFor, segWidth, LINE_HEIGHT, boxFamily, segFamily, wrapWidth } from './text';
-import { moveHandleRect, moveAllHandleRect, deleteHandleRect, eyeHandleRect, diceHandleRect, copyHandleRect, copyStyleHandleRect, pasteStyleHandleRect, type InputState } from './input';
+import { moveHandleRect, moveAllHandleRect, deleteHandleRect, eyeHandleRect, diceHandleRect, copyHandleRect, copyStyleHandleRect, pasteStyleHandleRect } from './handles';
+import { FILL_TOOLS, type InputState } from './state';
+import { animClock } from './clock';
 import { Store, ChangeInfo } from './store';
 import { formatLabel } from './formats';
 import { patternTile, patternTileSize, patternCellSize, cellPath, motifPath, isPixelPattern, PIXEL_CELL } from './patterns';
@@ -66,6 +70,10 @@ export class Renderer {
   }
   private liveSmooth = new LiveDenoiser(); // vector live stroke
   private liveOutliner = new LiveOutliner(); // chunked outline of the live stroke
+  private lastInkAt = -1e9; // wall-clock ms of the last frame with a live stroke / lasso
+  private pausedClock = false; // this renderer holds the animation clock paused
+  /** the deselected areas, frozen at the paused clock, as one bitmap (built once per pause + camera) */
+  private animBake: { canvas: HTMLCanvasElement; key: string } = { canvas: document.createElement('canvas'), key: '' };
   // performance readout: input→paint latency (event timestamp → end of the frame that showed it), live cost, frame cost
   private perfLat: number[] = [];
   private perfLive = 0;
@@ -86,31 +94,45 @@ export class Renderer {
   ) {
     this.ctx = canvas.getContext('2d')!;
     const loop = () => {
-      // fps debug: rAF cadence — drops when the main thread struggles
-      this.fpsFrames++;
-      const t = performance.now();
-      if (t - this.fpsT >= 500) {
-        this.fps = Math.round((this.fpsFrames * 1000) / (t - this.fpsT));
-        this.fpsFrames = 0;
-        this.fpsT = t;
-      }
-      // areas animate continuously — but only the ones actually in view cost frames
-      const playing = this.anyAreaInView();
-      if (this.dirty || this.input.live || playing) {
-        this.dirty = false;
-        try {
-          this.draw();
-        } catch (err) {
-          // keep the loop alive: drop the stroke being drawn (the usual culprit),
-          // flush caches, and show what happened
-          this.input.live = null;
-          this.clearCache();
-          reportCrash('render', err);
-        }
-      }
+      this.frame(performance.now());
       requestAnimationFrame(loop);
     };
     requestAnimationFrame(loop);
+  }
+
+  /** One tick of the render loop (rAF-driven; callable directly for tests). */
+  frame(t: number) {
+    // fps debug: rAF cadence — drops when the main thread struggles
+    this.fpsFrames++;
+    if (t - this.fpsT >= 500) {
+      this.fps = Math.round((this.fpsFrames * 1000) / (t - this.fpsT));
+      this.fpsFrames = 0;
+      this.fpsT = t;
+    }
+    // Playback pauses while ink is being laid down and for a moment after, unless the
+    // edited area is deliberately playing (watching / recording live lines): the pen gets
+    // the whole frame budget and the frozen areas are blitted from a bitmap (see draw).
+    const inking = !!this.input.live || !!this.input.lasso;
+    if (inking) this.lastInkAt = t;
+    // (the clock is shared; only the renderer that paused it resumes it — the playground's
+    // scratch renderer must not wake it up while the main canvas is being inked)
+    const wantPause = !this.input.playingAreas && (inking || t - this.lastInkAt < 200) && this.anyAreaInView();
+    if (wantPause && !animClock.paused) { animClock.pause(); this.pausedClock = true; }
+    else if (!wantPause && this.pausedClock) { this.pausedClock = false; animClock.resume(); this.dirty = true; }
+    // areas animate continuously — but only the ones actually in view cost frames
+    const playing = !animClock.paused && this.anyAreaInView();
+    if (this.dirty || this.input.live || playing) {
+      this.dirty = false;
+      try {
+        this.draw();
+      } catch (err) {
+        // keep the loop alive: drop the stroke being drawn (the usual culprit),
+        // flush caches, and show what happened
+        this.input.live = null;
+        this.clearCache();
+        reportCrash('render', err);
+      }
+    }
   }
 
   invalidate() { this.dirty = true; }
@@ -133,6 +155,7 @@ export class Renderer {
   /** Document changed: drop only the touched elements' caches; keep the static
    * layer when the change is a fresh append we can paint on top of. */
   docChanged(info?: ChangeInfo) {
+    this.animBake.key = ''; // frozen areas may have changed
     if (!info) { this.clearCache(); this.invalidate(); return; }
     for (const id of info.ids) { this.cache.delete(id); this.pencilCache.delete(id); this.stampCache.delete(id); }
     const st = this.staticLayer;
@@ -797,7 +820,9 @@ export class Renderer {
   }
 
   private draw() {
-    const { canvas, ctx, camera } = this;
+    const { canvas, camera } = this;
+    const mainCtx = this.ctx;
+    let ctx = mainCtx; // closures below draw through this; swapped to the bake bitmap while freezing areas
     const dpr = window.devicePixelRatio || 1;
     const vw = canvas.clientWidth, vh = canvas.clientHeight;
     if (!vw || !vh) return; // hidden (e.g. the playground's scratch canvas while closed)
@@ -834,7 +859,7 @@ export class Renderer {
         const offX = (vw / 2) * (1 - sc) + (c.x - camera.x) * camera.zoom;
         const offY = (vh / 2) * (1 - sc) + (c.y - camera.y) * camera.zoom;
         ctx.drawImage(st.canvas, offX, offY, vw * sc, vh * sc);
-        blitFront = () => { ctx.save(); ctx.setTransform(dpr, 0, 0, dpr, 0, 0); ctx.drawImage(st.front, offX, offY, vw * sc, vh * sc); ctx.restore(); };
+        blitFront = () => { ctx.save(); ctx.globalAlpha = 1; ctx.setTransform(dpr, 0, 0, dpr, 0, 0); ctx.drawImage(st.front, offX, offY, vw * sc, vh * sc); ctx.restore(); };
         this.dirty = true; // keep coming back until the gesture ends and we can rebuild
       } else {
         if (stale) this.buildStatic(vw, vh, dpr);
@@ -842,7 +867,8 @@ export class Renderer {
           ctx.setTransform(1, 0, 0, 1, 0, 0);
           ctx.drawImage(st.canvas, 0, 0);
           ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
-          blitFront = () => { ctx.save(); ctx.setTransform(1, 0, 0, 1, 0, 0); ctx.drawImage(st.front, 0, 0); ctx.restore(); };
+          // (alpha reset: a live back-layer marker leaves the context at its 0.45 and would fade the whole front layer)
+          blitFront = () => { ctx.save(); ctx.globalAlpha = 1; ctx.setTransform(1, 0, 0, 1, 0, 0); ctx.drawImage(st.front, 0, 0); ctx.restore(); };
         }
       }
     } else {
@@ -949,7 +975,8 @@ export class Renderer {
     // Animation: each layer runs its own timeline. Deselected areas always play;
     // in the edited area, the active layer holds on the active frame and the other
     // layers hold at the same tick position.
-    const now = performance.now() / 1000;
+    const now = animClock.now(); // playback time (frozen while inking)
+    const realNow = performance.now() / 1000; // UI feedback (blink) keeps running
     const frameVis = new Map<string, boolean>();
     const areaTick = new Map<string, { tick: number; rawTick: number; total: number; loop: boolean; fps: number }>();
     // standard onion colors: previous frames red, next frame green
@@ -1120,80 +1147,112 @@ export class Renderer {
     }
 
     // Animated elements: per area, per layer (bottom first); frame ownership decides the layer
-    for (const area of this.store.doc.areas) {
-      if (!this.areaInView(area, view)) continue; // off-screen areas cost nothing
-      dimFactor = focusAreaId && area.id !== focusAreaId ? 0.3 : 1;
-      if (area.clip) {
-        ctx.save();
-        const cp = new Path2D();
-        cp.rect(area.x, area.y, area.w, area.h);
-        ctx.clip(cp);
-      }
-      for (const layer of area.layers) {
-        if (layer.hidden) continue;
-        if (layer.kind === 'live' ? area.hideLive : area.hideFrames) continue;
-        const fids = new Set(layer.frames.map((f) => f.id));
-        for (const [fid, onion] of onionFrames) {
-          if (!fids.has(fid)) continue;
+    const paintAreas = (only: (area: AnimArea) => boolean) => {
+      for (const area of this.store.doc.areas) {
+        if (!only(area) || !this.areaInView(area, view)) continue; // off-screen areas cost nothing
+        dimFactor = focusAreaId && area.id !== focusAreaId ? 0.3 : 1;
+        if (area.clip) {
           ctx.save();
-          ctx.globalAlpha = onion.alpha;
-          ctx.fillStyle = onion.color;
+          const cp = new Path2D();
+          cp.rect(area.x, area.y, area.w, area.h);
+          ctx.clip(cp);
+        }
+        for (const layer of area.layers) {
+          if (layer.hidden) continue;
+          if (layer.kind === 'live' ? area.hideLive : area.hideFrames) continue;
+          const fids = new Set(layer.frames.map((f) => f.id));
+          for (const [fid, onion] of onionFrames) {
+            if (!fids.has(fid)) continue;
+            ctx.save();
+            ctx.globalAlpha = onion.alpha;
+            ctx.fillStyle = onion.color;
+            for (const el of visible) {
+              if (el.frame === fid) {
+                const cached = el.kind === 'text' || el.kind === 'image' ? null : this.entry(el);
+                if (cached) ctx.fill(cached.path);
+              }
+            }
+            ctx.restore();
+          }
           for (const el of visible) {
-            if (el.frame === fid) {
-              const cached = el.kind === 'text' || el.kind === 'image' ? null : this.entry(el);
-              if (cached) ctx.fill(cached.path);
+            if (el.frame && fids.has(el.frame) && frameVis.get(el.frame) === true) drawEl(el);
+          }
+          // live ink is motion — hidden while editing unless explicitly shown;
+          // the ACTIVE live layer shows its strokes in full so you can identify them
+          const editingArea =
+            area.id === this.input.activeAreaId && !this.input.playingAreas && !this.input.presenting;
+          const activeLive = editingArea && layer.kind === 'live' && layer.id === this.input.activeLayerId;
+          const tk = editingArea && !this.input.showLiveInk && !activeLive ? undefined : areaTick.get(area.id);
+          // selection feedback: recently-picked live layer blinks hard
+          const prevDim = dimFactor;
+          let blinkPulse = 0;
+          if (this.input.blinkLayerId === layer.id) {
+            const bt = realNow - this.input.blinkStart;
+            if (bt < 1.4) {
+              blinkPulse = Math.abs(Math.sin(bt * Math.PI * 2.5));
+              dimFactor = prevDim * (0.05 + 0.95 * blinkPulse);
+              this.dirty = true; // keep animating the blink
+            } else {
+              this.input.blinkLayerId = null;
             }
           }
-          ctx.restore();
-        }
-        for (const el of visible) {
-          if (el.frame && fids.has(el.frame) && frameVis.get(el.frame) === true) drawEl(el);
-        }
-        // live ink is motion — hidden while editing unless explicitly shown;
-        // the ACTIVE live layer shows its strokes in full so you can identify them
-        const editingArea =
-          area.id === this.input.activeAreaId && !this.input.playingAreas && !this.input.presenting;
-        const activeLive = editingArea && layer.kind === 'live' && layer.id === this.input.activeLayerId;
-        const tk = editingArea && !this.input.showLiveInk && !activeLive ? undefined : areaTick.get(area.id);
-        // selection feedback: recently-picked live layer blinks hard
-        const prevDim = dimFactor;
-        let blinkPulse = 0;
-        if (this.input.blinkLayerId === layer.id) {
-          const bt = now - this.input.blinkStart;
-          if (bt < 1.4) {
-            blinkPulse = Math.abs(Math.sin(bt * Math.PI * 2.5));
-            dimFactor = prevDim * (0.05 + 0.95 * blinkPulse);
-            this.dirty = true; // keep animating the blink
-          } else {
-            this.input.blinkLayerId = null;
-          }
-        }
-        if (activeLive || tk) {
-          const looping = layer.loop !== false;
-          for (const el of visible) {
-            if (
-              el.kind === 'stroke' && el.area === area.id &&
-              (el.alayer === layer.id || (!el.alayer && layer === area.layers[0]))
-            ) {
-              if (activeLive) drawEl(el);
-              else if (tk) drawTimed(el, tk, looping);
-              if (blinkPulse > 0) {
-                // pulsing accent outline so the pick is unmissable
-                ctx.save();
-                ctx.globalAlpha = blinkPulse;
-                ctx.strokeStyle = '#E8590C';
-                ctx.lineWidth = 5 / z;
-                const en = this.entry(el);
-                ctx.stroke(en.core ?? en.path);
-                ctx.restore();
+          if (activeLive || tk) {
+            const looping = layer.loop !== false;
+            for (const el of visible) {
+              if (
+                el.kind === 'stroke' && el.area === area.id &&
+                (el.alayer === layer.id || (!el.alayer && layer === area.layers[0]))
+              ) {
+                if (activeLive) drawEl(el);
+                else if (tk) drawTimed(el, tk, looping);
+                if (blinkPulse > 0) {
+                  // pulsing accent outline so the pick is unmissable
+                  ctx.save();
+                  ctx.globalAlpha = blinkPulse;
+                  ctx.strokeStyle = '#E8590C';
+                  ctx.lineWidth = 5 / z;
+                  const en = this.entry(el);
+                  ctx.stroke(en.core ?? en.path);
+                  ctx.restore();
+                }
               }
             }
           }
+          dimFactor = prevDim;
         }
-        dimFactor = prevDim;
+        if (area.clip) ctx.restore();
+        dimFactor = 1;
       }
-      if (area.clip) ctx.restore();
-      dimFactor = 1;
+    };
+    const isEditing = (area: AnimArea) => area.id === this.input.activeAreaId && !this.input.playingAreas && !this.input.presenting;
+    if (animClock.paused && useStatic) {
+      // frozen: every deselected area comes from one bitmap painted at the pause; only the
+      // edited area (onion skin, dimming, live layer feedback) is painted per frame
+      const bake = this.animBake;
+      const key = [this.staticKey(), animClock.stamp, this.input.hidden.size].join('|');
+      if (bake.key !== key) {
+        const c = bake.canvas;
+        if (c.width !== vw * dpr || c.height !== vh * dpr) { c.width = vw * dpr; c.height = vh * dpr; }
+        const g = c.getContext('2d')!;
+        g.setTransform(dpr, 0, 0, dpr, 0, 0);
+        g.clearRect(0, 0, vw, vh);
+        g.save();
+        g.translate(vw / 2, vh / 2);
+        g.scale(z, z);
+        g.translate(-camera.x, -camera.y);
+        ctx = g; this.ctx = g;
+        try { paintAreas((a) => !isEditing(a)); } finally { ctx = mainCtx; this.ctx = mainCtx; }
+        g.restore();
+        bake.key = key;
+      }
+      ctx.save();
+      ctx.globalAlpha = 1;
+      ctx.setTransform(1, 0, 0, 1, 0, 0);
+      ctx.drawImage(bake.canvas, 0, 0);
+      ctx.restore();
+      paintAreas(isEditing);
+    } else {
+      paintAreas(() => true);
     }
     if (live && live.layer !== 'back') drawLiveTimed();
     ctx.globalAlpha = 1;
@@ -1202,7 +1261,15 @@ export class Renderer {
     if (!presenting) {
       for (const page of this.store.doc.pages) {
         this.drawPage(page, z);
-        if (this.input.hoverPage === page.id) {
+        const pageSelected = this.input.selectedPageId === page.id;
+        if (pageSelected) {
+          ctx.globalAlpha = 0.9;
+          ctx.strokeStyle = '#E8590C';
+          ctx.lineWidth = 2 / z;
+          ctx.strokeRect(page.x, page.y, page.w, page.h);
+          ctx.globalAlpha = 1;
+        }
+        if (this.input.hoverPage === page.id || pageSelected) {
           // outlined grabber: frame only
           const mh = moveHandleRect(page.x, page.y, z);
           ctx.fillStyle = '#FDFCF8';
@@ -1302,16 +1369,17 @@ export class Renderer {
     const lassoRaw = this.input.lasso;
     if (lassoRaw && lassoRaw.length > 1) {
       // preview with the same smoothing the fill gets on commit
-      const lasso = this.input.tool === 'lasso-fill' && lassoRaw.length > 3
-        ? denoiseClosed(lassoRaw, 3 / camera.zoom)
+      const filling = FILL_TOOLS.has(this.input.tool);
+      const lasso = filling && lassoRaw.length > 3
+        ? denoiseClosed(this.input.tool === 'lasso-blob' ? closeBlob(lassoRaw) : lassoRaw, (this.input.tool === 'lasso-blob' ? 5 : 3) / camera.zoom)
         : lassoRaw;
       ctx.beginPath();
       ctx.moveTo(lasso[0].x, lasso[0].y);
       for (const p of lasso) ctx.lineTo(p.x, p.y);
       ctx.setLineDash([6 / z, 5 / z]);
       ctx.lineWidth = 1.5 / z;
-      ctx.strokeStyle = this.input.tool === 'lasso-fill' ? this.input.color : '#E8590C';
-      if (this.input.tool === 'lasso-fill') {
+      ctx.strokeStyle = filling ? this.input.color : '#E8590C';
+      if (filling) {
         ctx.save();
         ctx.globalAlpha = 0.25 * (this.input.fillPattern ? this.input.inkDensity : 1);
         ctx.fillStyle = this.input.fillPattern ? this.fillPattern(this.input.fillPattern, this.input.color) : this.input.color;
@@ -1320,6 +1388,20 @@ export class Renderer {
       }
       ctx.stroke();
       ctx.setLineDash([]);
+    }
+
+    // Eraser size ring under a pen or finger (a mouse has the cursor ring)
+    const er = this.input.eraserAt;
+    if (er && this.input.tool === 'eraser' && !presenting) {
+      const r = this.input.eraserRadius(z);
+      ctx.beginPath();
+      ctx.arc(er.x, er.y, r, 0, Math.PI * 2);
+      ctx.lineWidth = 2.6 / z;
+      ctx.strokeStyle = 'rgba(255,255,255,0.85)';
+      ctx.stroke();
+      ctx.lineWidth = 1.2 / z;
+      ctx.strokeStyle = 'rgba(42,36,26,0.9)';
+      ctx.stroke();
     }
 
     ctx.restore();
