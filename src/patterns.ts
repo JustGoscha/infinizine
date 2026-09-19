@@ -274,7 +274,8 @@ const rnd = (i: number, salt: number) => {
 };
 
 /** Draw one seamless tile of `id` in `color`, `px` pixels square.
- * `preview`: swatch rendering — the solid pixel fill shows a stair-stepped edge so it reads as "pixels", not plain ink. */
+ * `preview`: swatch rendering — the solid pixel fill shows a pixelated disc in the ink colour (top-left of the
+ * tile, which is what a swatch shows) so it reads as "pixels", not plain ink. */
 export function patternTile(id: string, color: string, px: number, preview = false): HTMLCanvasElement {
   const c = document.createElement('canvas');
   c.width = c.height = px;
@@ -288,7 +289,7 @@ export function patternTile(id: string, color: string, px: number, preview = fal
   g.strokeStyle = color;
   const { fam, k } = p;
   let rule = cellRule(id);
-  if (preview && p.fam === 'pixfill') rule = (i, j) => (i >> 1) + (j >> 1) >= PIXEL_TILE_CELLS / 2 + 1; // diagonal pixel edge
+  if (preview && p.fam === 'pixfill') rule = (i, j) => i < 8 && j < 8 && (i - 3.5) ** 2 + (j - 3.5) ** 2 <= 3.9 ** 2; // pixelated disc
   if (rule) {
     // pixel families: the tile is PIXEL_TILE_CELLS² cells of the shared grid
     const cell = PIXEL_CELL;
