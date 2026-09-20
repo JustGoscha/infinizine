@@ -231,6 +231,7 @@ export function attachInput(
   function areaBorderAt(w: { x: number; y: number }): AnimArea | null {
     const r = 10 / camera.zoom;
     for (const a of [...store.doc.areas].reverse()) {
+      if (a.id === state.activeAreaId) continue; // already selected: its handles take over
       const onX = (Math.abs(w.x - a.x) < r || Math.abs(w.x - (a.x + a.w)) < r) && w.y > a.y - r && w.y < a.y + a.h + r;
       const onY = (Math.abs(w.y - a.y) < r || Math.abs(w.y - (a.y + a.h)) < r) && w.x > a.x - r && w.x < a.x + a.w + r;
       if (onX || onY) return a;
@@ -500,13 +501,7 @@ export function attachInput(
         return;
       case 'cursor':
       case 'lasso-select': {
-        // Clicking outside the active anim area deselects it (closes the timeline)
-        if (state.activeAreaId) {
-          const a = store.doc.areas.find((x) => x.id === state.activeAreaId);
-          if (a && (w.x < a.x || w.x > a.x + a.w || w.y < a.y || w.y > a.y + a.h)) {
-            state.onAnimClose();
-          }
-        }
+        // (a tap outside the active anim area deselects it — decided on release, see endAction)
         // Tap directly on a textbox selects it
         const tapped = [...store.doc.elements].reverse().find(
           (el) => el.kind === 'text' && frameEditable(el, state) && hitElement(el, w.x, w.y, 4 / camera.zoom),
@@ -580,6 +575,13 @@ export function attachInput(
     state.selection = new Set(els.map((el) => el.id));
     if (state.hoverText && !state.selection.has(state.hoverText)) state.hoverText = null;
     if (state.hoverImage && !state.selection.has(state.hoverImage)) state.hoverImage = null;
+  }
+
+  /** a tap on nothing outside the active anim area deselects the area (closes its timeline) */
+  function tapOutsideArea(w: { x: number; y: number }) {
+    if (!state.activeAreaId) return;
+    const a = store.doc.areas.find((x) => x.id === state.activeAreaId);
+    if (a && (w.x < a.x || w.x > a.x + a.w || w.y < a.y || w.y > a.y + a.h)) state.onAnimClose();
   }
 
   function hitsSelection(w: { x: number; y: number }): boolean {
@@ -1002,6 +1004,7 @@ export function attachInput(
         // a click: select the topmost element under the cursor
         const hit = [...editable].reverse().find((el) => hitElement(el, m.x, m.y, 6 / camera.zoom));
         state.selection = hit ? new Set([hit.id]) : new Set();
+        if (!hit) tapOutsideArea(m);
       } else {
         const poly = [
           { x: m.x, y: m.y }, { x: m.x + m.w, y: m.y },
@@ -1038,7 +1041,17 @@ export function attachInput(
       const lasso = state.lasso;
       state.lasso = null;
       if (state.tool === 'lasso-select') {
-        state.selection = new Set(elementsInLasso(store.doc.elements, lasso).map((e) => e.id));
+        const editable = store.doc.elements.filter((el) => frameEditable(el, state));
+        let span = 0;
+        for (const p of lasso) span = Math.max(span, Math.abs(p.x - lasso[0].x), Math.abs(p.y - lasso[0].y));
+        if (span < 3 / camera.zoom) {
+          // a tap: select the topmost element under it (a tap on nothing clears, and leaves an area)
+          const hit = [...editable].reverse().find((el) => hitElement(el, lasso[0].x, lasso[0].y, 6 / camera.zoom));
+          state.selection = hit ? new Set([hit.id]) : new Set();
+          if (!hit) tapOutsideArea(lasso[0]);
+        } else {
+          state.selection = new Set(elementsInLasso(editable, lasso).map((e) => e.id));
+        }
       } else if (FILL_TOOLS.has(state.tool) && lasso.length > 2) {
         // blob: the loop closes along a curve that carries the pen's motion on, not a straight cut
         const blob = state.tool === 'lasso-blob';
@@ -1118,19 +1131,31 @@ export function attachInput(
         return;
       }
       if (!isDrawPointer(e)) {
-        // a finger works the canvas chrome too: grabbers, area / page labels and borders
-        if (state.fingerMode === 'pan' && !state.presenting && touches.size === 1 && startHandleAction(e, toWorld(e))) {
-          drawingPointer = e.pointerId;
-          return;
-        }
-        if (state.fingerMode === 'select' && !state.presenting) {
-          // one finger selects (cursor semantics); two fingers pan/zoom
-          drawingPointer = e.pointerId;
-          startAction(e, 'cursor');
-          return;
+        // a palm resting on the glass (wide contact, or landing while the pen works) never
+        // selects, deselects or grabs anything — at most it pans
+        const palm = touches.get(e.pointerId)!.big || now - lastPenAt < PEN_QUIET_MS;
+        if (!palm && !state.presenting && touches.size === 1) {
+          const w = toWorld(e);
+          // a finger works the canvas chrome too: grabbers, area / page labels and borders
+          if (state.fingerMode === 'pan' && startHandleAction(e, w)) {
+            drawingPointer = e.pointerId;
+            return;
+          }
+          // what a finger tap selected, a finger drags: the selection is in move mode
+          if (state.fingerMode === 'pan' && state.selection.size && hitsSelection(w)) {
+            drawingPointer = e.pointerId;
+            startAction(e, 'cursor');
+            return;
+          }
+          if (state.fingerMode === 'select') {
+            // one finger selects (cursor semantics); two fingers pan/zoom
+            drawingPointer = e.pointerId;
+            startAction(e, 'cursor');
+            return;
+          }
         }
         panLast = { x: e.clientX, y: e.clientY };
-        panStart = { x: e.clientX, y: e.clientY, t: performance.now() };
+        panStart = palm ? null : { x: e.clientX, y: e.clientY, t: performance.now() };
         return;
       }
     }

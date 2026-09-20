@@ -77,7 +77,7 @@ export const TOOL_INFO: Record<Tool, { label: string; key: string }> = {
 export const TOOL_GROUPS: { id: string; tools: Tool[] }[] = [
   { id: 'draw', tools: ['pen', 'pencil', 'fineliner', 'marker', 'lasso-fill', 'lasso-blob'] },
   { id: 'eraser', tools: ['eraser'] },
-  { id: 'select', tools: ['cursor', 'lasso-select', 'hand'] },
+  { id: 'select', tools: ['lasso-select', 'cursor', 'hand'] },
   { id: 'text', tools: ['text'] },
   { id: 'anim', tools: ['anim'] },
 ];

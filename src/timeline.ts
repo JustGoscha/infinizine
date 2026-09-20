@@ -74,6 +74,7 @@ export function buildTimeline(state: InputState, store: Store, invalidate: () =>
 
   state.onAnimClose = closeTimeline;
   state.onAnimOpen = (area) => {
+    if (tlAreaId === area.id && !tl.classList.contains('hidden')) { renderTimeline(); return; } // already open: keep the position
     tlAreaId = area.id;
     // restore the remembered dock position (and its body classes)
     document.body.classList.toggle('tl-docked-bottom', tlDock === 'bottom');
