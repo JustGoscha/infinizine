@@ -1973,8 +1973,30 @@ input[type="range"]::-moz-range-thumb { width: 12px; height: 30px; border: none;
   filter: drop-shadow(3px 3px 0 rgba(42, 36, 26, 0.25));
 }
 .rd-icon { fill: none; stroke: var(--ink); stroke-width: 1.8; stroke-linecap: round; stroke-linejoin: round; pointer-events: none; }
-.rd-wedge:hover .rd-shape, .rd-wedge.hot .rd-shape, .rd-wedge:active .rd-shape { fill: var(--ink); }
-.rd-wedge:hover .rd-icon, .rd-wedge.hot .rd-icon, .rd-wedge:active .rd-icon { stroke: var(--card); }
+.rd-wedge.hot .rd-shape { fill: var(--ink); }
+.rd-wedge.hot .rd-icon { stroke: var(--card); color: var(--card); }
+.rd-icon { color: var(--ink); }
+@media (hover: hover) {
+  .rd-wedge:hover .rd-shape { fill: var(--ink); }
+  .rd-wedge:hover .rd-icon { stroke: var(--card); color: var(--card); }
+}
+/* what the wedge under the finger does, above the fan */
+.rd-label {
+  position: absolute;
+  left: 50%;
+  top: -118px;
+  transform: translateX(-50%);
+  white-space: nowrap;
+  background: var(--ink);
+  color: var(--card);
+  font-size: 12px;
+  font-weight: 700;
+  letter-spacing: 0.02em;
+  padding: 4px 9px;
+  border-radius: 3px;
+  pointer-events: none;
+}
+.rd-label[hidden] { display: none; }
 .rd-center { fill: #7048e8; stroke: var(--card); stroke-width: 2; pointer-events: none; }
 @keyframes rd-pop {
   from { transform: scale(0.5); opacity: 0; }

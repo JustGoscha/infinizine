@@ -333,10 +333,10 @@ export function buildTimeline(state: InputState, store: Store, invalidate: () =>
   radial.className = 'tl-radial hidden';
   const R0 = 30, R1 = 84, GAP = 3; // inner / outer radius, gap between wedges (degrees)
   const wedges: { a: string; from: number; to: number; title: string; icon: string }[] = [
-      { a: 'empty-before', from: 145, to: 195, title: 'Insert an empty frame before', icon: '<path d="M10 8 L4 12 L10 16"/><rect x="12" y="6" width="8" height="12" rx="1"/><path d="M16 9.5v5M13.5 12h5"/>' },
-      { a: 'copy-before', from: 92, to: 142, title: 'Copy this frame before it', icon: '<path d="M11 8 L5 12 L11 16"/><rect x="12" y="8.5" width="8" height="8" rx="1"/><path d="M9.5 13.5V6.5a1 1 0 0 1 1-1H17"/>' },
-      { a: 'copy-after', from: 38, to: 88, title: 'Copy this frame after it', icon: '<rect x="4" y="8.5" width="8" height="8" rx="1"/><path d="M1.5 13.5V6.5a1 1 0 0 1 1-1H9"/><path d="M13 8 L19 12 L13 16"/>' },
-      { a: 'empty-after', from: -15, to: 35, title: 'Insert an empty frame after', icon: '<rect x="4" y="6" width="8" height="12" rx="1"/><path d="M8 9.5v5M5.5 12h5"/><path d="M14 8 L20 12 L14 16"/>' },
+      { a: 'empty-before', from: 145, to: 195, title: 'Empty frame before', icon: '<rect x="3" y="5" width="8" height="14" rx="1.2" stroke-dasharray="2 1.6"/><path d="M7 9.5v5M5 12h4"/><rect x="13" y="5" width="8" height="14" rx="1.2" fill="currentColor" stroke="none"/>' },
+      { a: 'copy-before', from: 92, to: 142, title: 'Copy before', icon: '<rect x="3" y="5" width="8" height="14" rx="1.2" stroke-dasharray="2 1.6"/><rect x="5" y="8.5" width="4" height="7" rx="0.8" fill="currentColor" stroke="none"/><rect x="13" y="5" width="8" height="14" rx="1.2" fill="currentColor" stroke="none"/>' },
+      { a: 'copy-after', from: 38, to: 88, title: 'Copy after', icon: '<rect x="3" y="5" width="8" height="14" rx="1.2" fill="currentColor" stroke="none"/><rect x="13" y="5" width="8" height="14" rx="1.2" stroke-dasharray="2 1.6"/><rect x="15" y="8.5" width="4" height="7" rx="0.8" fill="currentColor" stroke="none"/>' },
+      { a: 'empty-after', from: -15, to: 35, title: 'Empty frame after', icon: '<rect x="3" y="5" width="8" height="14" rx="1.2" fill="currentColor" stroke="none"/><rect x="13" y="5" width="8" height="14" rx="1.2" stroke-dasharray="2 1.6"/><path d="M17 9.5v5M15 12h4"/>' },
     ];
     const pt = (r: number, deg: number) => [r * Math.cos((deg * Math.PI) / 180), -r * Math.sin((deg * Math.PI) / 180)] as const;
     const wedge = (w: (typeof wedges)[number]) => {
@@ -345,10 +345,18 @@ export function buildTimeline(state: InputState, store: Store, invalidate: () =>
       const [ix, iy] = pt((R0 + R1) / 2, (f + t) / 2);
       return `<g class="rd-wedge" data-a="${w.a}"><title>${w.title}</title>
         <path class="rd-shape" d="M${x1} ${y1} A${R1} ${R1} 0 0 0 ${x2} ${y2} L${x3} ${y3} A${R0} ${R0} 0 0 1 ${x4} ${y4} Z"/>
-        <g class="rd-icon" transform="translate(${ix - 12} ${iy - 12})">${w.icon}</g></g>`;
+        <g class="rd-icon" transform="translate(${ix - 15.6} ${iy - 15.6}) scale(1.3)">${w.icon}</g></g>`;
     };
-  radial.innerHTML = `<svg viewBox="-90 -90 180 180" width="180" height="180">${wedges.map(wedge).join('')}<circle class="rd-center" r="9"/></svg>`;
+  radial.innerHTML = `<svg viewBox="-90 -90 180 180" width="180" height="180">${wedges.map(wedge).join('')}<circle class="rd-center" r="9"/></svg><div class="rd-label" hidden></div>`;
   document.body.appendChild(radial);
+  const radialLabel = radial.querySelector('.rd-label') as HTMLElement;
+  /** light the wedge under the finger and say what it does */
+  const setHot = (a: string | null) => {
+    radial.querySelectorAll<SVGGElement>('.rd-wedge').forEach((g) => g.classList.toggle('hot', g.dataset.a === a));
+    const w = wedges.find((x) => x.a === a);
+    radialLabel.hidden = !w;
+    if (w) radialLabel.textContent = w.title;
+  };
   let radialTarget: { areaId: string; layerId: string; frameId: string } | null = null;
   let radialAt = { x: 0, y: 0 }; // the fan's centre on screen
   /** the wedge under a screen point, by angle and radius from the centre (robust to overlays and the pop-in) */
@@ -362,7 +370,7 @@ export function buildTimeline(state: InputState, store: Store, invalidate: () =>
   };
   const closeRadial = () => {
     radial.classList.add('hidden');
-    radial.querySelectorAll('.rd-wedge.hot').forEach((w) => w.classList.remove('hot'));
+    setHot(null);
     radialTarget = null;
     document.removeEventListener('pointermove', trackRadial);
     document.removeEventListener('pointerup', releaseRadial);
@@ -388,16 +396,13 @@ export function buildTimeline(state: InputState, store: Store, invalidate: () =>
     invalidate();
   };
   // opened while the finger is still down: the wedge under the finger lights up, releasing on it picks it
-  const trackRadial = (e: PointerEvent) => {
-    const a = wedgeAt(e.clientX, e.clientY);
-    radial.querySelectorAll<SVGGElement>('.rd-wedge').forEach((g) => g.classList.toggle('hot', g.dataset.a === a));
-  };
+  const trackRadial = (e: PointerEvent) => setHot(wedgeAt(e.clientX, e.clientY));
   const releaseRadial = (e: PointerEvent) => {
     const a = wedgeAt(e.clientX, e.clientY);
     document.removeEventListener('pointermove', trackRadial);
     document.removeEventListener('pointerup', releaseRadial);
     if (a) runRadial(a); // released elsewhere: the fan stays for a tap
-    else radial.querySelectorAll('.rd-wedge.hot').forEach((g) => g.classList.remove('hot'));
+    else setHot(null);
   };
   function openFrameRadial(e: { clientX: number; clientY: number }, areaId: string, layerId: string, frameId: string, down: boolean) {
     radialTarget = { areaId, layerId, frameId };
@@ -411,9 +416,13 @@ export function buildTimeline(state: InputState, store: Store, invalidate: () =>
       document.addEventListener('pointerup', releaseRadial);
     }
   }
-  radial.addEventListener('click', (e) => {
-    const w = (e.target as Element).closest?.('.rd-wedge') as SVGGElement | null;
-    if (w) runRadial(w.dataset.a);
+  // taps on the open fan run on pointer events, not clicks: Safari turns the first touch on
+  // anything with hover styling into a hover, and Pencil clicks come late or not at all
+  radial.addEventListener('pointerdown', (e) => {
+    e.preventDefault();
+    setHot(wedgeAt(e.clientX, e.clientY));
+    document.addEventListener('pointermove', trackRadial);
+    document.addEventListener('pointerup', releaseRadial);
   });
   document.addEventListener('pointerdown', (e) => {
     if (!(e.target as HTMLElement).closest?.('.tl-radial')) closeRadial();
