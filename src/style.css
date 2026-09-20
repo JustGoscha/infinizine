@@ -20,6 +20,8 @@ html, body {
   height: 100%;
   overflow: hidden;
   overscroll-behavior: none;
+  /* no browser zoom on a double tap or pinch over the chrome: taps are taps (elements narrow this further to none / pan-x) */
+  touch-action: manipulation;
   font-family: 'Libre Franklin Variable', 'Franklin Gothic Medium', ui-sans-serif, sans-serif;
   color: var(--ink);
   background: var(--paper);
