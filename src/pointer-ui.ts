@@ -106,14 +106,22 @@ export function pressDrag(
   });
 }
 
-/** iPadOS doesn't reliably turn a Pencil tap on a button into a click (the tip wobbles and
- * lifts a hair off the target). Track pen presses on buttons and click them ourselves on
- * release when no native click followed. */
+/** Pencil taps on the chrome: iPadOS turns them into clicks late (its double-tap wait) or
+ * not at all (the tip wobbles off the target). A pen release on a button clicks it right
+ * away; the browser's own click for that tap, if it comes, is swallowed. */
 export function installPenTaps() {
   const TARGET = 'button, .tl-track-head, .present-tap, .tl-tab-eye';
   let press: { el: HTMLElement; id: number; x: number; y: number; t: number } | null = null;
-  let nativeClickAt = 0;
-  document.addEventListener('click', () => { nativeClickAt = performance.now(); }, true);
+  let swallow: { el: HTMLElement; until: number } | null = null;
+  let synthetic = false;
+  document.addEventListener('click', (e) => {
+    if (synthetic || !swallow) return;
+    if (performance.now() < swallow.until && (e.target as Element).closest?.(TARGET) === swallow.el) {
+      e.stopPropagation();
+      e.preventDefault();
+    }
+    swallow = null;
+  }, true);
   document.addEventListener('pointerdown', (e) => {
     if (e.pointerType !== 'pen') return;
     const el = (e.target as HTMLElement).closest?.(TARGET) as HTMLElement | null;
@@ -123,9 +131,10 @@ export function installPenTaps() {
     if (!press || e.pointerId !== press.id) return;
     const p = press;
     press = null;
-    if (performance.now() - p.t > 600 || Math.hypot(e.clientX - p.x, e.clientY - p.y) > 14) return;
-    const t0 = performance.now();
-    window.setTimeout(() => { if (nativeClickAt < t0 && p.el.isConnected) p.el.click(); }, 60);
+    if (performance.now() - p.t > 600 || Math.hypot(e.clientX - p.x, e.clientY - p.y) > 14 || !p.el.isConnected) return;
+    swallow = { el: p.el, until: performance.now() + 500 };
+    synthetic = true;
+    try { p.el.click(); } finally { synthetic = false; }
   }, true);
   document.addEventListener('pointercancel', () => { press = null; }, true);
 }
