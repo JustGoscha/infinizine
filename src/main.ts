@@ -96,12 +96,5 @@ document.fonts?.ready.then(() => { renderer.clearCache(); renderer.invalidate();
 // pressure playground changed the curves: every cached outline is stale
 window.addEventListener('izine-restyle', () => { renderer.clearCache(); renderer.invalidate(); });
 canvas.addEventListener('contextmenu', (e) => e.preventDefault());
-// Safari's double-tap zoom on chrome elements: a second quick tap anywhere is ours, never a page zoom
-let lastTouchEnd = 0;
-document.addEventListener('touchend', (e) => {
-  const now = performance.now();
-  if (now - lastTouchEnd < 350 && e.cancelable) e.preventDefault();
-  lastTouchEnd = now;
-}, { passive: false });
 // dev hook: poke at the live app from the console
 (window as unknown as { __izine: unknown }).__izine = { store, renderer, camera, state };
