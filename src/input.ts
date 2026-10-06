@@ -1081,7 +1081,7 @@ export function attachInput(
 
   let dropCache: (id: string) => void = () => {};
   // live mutations of text/image boxes (resize previews) aren't store changes:
-  // the renderer's static layer must be told to rebuild so the preview shows
+  // the renderer's static tiles must be told to rebuild so the preview shows
   const invalidateStatic = () => { dropCache('*'); invalidate(); };
   const clip = createClipboard(store, state, camera, invalidate);
   const api = {

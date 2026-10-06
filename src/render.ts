@@ -25,23 +25,35 @@ function frameAtTick(frames: { id: string; duration: number }[], tick: number): 
   for (const f of frames) { t -= f.duration; if (t < 0) return f.id; }
   return frames[frames.length - 1].id;
 }
+const TILE = 512; // static tile side, device px
+const TILE_POOL = 16; // spare tile bitmaps kept for reuse (iOS is slow to allocate and slow to free canvases)
+const FILL_RASTER_MAX = 4_000_000; // px: bigger pattern fills are filled directly
+const FILL_RASTER_BUDGET = 8_000_000; // px across all baked pattern fills (~32 MB)
+interface Tile { i: number; j: number; back: HTMLCanvasElement; front: HTMLCanvasElement | null; stale: boolean }
+interface TileSet { content: string; zoom: number; s: number; tiles: Map<string, Tile> }
 interface CacheEntry { solid?: boolean; zoomFree?: boolean; path: Path2D; bbox: BBox; passes?: Path2D[]; core?: Path2D; detail: number }
 
 export class Renderer {
   private ctx: CanvasRenderingContext2D;
   private cache = new Map<string, CacheEntry>();
-  // Static layer: everything committed and not animated, rendered once for the
-  // current camera. Per frame we blit it and draw live/animated/UI on top, so
-  // drawing speed no longer depends on how much is on the page.
-  // Two bitmaps: `canvas` holds paper + the 'back' layer, `front` the rest, so a
+  // Static tiles: everything committed and not animated, rasterised in 512-device-px
+  // tiles anchored to the world at the current zoom. A pan only moves the tiles
+  // (blitted at whole device pixels) and builds the few that scroll into view; a
+  // ring around the screen is prefetched in idle frames. Each tile has two bitmaps:
+  // `back` holds paper + the 'back' layer, `front` the rest (null when empty), so a
   // paint-behind live stroke can slip between them without repainting anything.
-  private staticLayer: {
-    canvas: HTMLCanvasElement;
-    front: HTMLCanvasElement;
-    valid: boolean;
-    key: string; // camera + size + style fingerprint
-    cam: { x: number; y: number; zoom: number; vw: number; vh: number; dpr: number } | null; // what it was built for
-  } = { canvas: document.createElement('canvas'), front: document.createElement('canvas'), valid: false, key: '', cam: null };
+  private tileSet: TileSet | null = null;
+  /** the previous zoom's tiles: scaled into the gaps while the new zoom's tiles build */
+  private prevTiles: TileSet | null = null;
+  private tilePool: HTMLCanvasElement[] = [];
+  private tileGen = 0; // bumped whenever committed ink changes in a way tiles can't patch
+  /** device px per world unit while a tile is being painted (pattern fills then come from fillRasters) */
+  private tileScale: number | null = null;
+  // non-solid pattern fills (hatching, lines, waves…) baked once per zoom at device
+  // resolution, aligned to the device pixel grid: tiles blit them instead of
+  // re-filling a rotated pattern per tile. LRU by insertion order.
+  private fillRasters = new Map<string, { c: HTMLCanvasElement; s: number; x: number; y: number }>();
+  private fillRasterPx = 0;
   // pencil stamp lists are zoom-independent: computed once per stroke
   private stampCache = new Map<string, { n: number; stamps: { x: number; y: number; p: number; a?: number }[] }>();
   // zoom gestures: keep drawing stale rasters (scaled) and rebuild only when the
@@ -149,26 +161,34 @@ export class Renderer {
     }
     return img;
   }
-  dropFromCache(id: string) { this.cache.delete(id); this.pencilCache.delete(id); this.stampCache.delete(id); this.staticLayer.valid = false; }
-  clearCache() { this.cache.clear(); this.pencilCache.clear(); this.stampCache.clear(); this.staticLayer.valid = false; }
+  dropFromCache(id: string) {
+    this.cache.delete(id); this.pencilCache.delete(id); this.stampCache.delete(id); this.dropFillRaster(id);
+    this.tileGen++;
+  }
+  clearCache() {
+    this.cache.clear(); this.pencilCache.clear(); this.stampCache.clear();
+    for (const id of [...this.fillRasters.keys()]) this.dropFillRaster(id);
+    this.tileGen++;
+  }
 
   /** Document changed: drop only the touched elements' caches; keep the static
-   * layer when the change is a fresh append we can paint on top of. */
+   * tiles when the change is a fresh append we can paint on top of. */
   docChanged(info?: ChangeInfo) {
     this.animBake.key = ''; // frozen areas may have changed
     if (!info) { this.clearCache(); this.invalidate(); return; }
-    for (const id of info.ids) { this.cache.delete(id); this.pencilCache.delete(id); this.stampCache.delete(id); }
-    const st = this.staticLayer;
+    for (const id of info.ids) { this.cache.delete(id); this.pencilCache.delete(id); this.stampCache.delete(id); this.dropFillRaster(id); }
+    const set = this.tileSet;
     const canAppend =
-      st.valid &&
+      set &&
       info.added &&
       info.added.length &&
-      st.key === this.staticKey() &&
+      set.content === this.contentKey() &&
+      set.zoom === this.camera.zoom &&
       info.added.every((el) => this.isStill(el));
     if (canAppend) {
-      this.paintOntoStatic(info.added!);
+      this.paintOntoTiles(info.added!);
     } else {
-      st.valid = false;
+      this.tileGen++;
     }
     this.invalidate();
   }
@@ -192,11 +212,22 @@ export class Renderer {
   private focusAreaId(): string | null {
     return this.input.activeAreaId && !this.input.presenting ? this.input.activeAreaId : null;
   }
-  private staticKey(): string {
-    const { camera, canvas } = this;
+  /** what the static tiles depend on besides the camera */
+  private contentKey(): string {
     const d = this.store.doc;
-    return [camera.x, camera.y, camera.zoom, canvas.clientWidth, canvas.clientHeight, window.devicePixelRatio || 1,
-      this.focusAreaId() ?? '', d.paper ?? '', d.pattern ?? ''].join('|');
+    return [this.tileGen, window.devicePixelRatio || 1, this.focusAreaId() ?? '', d.paper ?? '', d.pattern ?? ''].join('|');
+  }
+  /** content + camera + viewport: what a screen-sized bitmap depends on */
+  private viewKey(): string {
+    const { camera, canvas } = this;
+    return [this.contentKey(), camera.x, camera.y, camera.zoom, canvas.clientWidth, canvas.clientHeight].join('|');
+  }
+  /** World → device px for the screen: zoom × dpr, offset rounded to whole device
+   * pixels so the static tiles (pixel-aligned) and everything drawn live agree exactly. */
+  private worldMatrix(vw: number, vh: number, dpr: number): { s: number; ox: number; oy: number } {
+    const { camera } = this;
+    const s = camera.zoom * dpr;
+    return { s, ox: Math.round((vw * dpr) / 2 - camera.x * s), oy: Math.round((vh * dpr) / 2 - camera.y * s) };
   }
 
   /** Render one page to an offscreen canvas (see renderRegion). */
@@ -326,9 +357,7 @@ export class Renderer {
   private paintPaperPattern(g: CanvasRenderingContext2D, rect: View, paper: string) {
     const pattern = this.store.doc.pattern ?? 'dots';
     if (pattern === 'blank') return;
-    const n = parseInt(paper.slice(1), 16);
-    const lum = ((n >> 16) & 255) * 0.299 + ((n >> 8) & 255) * 0.587 + (n & 255) * 0.114;
-    const dark = lum < 128;
+    const dark = darkPaper(paper);
     const s = 10; // 5 mm
     const x0 = Math.floor(rect.x / s) * s, y0 = Math.floor(rect.y / s) * s;
     if (pattern === 'dots') {
@@ -344,57 +373,239 @@ export class Renderer {
     g.stroke();
   }
 
-  /** Rebuild the static layers for the current camera. */
-  private buildStatic(vw: number, vh: number, dpr: number) {
-    const st = this.staticLayer;
-    for (const c of [st.canvas, st.front]) {
-      if (c.width !== vw * dpr || c.height !== vh * dpr) { c.width = vw * dpr; c.height = vh * dpr; }
-    }
-    const paper = this.store.doc.paper ?? '#F7F4EC';
-    const still = this.store.doc.elements.filter((el) => this.isStill(el));
-    this.paintStatic(st.canvas, vw, vh, dpr, (g) => {
-      g.fillStyle = paper;
-      g.fillRect(0, 0, vw, vh);
-      this.drawPattern(vw, vh, paper);
-    }, still.filter((el) => el.layer === 'back'));
-    this.paintStatic(st.front, vw, vh, dpr, (g) => g.clearRect(0, 0, vw, vh), still.filter((el) => el.layer !== 'back'));
-    st.valid = true;
-    st.key = this.staticKey();
-    st.cam = { x: this.camera.x, y: this.camera.y, zoom: this.camera.zoom, vw, vh, dpr };
+  // ── Static tiles ──────────────────────────────────────────────────────────
+
+  private takeCanvas(): HTMLCanvasElement {
+    const c = this.tilePool.pop() ?? document.createElement('canvas');
+    if (c.width !== TILE || c.height !== TILE) { c.width = TILE; c.height = TILE; }
+    const g = c.getContext('2d')!;
+    g.setTransform(1, 0, 0, 1, 0, 0);
+    g.globalAlpha = 1;
+    g.globalCompositeOperation = 'source-over';
+    return c;
+  }
+  private recycle(c: HTMLCanvasElement | null) {
+    if (!c) return;
+    if (this.tilePool.length < TILE_POOL) this.tilePool.push(c);
+    else { c.width = 0; c.height = 0; } // frees the backing store now (Safari holds on to it otherwise)
+  }
+  private dropTile(t: Tile | undefined) { if (t) { this.recycle(t.back); this.recycle(t.front); } }
+  private dropSet(set: TileSet | null) { if (set) for (const t of set.tiles.values()) this.dropTile(t); }
+
+  /** world rect of tile (i, j) at `s` device px per world unit */
+  private tileView(i: number, j: number, s: number): View {
+    return { x: (i * TILE) / s, y: (j * TILE) / s, w: TILE / s, h: TILE / s };
+  }
+  /** bbox for culling: any cached entry's (bboxes don't depend on zoom), so off-screen
+   * outlines aren't rebuilt just to be culled when the detail bucket changes */
+  private elBox(el: Element): BBox {
+    return el.kind === 'text' || el.kind === 'image' ? elementBBox(el) : this.cache.get(el.id)?.bbox ?? this.entry(el).bbox;
   }
 
-  /** Paint `els` (in order) onto one static bitmap for the current camera; `prep` runs first in screen space. */
-  private paintStatic(target: HTMLCanvasElement, vw: number, vh: number, dpr: number, prep: (g: CanvasRenderingContext2D) => void, els: Element[]) {
-    const sctx = target.getContext('2d')!;
+  /** Paint `els` (in order) onto a tile bitmap; helpers (pattern, pencil, grain) draw through this.ctx. */
+  private paintTile(c: HTMLCanvasElement, i: number, j: number, s: number, els: Element[]) {
+    const g = c.getContext('2d')!;
     const saved = this.ctx;
-    this.ctx = sctx; // helpers (pattern, pencil, grain) draw through this.ctx
+    this.ctx = g;
+    this.tileScale = s;
     try {
-      const { camera } = this;
-      sctx.setTransform(dpr, 0, 0, dpr, 0, 0);
-      prep(sctx);
-      const view = camera.viewport(vw, vh);
-      const z = camera.zoom;
-      sctx.save();
-      sctx.translate(vw / 2, vh / 2);
-      sctx.scale(z, z);
-      sctx.translate(-camera.x, -camera.y);
+      g.setTransform(s, 0, 0, s, -i * TILE, -j * TILE);
+      const view = this.tileView(i, j, s);
       const dim = this.focusAreaId() ? 0.3 : 1;
-      for (const el of els) this.paintElement(el, view, z, dim);
-      sctx.globalAlpha = 1;
-      sctx.restore();
+      for (const el of els) this.paintElement(el, view, this.camera.zoom, dim);
     } finally {
+      g.globalAlpha = 1;
+      g.setTransform(1, 0, 0, 1, 0, 0);
       this.ctx = saved;
+      this.tileScale = null;
     }
   }
 
-  /** Append freshly committed elements onto the (valid) static layers. */
-  private paintOntoStatic(els: Element[]) {
-    const { canvas } = this;
-    const vw = canvas.clientWidth, vh = canvas.clientHeight, dpr = window.devicePixelRatio || 1;
+  private buildTile(set: TileSet, i: number, j: number, near: { back: Element[]; front: Element[] }): Tile {
+    const pending = this.rastersPending;
+    this.rastersPending = false;
+    const paper = this.store.doc.paper ?? '#F7F4EC';
+    const back = this.takeCanvas();
+    const g = back.getContext('2d')!;
+    g.fillStyle = paper;
+    g.fillRect(0, 0, TILE, TILE);
+    this.paintPaperTile(g, i, j, paper);
+    this.paintTile(back, i, j, set.s, near.back);
+    let front: HTMLCanvasElement | null = null;
+    const view = this.tileView(i, j, set.s);
+    if (near.front.some((el) => bboxIntersects(this.elBox(el), view))) {
+      front = this.takeCanvas();
+      front.getContext('2d')!.clearRect(0, 0, TILE, TILE);
+      this.paintTile(front, i, j, set.s, near.front);
+    }
+    // a pencil stroke drawn from a wrong-zoom raster: rebuild this tile once it's ready
+    const tile = { i, j, back, front, stale: this.rastersPending };
+    this.rastersPending ||= pending;
+    return tile;
+  }
+
+  /** The paper's dot/grid/lines marks on tile (i, j): the same world-anchored cells as drawPattern. */
+  private paintPaperTile(g: CanvasRenderingContext2D, i: number, j: number, paper: string) {
+    const pattern = this.store.doc.pattern ?? 'dots';
+    if (pattern === 'blank') return;
+    const dpr = window.devicePixelRatio || 1;
+    const dark = darkPaper(paper);
+    let sp = 10 * this.camera.zoom; // 5 mm, in CSS px; doubled/halved like drawPattern
+    while (sp < 8) sp *= 2;
+    while (sp > 120) sp /= 2;
+    const d = sp * dpr;
+    const x0 = i * TILE, y0 = j * TILE;
+    const k0 = Math.floor(x0 / d), k1 = Math.ceil((x0 + TILE) / d);
+    const l0 = Math.floor(y0 / d), l1 = Math.ceil((y0 + TILE) / d);
+    if (pattern === 'dots') {
+      g.fillStyle = dark ? 'rgba(255,255,255,0.14)' : 'rgba(120,105,80,0.18)';
+      for (let k = k0; k <= k1; k++) for (let l = l0; l <= l1; l++) g.fillRect(k * d - x0 - dpr, l * d - y0 - dpr, 2 * dpr, 2 * dpr);
+      return;
+    }
+    g.strokeStyle = dark ? 'rgba(255,255,255,0.07)' : 'rgba(120,105,80,0.1)';
+    g.lineWidth = dpr;
+    g.beginPath();
+    if (pattern === 'grid') for (let k = k0; k <= k1; k++) { g.moveTo(k * d - x0, 0); g.lineTo(k * d - x0, TILE); }
+    for (let l = l0; l <= l1; l++) { g.moveTo(0, l * d - y0); g.lineTo(TILE, l * d - y0); }
+    g.stroke();
+  }
+
+  /** Blit a tile set's back or front bitmaps (device-px space; scaled when the set is from another zoom). */
+  private blitTiles(set: TileSet, layer: 'back' | 'front', W: number, H: number, ox: number, oy: number) {
+    const ctx = this.ctx;
+    const k = (this.camera.zoom * (window.devicePixelRatio || 1)) / set.s;
+    for (const t of set.tiles.values()) {
+      const c = layer === 'back' ? t.back : t.front;
+      if (!c) continue;
+      // edges rounded on their own, so neighbours always meet without a gap
+      const x0 = Math.round(t.i * TILE * k) + ox, x1 = Math.round((t.i + 1) * TILE * k) + ox;
+      const y0 = Math.round(t.j * TILE * k) + oy, y1 = Math.round((t.j + 1) * TILE * k) + oy;
+      if (x1 <= 0 || y1 <= 0 || x0 >= W || y0 >= H) continue;
+      if (k === 1) ctx.drawImage(c, x0, y0);
+      else ctx.drawImage(c, x0, y0, x1 - x0, y1 - y0);
+    }
+  }
+
+  /** Static ink for this frame: build the tiles that scrolled into view (and, with
+   * time to spare, a ring around them), blit the back bitmaps, and return the
+   * front blit, which runs after a paint-behind live stroke. */
+  private drawStatic(vw: number, vh: number, dpr: number, frameStart: number): () => void {
+    const { camera } = this;
+    const ctx = this.ctx;
+    const content = this.contentKey();
+    const zooming = frameStart - this.lastZoomChangeAt < 180;
+    if (this.prevTiles && this.prevTiles.content !== content) { this.dropSet(this.prevTiles); this.prevTiles = null; }
+    if (this.tileSet && this.tileSet.content !== content) { this.dropSet(this.tileSet); this.tileSet = null; }
+    let set = this.tileSet;
+    if (set && set.zoom !== camera.zoom && !zooming) {
+      // the zoom settled: these stand in, scaled, while the new zoom's tiles build
+      this.dropSet(this.prevTiles);
+      this.prevTiles = set;
+      set = null;
+    }
+    if (!set) set = this.tileSet = { content, zoom: camera.zoom, s: camera.zoom * dpr, tiles: new Map() };
+    const { ox, oy } = this.worldMatrix(vw, vh, dpr);
+    const W = vw * dpr, H = vh * dpr;
+    const holes = new Path2D(); // screen rects still without a tile of this zoom
+    let holed = false;
+    if (set.zoom === camera.zoom) {
+      const tiles = set.tiles;
+      const i0 = Math.floor(-ox / TILE), i1 = Math.floor((W - 1 - ox) / TILE);
+      const j0 = Math.floor(-oy / TILE), j1 = Math.floor((H - 1 - oy) / TILE);
+      let near: { back: Element[]; front: Element[] } | null = null; // still elements around the screen, by layer
+      const build = (i: number, j: number) => {
+        if (!near) {
+          const ring = this.tileView(i0 - 1, j0 - 1, set!.s);
+          ring.w *= i1 - i0 + 3;
+          ring.h *= j1 - j0 + 3;
+          near = { back: [], front: [] };
+          for (const el of this.store.doc.elements) {
+            if (!this.isStill(el) || !bboxIntersects(this.elBox(el), ring)) continue;
+            (el.layer === 'back' ? near.back : near.front).push(el);
+          }
+        }
+        const key = `${i},${j}`;
+        this.dropTile(tiles.get(key));
+        tiles.set(key, this.buildTile(set!, i, j, near));
+      };
+      const fallback = this.prevTiles;
+      const deadline = frameStart + 6; // ms of tile building per frame, when something can stand in
+      let built = 0;
+      let pending = false;
+      for (let j = j0; j <= j1; j++) {
+        for (let i = i0; i <= i1; i++) {
+          const t = tiles.get(`${i},${j}`);
+          if (t && !t.stale) continue;
+          // missing with nothing to stand in → build now; otherwise within the budget (at least one a frame)
+          if ((t || fallback) && built && performance.now() > deadline) { pending = true; continue; }
+          build(i, j);
+          built++;
+        }
+      }
+      // prefetch the ring around the screen in spare time, so a pan finds its tiles ready
+      for (let j = j0 - 1; j <= j1 + 1 && !pending; j++) {
+        for (let i = i0 - 1; i <= i1 + 1; i++) {
+          if (tiles.has(`${i},${j}`)) continue;
+          if (performance.now() > deadline) { pending = true; break; }
+          build(i, j);
+        }
+      }
+      // forget tiles that scrolled well away
+      for (const [key, t] of tiles) {
+        if (t.i < i0 - 2 || t.i > i1 + 2 || t.j < j0 - 2 || t.j > j1 + 2) { this.dropTile(t); tiles.delete(key); }
+      }
+      for (let j = j0; j <= j1; j++) {
+        for (let i = i0; i <= i1; i++) {
+          if (!tiles.has(`${i},${j}`)) { holes.rect(i * TILE + ox, j * TILE + oy, TILE, TILE); holed = true; }
+        }
+      }
+      if (!holed && fallback) { this.dropSet(fallback); this.prevTiles = null; }
+      if (pending) this.dirty = true;
+    } else {
+      this.dirty = true; // mid-zoom: the last zoom's tiles, scaled, until the gesture settles
+    }
+    const prev = holed ? this.prevTiles : null;
+    const blit = (layer: 'back' | 'front') => {
+      ctx.save();
+      ctx.setTransform(1, 0, 0, 1, 0, 0);
+      ctx.globalAlpha = 1;
+      ctx.globalCompositeOperation = 'source-over';
+      if (layer === 'back' && (holed || set!.zoom !== camera.zoom)) {
+        ctx.fillStyle = this.store.doc.paper ?? '#F7F4EC';
+        ctx.fillRect(0, 0, W, H);
+      }
+      if (prev) {
+        ctx.save();
+        ctx.clip(holes);
+        this.blitTiles(prev, layer, W, H, ox, oy);
+        ctx.restore();
+      }
+      this.blitTiles(set!, layer, W, H, ox, oy);
+      ctx.restore();
+    };
+    blit('back');
+    // (alpha reset inside: a live back-layer marker leaves the context at its 0.45 and would fade the whole front layer)
+    return () => blit('front');
+  }
+
+  /** Append freshly committed elements onto the built tiles. */
+  private paintOntoTiles(els: Element[]) {
+    const set = this.tileSet!;
+    this.dropSet(this.prevTiles); // stand-ins would miss the new ink
+    this.prevTiles = null;
     const back = els.filter((el) => el.layer === 'back');
     const front = els.filter((el) => el.layer !== 'back');
-    if (back.length) this.paintStatic(this.staticLayer.canvas, vw, vh, dpr, () => {}, back);
-    if (front.length) this.paintStatic(this.staticLayer.front, vw, vh, dpr, () => {}, front);
+    for (const t of set.tiles.values()) {
+      const view = this.tileView(t.i, t.j, set.s);
+      if (back.some((el) => bboxIntersects(this.elBox(el), view))) this.paintTile(t.back, t.i, t.j, set.s, back);
+      if (front.some((el) => bboxIntersects(this.elBox(el), view))) {
+        if (!t.front) {
+          t.front = this.takeCanvas();
+          t.front.getContext('2d')!.clearRect(0, 0, TILE, TILE);
+        }
+        this.paintTile(t.front, t.i, t.j, set.s, front);
+      }
+    }
   }
 
   /** Paint one element's body (no handles/selection) through this.ctx. Returns false if culled. */
@@ -459,15 +670,60 @@ export class Renderer {
       const op = el.kind === 'fill' ? el.blend ?? (patterned ? 'multiply' : 'source-over') : 'source-over';
       const ink = el.kind === 'fill' ? el.ink ?? 1 : 1;
       const blending = op !== 'source-over' || ink < 1;
-      if (blending) {
+      // tiles blit pattern fills from a bitmap baked at their resolution (see fillRaster)
+      const baked = patterned && !e.solid && this.tileScale ? this.fillRaster(el as FillShape, e, this.tileScale) : null;
+      if (blending || baked) {
         ctx.save();
         ctx.globalCompositeOperation = op;
         ctx.globalAlpha = el.opacity * dim * ink;
       }
-      ctx.fill(e.path);
-      if (blending) ctx.restore();
+      if (baked) {
+        const m = ctx.getTransform(); // tile: scale s, whole-pixel offset
+        ctx.setTransform(1, 0, 0, 1, m.e, m.f);
+        ctx.drawImage(baked.c, baked.x, baked.y);
+      } else {
+        ctx.fill(e.path);
+      }
+      if (blending || baked) ctx.restore();
     }
     return true;
+  }
+
+  /** A non-solid pattern fill rasterised at `s` device px per world unit, its origin on
+   * the device pixel grid, so a tile can blit it pixel for pixel. Null when too big. */
+  private fillRaster(el: FillShape, e: CacheEntry, s: number) {
+    const hit = this.fillRasters.get(el.id);
+    if (hit && hit.s === s) {
+      this.fillRasters.delete(el.id); // most recently used goes last
+      this.fillRasters.set(el.id, hit);
+      return hit;
+    }
+    this.dropFillRaster(el.id);
+    const x = Math.floor(e.bbox.minX * s) - 1, y = Math.floor(e.bbox.minY * s) - 1;
+    const w = Math.ceil(e.bbox.maxX * s) + 1 - x, h = Math.ceil(e.bbox.maxY * s) + 1 - y;
+    if (w * h > FILL_RASTER_MAX) return null;
+    for (const id of this.fillRasters.keys()) {
+      if (this.fillRasterPx + w * h <= FILL_RASTER_BUDGET) break;
+      this.dropFillRaster(id);
+    }
+    const c = document.createElement('canvas');
+    c.width = w;
+    c.height = h;
+    const g = c.getContext('2d')!;
+    g.setTransform(s, 0, 0, s, -x, -y);
+    g.fillStyle = this.fillPattern(el.pattern!, el.color, isPixelPattern(el.pattern!) ? 0 : el.patternAngle ?? 0);
+    g.fill(e.path);
+    const r = { c, s, x, y };
+    this.fillRasters.set(el.id, r);
+    this.fillRasterPx += w * h;
+    return r;
+  }
+  private dropFillRaster(id: string) {
+    const r = this.fillRasters.get(id);
+    if (!r) return;
+    this.fillRasterPx -= r.c.width * r.c.height;
+    r.c.width = r.c.height = 0;
+    this.fillRasters.delete(id);
   }
 
   /** Handles + selection outline for one element (main ctx, world transform). */
@@ -850,31 +1106,7 @@ export class Renderer {
     const useStatic = !presenting && this.input.hidden.size === 0;
     let blitFront: () => void = () => {};
     if (useStatic) {
-      const st = this.staticLayer;
-      const zooming = frameStart - this.lastZoomChangeAt < 180;
-      const stale = !st.valid || st.key !== this.staticKey();
-      if (stale && zooming && st.valid && st.cam && st.cam.vw === vw && st.cam.vh === vh && st.cam.dpr === dpr) {
-        // mid-gesture: scale the last good bitmap into place instead of re-rendering
-        // every fill/pattern/pencil each frame; the real rebuild happens when zoom settles
-        const c = st.cam;
-        const sc = camera.zoom / c.zoom;
-        ctx.fillStyle = paper;
-        ctx.fillRect(0, 0, vw, vh);
-        const offX = (vw / 2) * (1 - sc) + (c.x - camera.x) * camera.zoom;
-        const offY = (vh / 2) * (1 - sc) + (c.y - camera.y) * camera.zoom;
-        ctx.drawImage(st.canvas, offX, offY, vw * sc, vh * sc);
-        blitFront = () => { ctx.save(); ctx.globalAlpha = 1; ctx.setTransform(dpr, 0, 0, dpr, 0, 0); ctx.drawImage(st.front, offX, offY, vw * sc, vh * sc); ctx.restore(); };
-        this.dirty = true; // keep coming back until the gesture ends and we can rebuild
-      } else {
-        if (stale) this.buildStatic(vw, vh, dpr);
-        if (st.canvas.width && st.canvas.height) {
-          ctx.setTransform(1, 0, 0, 1, 0, 0);
-          ctx.drawImage(st.canvas, 0, 0);
-          ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
-          // (alpha reset: a live back-layer marker leaves the context at its 0.45 and would fade the whole front layer)
-          blitFront = () => { ctx.save(); ctx.globalAlpha = 1; ctx.setTransform(1, 0, 0, 1, 0, 0); ctx.drawImage(st.front, 0, 0); ctx.restore(); };
-        }
-      }
+      blitFront = this.drawStatic(vw, vh, dpr, frameStart);
     } else {
       // Desk (chosen paper color)
       ctx.fillStyle = paper;
@@ -885,11 +1117,10 @@ export class Renderer {
     const view = camera.viewport(vw, vh);
     const z = camera.zoom;
 
-    // World transform
+    // World transform (offset at whole device pixels, like the static tiles)
+    const wm = this.worldMatrix(vw, vh, dpr);
     ctx.save();
-    ctx.translate(vw / 2, vh / 2);
-    ctx.scale(z, z);
-    ctx.translate(-camera.x, -camera.y);
+    ctx.setTransform(wm.s, 0, 0, wm.s, wm.ox, wm.oy);
 
     // When presenting, clip all ink to the current page (frames aren't drawn)
     if (presenting) {
@@ -1138,7 +1369,7 @@ export class Renderer {
     if (live?.layer === 'back') drawLiveTimed(); // live back-ink previews behind existing front ink
     if (useStatic) {
       blitFront(); // the front layer covers the live back-stroke, as committed ink would
-      // bodies are in the static layers; only handles/selection outlines here
+      // bodies are in the static tiles; only handles/selection outlines here
       for (const el of still) {
         const ui = selected.has(el.id) || this.input.hoverText === el.id || this.input.hoverImage === el.id || this.input.rolling.has(el.id);
         if (ui && bboxIntersects(elementBBox(el), view)) this.paintElementUi(el, z);
@@ -1233,17 +1464,15 @@ export class Renderer {
       // frozen: every deselected area comes from one bitmap painted at the pause; only the
       // edited area (onion skin, dimming, live layer feedback) is painted per frame
       const bake = this.animBake;
-      const key = [this.staticKey(), animClock.stamp, this.input.hidden.size].join('|');
+      const key = [this.viewKey(), animClock.stamp, this.input.hidden.size].join('|');
       if (bake.key !== key) {
         const c = bake.canvas;
         if (c.width !== vw * dpr || c.height !== vh * dpr) { c.width = vw * dpr; c.height = vh * dpr; }
         const g = c.getContext('2d')!;
-        g.setTransform(dpr, 0, 0, dpr, 0, 0);
-        g.clearRect(0, 0, vw, vh);
+        g.setTransform(1, 0, 0, 1, 0, 0);
+        g.clearRect(0, 0, c.width, c.height);
         g.save();
-        g.translate(vw / 2, vh / 2);
-        g.scale(z, z);
-        g.translate(-camera.x, -camera.y);
+        g.setTransform(wm.s, 0, 0, wm.s, wm.ox, wm.oy);
         ctx = g; this.ctx = g;
         try { paintAreas((a) => !isEditing(a)); } finally { ctx = mainCtx; this.ctx = mainCtx; }
         g.restore();
@@ -1422,11 +1651,8 @@ export class Renderer {
       ctx.fill(veil, 'evenodd');
     }
 
-    // stale pencil rasters were shown: come back next frame and keep rebuilding
-    if (this.rastersPending) {
-      this.staticLayer.valid = false;
-      this.dirty = true;
-    }
+    // stale pencil rasters were shown: come back next frame and keep rebuilding (stale tiles rebuild themselves)
+    if (this.rastersPending) this.dirty = true;
 
     // Zoom badge: 100% = the first page fits the screen (+ performance readout when enabled)
     if (!presenting) {
@@ -1617,10 +1843,7 @@ export class Renderer {
     const pattern = this.store.doc.pattern ?? 'dots';
     if (pattern === 'blank') return;
     const { camera, ctx } = this;
-    // light marks on dark paper, dark marks on light paper
-    const n = parseInt(paper.slice(1), 16);
-    const lum = ((n >> 16) & 255) * 0.299 + ((n >> 8) & 255) * 0.587 + (n & 255) * 0.114;
-    const dark = lum < 128;
+    const dark = darkPaper(paper);
     // world-anchored: 5mm cells (10 world units) like real paper, scaling with zoom;
     // double/halve in mm steps only when cells get too dense/sparse on screen
     const spacingWorld = 10; // 5mm
@@ -1661,6 +1884,12 @@ export class Renderer {
     ctx.textAlign = 'left';
     ctx.fillText(`${page.name} · ${page.format ?? formatLabel(page.w, page.h)}`, page.x + 2 / z, page.y - 6 / z);
   }
+}
+
+/** light marks on dark paper, dark marks on light paper */
+function darkPaper(paper: string): boolean {
+  const n = parseInt(paper.slice(1), 16);
+  return ((n >> 16) & 255) * 0.299 + ((n >> 8) & 255) * 0.587 + (n & 255) * 0.114 < 128;
 }
 
 function polygonPath(points: { x: number; y: number }[]): Path2D {
