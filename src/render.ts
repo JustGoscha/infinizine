@@ -1178,9 +1178,12 @@ export class Renderer {
       }
       // same screen-space denoise the stroke gets on commit, so the live line
       // looks like the final one and the tip never flickers on sample jitter
-      const shown: Stroke = live.points.length > 2
-        ? { ...live, points: this.liveSmooth.update(live.id, live.points, pressure[live.tool].smooth / this.camera.zoom, this.input.liveStable) }
-        : live;
+      const smoothed = live.points.length > 2
+        ? this.liveSmooth.update(live.id, live.points, pressure[live.tool].smooth / this.camera.zoom, this.input.liveStable)
+        : live.points;
+      // run ahead to where the browser predicts the pen is going (never committed; replaced every event)
+      const ahead = this.input.livePredicted;
+      const shown: Stroke = { ...live, points: ahead.length ? smoothed.concat(ahead) : smoothed };
       if (live.tool === 'sketch') {
         ctx.save();
         ctx.globalCompositeOperation = 'multiply';

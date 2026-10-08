@@ -123,6 +123,7 @@ export function attachInput(
   let deq: Dequantizer | null = null; // while every coordinate of the stroke is a whole pixel
   let src: number[] = []; // live point → the sample it was made from
   let rectL = 0, rectT = 0; // canvas origin at stroke start
+  let predSum = 0, predEvents = 0; // predicted samples per move event (performance readout)
   // pressure conditioning (ported from Doodely): Apple Pencil reports noisy
   // pressure and an exact 0.5 when it hasn't measured yet → carry the last
   // valid value, back-fill the uncertain head once a real reading arrives,
@@ -499,6 +500,9 @@ export function attachInput(
           deq?.push(samples[0].x, samples[0].y, t0);
           src = [0];
           state.liveStable = 1;
+          state.livePredicted = [];
+          predSum = 0;
+          predEvents = 0;
         }
         // drawing into a PLAYING area records a timed stroke on the loop clock
         const playingArea =
@@ -720,6 +724,16 @@ export function attachInput(
         else if (deq) from = Math.min(from, deq.push(s.x, s.y, s.t));
       }
       if (from < samples.length) rebuildLive(from);
+      // the browser's guess where the pen is going next (Apple's predicted touches): drawn past
+      // the tip so the line keeps up with the Pencil; replaced on every event, never committed
+      const predicted = e.getPredictedEvents?.() ?? [];
+      predSum += predicted.length;
+      predEvents++;
+      const tip = state.live.points[state.live.points.length - 1];
+      state.livePredicted = predicted.map((pe) => {
+        const w = camera.screenToWorld(pe.clientX - rectL, pe.clientY - rectT, vw(), vh());
+        return { x: w.x, y: w.y, p: tip.p, t: tip.t, a: tip.a, r: tip.r };
+      });
       state.lastSampleAt = e.timeStamp || performance.now(); // for the input→paint readout
       return; // renderer redraws while live is set
     }
@@ -940,10 +954,12 @@ export function attachInput(
     if (state.live) {
       const s = state.live;
       state.live = null;
+      state.livePredicted = [];
       if (samples.length > 8) {
         // performance readout: what the device hands us (whole vs sub-pixel positions, sample rate)
         const span = (samples[samples.length - 1].t - samples[0].t) / 1000;
-        state.penInput = `${deq ? 'whole px' : 'sub-px'}${span > 0 ? ` ${Math.round((samples.length - 1) / span)} Hz` : ''}`;
+        state.penInput = `${deq ? 'whole px' : 'sub-px'}${span > 0 ? ` ${Math.round((samples.length - 1) / span)} Hz` : ''}` +
+          ` · predicted ${predEvents ? (predSum / predEvents).toFixed(1) : 0}/event`;
       }
       if (state.perfHud && samples.length > 1) {
         const t0 = samples[0].t;

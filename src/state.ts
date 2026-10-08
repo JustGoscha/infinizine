@@ -180,6 +180,8 @@ export class InputState {
   lastSampleAt = 0;
   /** leading live points that will never move again (the dequantised tail may still be revised) */
   liveStable = 0;
+  /** where the browser predicts the pen is heading (world points): drawn past the tip, never committed */
+  livePredicted: import('./types').StrokePoint[] = [];
   /** the last stroke's input, for the performance readout: precision and sample rate */
   penInput = '';
   /** performance readout in the corner (settings) */
