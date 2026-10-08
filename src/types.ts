@@ -64,6 +64,9 @@ export interface Stroke {
   animTaper?: boolean; // tail eats away toward the stroke's start over its life
   points: StrokePoint[];
   startTime: number; // epoch seconds, for future replay/timelines
+  /** diagnostics (kept only while the performance readout is on): the pen samples as the
+   * browser reported them — canvas CSS px and ms since the first — flat [x, y, t, …], at zoom `z` */
+  raw?: { z: number; s: number[] };
 }
 
 export type FillBlend = 'multiply' | 'source-over' | 'darken' | 'screen' | 'difference';

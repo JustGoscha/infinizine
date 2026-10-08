@@ -945,6 +945,10 @@ export function attachInput(
         const span = (samples[samples.length - 1].t - samples[0].t) / 1000;
         state.penInput = `${deq ? 'whole px' : 'sub-px'}${span > 0 ? ` ${Math.round((samples.length - 1) / span)} Hz` : ''}`;
       }
+      if (state.perfHud && samples.length > 1) {
+        const t0 = samples[0].t;
+        s.raw = { z: strokeZoom, s: samples.flatMap((q) => [q.x, q.y, q.t - t0]) };
+      }
       let travel = 0;
       for (let i = 1; i < s.points.length; i++) {
         travel += Math.hypot(s.points[i].x - s.points[i - 1].x, s.points[i].y - s.points[i - 1].y);
