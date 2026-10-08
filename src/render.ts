@@ -1031,7 +1031,7 @@ export class Renderer {
     oc.scale(camNow.zoom, camNow.zoom);
     oc.translate(-camNow.x, -camNow.y);
     const shown = live.points.length > 2
-      ? { ...live, points: this.livePencilSmooth.update(live.id, live.points, pressure[live.tool].smooth / camNow.zoom) }
+      ? { ...live, points: this.livePencilSmooth.update(live.id, live.points, pressure[live.tool].smooth / camNow.zoom, this.input.liveStable) }
       : live;
     ls!.count = this.stampStroke(oc, shown, live.opacity, ls!.count);
     // blit in screen space (we're inside the world transform here)
@@ -1155,7 +1155,7 @@ export class Renderer {
         // (pixel patterns snapped to grid cells; tones clipped, dots whole on commit)
         const pat = this.input.fillPattern!;
         const shown: Stroke = live.points.length > 2
-          ? { ...live, points: this.liveSmooth.update(live.id, live.points, pressure[live.tool].smooth / this.camera.zoom) }
+          ? { ...live, points: this.liveSmooth.update(live.id, live.points, pressure[live.tool].smooth / this.camera.zoom, this.input.liveStable) }
           : live;
         const outline = strokeOutline(shown, 1, true).map(([x, y]) => ({ x, y }));
         let path: Path2D | null = null;
@@ -1179,7 +1179,7 @@ export class Renderer {
       // same screen-space denoise the stroke gets on commit, so the live line
       // looks like the final one and the tip never flickers on sample jitter
       const shown: Stroke = live.points.length > 2
-        ? { ...live, points: this.liveSmooth.update(live.id, live.points, pressure[live.tool].smooth / this.camera.zoom) }
+        ? { ...live, points: this.liveSmooth.update(live.id, live.points, pressure[live.tool].smooth / this.camera.zoom, this.input.liveStable) }
         : live;
       if (live.tool === 'sketch') {
         ctx.save();
@@ -1666,7 +1666,7 @@ export class Renderer {
           this.perfAt = now;
           const lat = this.perfLat.sort((a, b) => a - b);
           const med = lat.length ? lat[lat.length >> 1] : 0, worst = lat.length ? lat[lat.length - 1] : 0;
-          this.perfText = `${this.fps} fps   in→paint ${med.toFixed(0)} / ${worst.toFixed(0)} ms   live ${this.perfLive.toFixed(1)} ms   frame ${this.perfFrame.toFixed(1)} ms`;
+          this.perfText = `${this.fps} fps   in→paint ${med.toFixed(0)} / ${worst.toFixed(0)} ms   live ${this.perfLive.toFixed(1)} ms   frame ${this.perfFrame.toFixed(1)} ms${this.input.penInput ? `   pen ${this.input.penInput}` : ''}`;
           this.perfLat = [];
         }
         this.input.perfLine = this.perfText; // shown by the UI in its own readout, not under the toolbar

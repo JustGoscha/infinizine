@@ -178,6 +178,10 @@ export class InputState {
   recording = false; // record button: plays the area and captures live lines as you draw
   /** event timestamp of the newest live-stroke sample (input→paint latency readout) */
   lastSampleAt = 0;
+  /** leading live points that will never move again (the dequantised tail may still be revised) */
+  liveStable = 0;
+  /** the last stroke's input, for the performance readout: precision and sample rate */
+  penInput = '';
   /** performance readout in the corner (settings) */
   perfHud = readPref('infinizine-perf') === '1';
   perfLine = ''; // the renderer's latest numbers

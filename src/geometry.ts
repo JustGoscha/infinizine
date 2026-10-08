@@ -14,6 +14,78 @@ export function translateElement(el: Element, dx: number, dy: number) {
   }
 }
 
+/** One axis of a Dequantizer: crossings of pixel boundaries become anchors. */
+class AxisDequantizer {
+  private v: number[] = []; // whole-pixel values as reported
+  out: number[] = []; // dequantised
+  private at: number[] = []; // anchor times
+  private av: number[] = []; // anchor values
+  open = 0; // first sample after the last anchor: from here on values are provisional
+  private static readonly WINDOW = 32; // samples without a crossing before the older ones settle anyway
+
+  /** Add sample i (its time is ts[i]); returns the first sample whose value changed. */
+  push(v: number, ts: number[]): number {
+    const i = this.v.length;
+    this.v.push(v);
+    if (i === 0) {
+      // the first sample is taken as reported (anchored at its pixel centre)
+      this.at.push(ts[0]); this.av.push(v); this.out.push(v); this.open = 1;
+      return 0;
+    }
+    const from = this.open;
+    const d = v - this.v[i - 1];
+    if (d !== 0) {
+      // the pen crossed from pixel v[i-1] into v[i] between the two samples: at each
+      // boundary it passed it was exactly on n ± 0.5 (times assume constant speed)
+      const s = Math.sign(d), f = 0.5 / Math.abs(d), dt = ts[i] - ts[i - 1];
+      const pt = this.at[this.at.length - 1], pv = this.av[this.av.length - 1];
+      const ct = ts[i - 1] + dt * f, cv = this.v[i - 1] + s * 0.5;
+      this.at.push(ct); this.av.push(cv);
+      if (Math.abs(d) > 1) { this.at.push(ts[i] - dt * f); this.av.push(v - s * 0.5); }
+      // samples since the previous crossing lie on the line between the two crossings
+      for (let j = this.open; j < i; j++) this.out[j] = ct > pt ? pv + ((cv - pv) * (ts[j] - pt)) / (ct - pt) : cv;
+      this.open = i;
+    } else if (i - this.open >= AxisDequantizer.WINDOW) {
+      // a long run inside one pixel: freeze the older half where it was predicted
+      const k = this.open + (AxisDequantizer.WINDOW >> 1);
+      this.at.push(ts[k]); this.av.push(this.out[k]);
+      this.open = k + 1;
+    }
+    // the tail since the last crossing: carry on along the last slope, kept inside the pixel
+    const n = this.at.length;
+    const lt = this.at[n - 1], lv = this.av[n - 1];
+    const slope = n > 1 && lt > this.at[n - 2] ? (lv - this.av[n - 2]) / (lt - this.at[n - 2]) : 0;
+    for (let j = this.open; j <= i; j++) {
+      const guess = lv + slope * (ts[j] - lt);
+      this.out[j] = Math.min(this.v[j] + 0.5, Math.max(this.v[j] - 0.5, guess));
+    }
+    return Math.min(from, i);
+  }
+}
+
+/** Safari before 26.2 reports pointer positions rounded to whole CSS pixels, so a
+ * slow or shallow line arrives as a staircase that only heavy smoothing hides.
+ * Every step of a rounded coordinate is a boundary crossing (the pen was exactly on
+ * n ± 0.5 at about that moment), so per axis the crossings become anchors and each
+ * sample is re-placed on the line between its neighbouring crossings, by time.
+ * Positions stay inside the pixel that was reported; everything larger than a pixel
+ * survives. Samples after an axis's last crossing are provisional until the next one. */
+export class Dequantizer {
+  private ts: number[] = [];
+  private ax = new AxisDequantizer();
+  private ay = new AxisDequantizer();
+  /** Add a sample (canvas px, time in ms); returns the first sample whose position changed. */
+  push(x: number, y: number, t: number): number {
+    const prev = this.ts[this.ts.length - 1];
+    this.ts.push(prev !== undefined && t <= prev ? prev + 0.5 : t); // equal stamps (coalesced) still need an order
+    return Math.min(this.ax.push(x, this.ts), this.ay.push(y, this.ts));
+  }
+  x(i: number): number { return this.ax.out[i]; }
+  y(i: number): number { return this.ay.out[i]; }
+  /** samples before this index never change again */
+  get stable(): number { return Math.min(this.ax.open, this.ay.open); }
+}
+
 /** Spatial Gaussian denoise along the polyline. `sigma` is in world units —
  * pass ~1.2 screen px worth (1.2 / zoom at drawing time) so quantisation
  * jitter from the digitiser is removed identically at every zoom level.
@@ -124,10 +196,13 @@ export class LiveDenoiser {
   private arc: number[] = [];
   /** how many leading points are final (their smoothing window is complete) */
   get settled(): number { return this.final.length; }
-  update(id: string, points: StrokePoint[], sigma: number): StrokePoint[] {
+  /** `stable`: how many leading points will never move again (the tail may still be
+   * revised, e.g. by the Dequantizer); only points whose whole window lies in there settle. */
+  update(id: string, points: StrokePoint[], sigma: number, stable = points.length): StrokePoint[] {
     const n = points.length;
-    if (id !== this.id || this.arc.length > n) { this.id = id; this.final = []; this.arc = []; }
+    if (id !== this.id || this.arc.length > n || this.final.length > stable) { this.id = id; this.final = []; this.arc = []; }
     if (n < 3 || sigma <= 0) return points;
+    if (this.arc.length > stable) this.arc.length = Math.max(1, stable); // revised points: re-measure from there
     for (let i = this.arc.length; i < n; i++) {
       this.arc[i] = i ? this.arc[i - 1] + Math.hypot(points[i].x - points[i - 1].x, points[i].y - points[i - 1].y) : 0;
     }
@@ -138,9 +213,10 @@ export class LiveDenoiser {
     while (s > 0 && arc[f] - arc[s] < reach) s--;
     const out = denoise(points.slice(s), sigma);
     const result = f ? this.final.concat(out.slice(f - s)) : out;
-    // settle everything at least `reach` behind the tip (its window is complete)
+    // settle everything at least `reach` behind the last stable point (its window is complete and final)
+    const lim = Math.min(n, stable);
     let nf = f;
-    while (nf < n && arc[n - 1] - arc[nf] >= reach) nf++;
+    while (nf < lim && arc[lim - 1] - arc[nf] >= reach) nf++;
     for (let i = f; i < nf; i++) this.final.push(result[i]);
     return result;
   }

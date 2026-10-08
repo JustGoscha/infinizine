@@ -10,7 +10,7 @@
 import { Camera, baseZoom } from './camera';
 import { Store } from './store';
 import { AnimArea, Stroke, FillShape, Element, ImageBox, Page, TextBox, uid } from './types';
-import { hitElement, elementsInLasso, denoise, denoiseClosed, closeBlob, translateElement } from './geometry';
+import { hitElement, elementsInLasso, denoise, denoiseClosed, closeBlob, translateElement, Dequantizer } from './geometry';
 import { pressure } from './pressure';
 import { strokeOutline } from './outline';
 import { animClock } from './clock';
@@ -114,9 +114,15 @@ export function attachInput(
   let resizeMode: 'width' | 'width-left' | 'height' | 'scale' = 'width';
   let resizeStart = { x: 0, w: 0, h: 0, fontSize: 0, wx: 0, wy: 0, auto: undefined as boolean | undefined };
   // positions are recorded raw; all smoothing happens after the fact
-  // (screen-space denoise, see geometry.denoise) so nothing lags the tip
-  let ema: { x: number; y: number } | null = null;
-  const EMA_FACTOR = 1;
+  // (screen-space denoise, see geometry.denoise) so nothing lags the tip.
+  // The stroke being drawn, as captured: canvas px + event time (ms). The live points
+  // are derived from these: dequantised when the browser rounds to whole pixels
+  // (Safari < 26.2), then thinned to MIN_DIST_PX.
+  type Sample = { x: number; y: number; t: number; p: number; a?: number; r?: number };
+  let samples: Sample[] = [];
+  let deq: Dequantizer | null = null; // while every coordinate of the stroke is a whole pixel
+  let src: number[] = []; // live point → the sample it was made from
+  let rectL = 0, rectT = 0; // canvas origin at stroke start
   // pressure conditioning (ported from Doodely): Apple Pencil reports noisy
   // pressure and an exact 0.5 when it hasn't measured yet → carry the last
   // valid value, back-fill the uncertain head once a real reading arrives,
@@ -139,6 +145,7 @@ export function attachInput(
       if (lastValidP === null && state.live) {
         // first real reading: back-fill the uncertain head of the stroke
         for (const pt of state.live.points) pt.p = raw;
+        for (const s of samples) s.p = raw;
         pEma = raw;
       }
       lastValidP = raw;
@@ -148,16 +155,44 @@ export function attachInput(
     return pEma;
   }
 
-  function smooth(w: { x: number; y: number }): { x: number; y: number } {
-    if (!ema) {
-      ema = { x: w.x, y: w.y };
-      return w;
+  /** event time on the performance.now() clock (ms); falls back to now if the stamp looks foreign */
+  function eventTime(e: PointerEvent): number {
+    const now = performance.now();
+    return e.timeStamp > 0 && Math.abs(now - e.timeStamp) < 10_000 ? e.timeStamp : now;
+  }
+  const wholePx = (e: PointerEvent) => Number.isInteger(e.clientX) && Number.isInteger(e.clientY);
+
+  /** Re-derive the live points from sample `from` on (earlier ones can't have changed):
+   * position (dequantised or as reported) → world, thinned to MIN_DIST_PX. */
+  function rebuildLive(from: number) {
+    const live = state.live!;
+    const pts = live.points;
+    let m = src.length;
+    while (m > 1 && src[m - 1] >= from) m--; // points made before `from` keep their thinning decisions
+    pts.length = m;
+    src.length = m;
+    const cw = vw(), ch = vh();
+    // the last kept point carries the freshest pressure/tilt of the samples thinned after it: replay those
+    const last = pts[m - 1], s0 = samples[src[m - 1]];
+    last.p = s0.p; last.a = s0.a; last.r = s0.r;
+    for (let j = src[m - 1] + 1; j < samples.length; j++) {
+      const s = samples[j];
+      const w = camera.screenToWorld(deq ? deq.x(j) : s.x, deq ? deq.y(j) : s.y, cw, ch);
+      const lp = pts[pts.length - 1];
+      const dx = w.x - lp.x, dy = w.y - lp.y;
+      if (dx * dx + dy * dy < minDistSq) {
+        lp.p = s.p; // keep the freshest pressure, no new vertex
+        if (s.a !== undefined) lp.a = s.a;
+        if (s.r !== undefined) lp.r = s.r;
+        continue;
+      }
+      pts.push({ x: w.x, y: w.y, p: s.p, t: Math.max(0, s.t / 1000 - strokeStart), a: s.a, r: s.r });
+      src.push(j);
     }
-    ema = {
-      x: ema.x + EMA_FACTOR * (w.x - ema.x),
-      y: ema.y + EMA_FACTOR * (w.y - ema.y),
-    };
-    return ema;
+    const stable = deq ? deq.stable : samples.length;
+    let k = 0;
+    while (k < src.length && src[k] < stable) k++;
+    state.liveStable = k;
   }
   let erased: Element[] = [];
   let panLast: { x: number; y: number } | null = null;
@@ -448,15 +483,23 @@ export function attachInput(
       case 'sketch':
       case 'fineliner':
       case 'marker': {
-        strokeStart = performance.now() / 1000;
-        ema = null;
         pEma = null;
         lastValidP = null;
         rawPMax = null;
         lastEventT = e.timeStamp;
         strokeZoom = camera.zoom;
         minDistSq = (MIN_DIST_PX / camera.zoom) ** 2;
-        smooth(w);
+        {
+          const rect = canvas.getBoundingClientRect();
+          rectL = rect.left; rectT = rect.top;
+          const t0 = eventTime(e);
+          strokeStart = t0 / 1000;
+          samples = [{ x: e.clientX - rectL, y: e.clientY - rectT, t: t0, p: 0.5, a: tiltOf(e), r: azimuthOf(e) }];
+          deq = wholePx(e) ? new Dequantizer() : null;
+          deq?.push(samples[0].x, samples[0].y, t0);
+          src = [0];
+          state.liveStable = 1;
+        }
         // drawing into a PLAYING area records a timed stroke on the loop clock
         const playingArea =
           state.activeAreaId && state.playingAreas
@@ -492,7 +535,7 @@ export function attachInput(
         };
         state.liveToneAngle = state.fillPattern && !isPixelPattern(state.fillPattern) && state.toneRandom ? Math.floor(Math.random() * 36) * 5 : 0;
         conditionPressure(e);
-        state.live.points[0].p = pEma ?? 0.5;
+        state.live.points[0].p = samples[0].p = pEma ?? 0.5;
         return;
       }
       case 'eraser':
@@ -663,28 +706,20 @@ export function attachInput(
     }
     if (state.live) {
       const events = e.getCoalescedEvents?.() ?? [e];
+      let from = samples.length;
       for (const ce of events) {
         // drop out-of-order coalesced samples (loop-back artifacts)
         if (ce.timeStamp && ce.timeStamp < lastEventT) continue;
         if (ce.timeStamp) lastEventT = ce.timeStamp;
-        const cw = smooth(toWorld(ce));
-        const last = state.live.points[state.live.points.length - 1];
-        const dx = cw.x - last.x, dy = cw.y - last.y;
-        const p = conditionPressure(ce as PointerEvent);
-        const a = tiltOf(ce as PointerEvent);
-        const r = azimuthOf(ce as PointerEvent);
-        if (dx * dx + dy * dy < minDistSq) {
-          last.p = p; // keep the freshest pressure, no new vertex
-          if (a !== undefined) last.a = a;
-          if (r !== undefined) last.r = r;
-          continue;
-        }
-        state.live.points.push({
-          x: cw.x, y: cw.y, p,
-          t: performance.now() / 1000 - strokeStart,
-          a, r,
-        });
+        const s: Sample = {
+          x: ce.clientX - rectL, y: ce.clientY - rectT, t: eventTime(ce),
+          p: conditionPressure(ce), a: tiltOf(ce), r: azimuthOf(ce),
+        };
+        samples.push(s);
+        if (deq && !wholePx(ce)) { deq = null; from = 0; } // sub-pixel input after all: take it as reported
+        else if (deq) from = Math.min(from, deq.push(s.x, s.y, s.t));
       }
+      if (from < samples.length) rebuildLive(from);
       state.lastSampleAt = e.timeStamp || performance.now(); // for the input→paint readout
       return; // renderer redraws while live is set
     }
@@ -905,6 +940,11 @@ export function attachInput(
     if (state.live) {
       const s = state.live;
       state.live = null;
+      if (samples.length > 8) {
+        // performance readout: what the device hands us (whole vs sub-pixel positions, sample rate)
+        const span = (samples[samples.length - 1].t - samples[0].t) / 1000;
+        state.penInput = `${deq ? 'whole px' : 'sub-px'}${span > 0 ? ` ${Math.round((samples.length - 1) / span)} Hz` : ''}`;
+      }
       let travel = 0;
       for (let i = 1; i < s.points.length; i++) {
         travel += Math.hypot(s.points[i].x - s.points[i - 1].x, s.points[i].y - s.points[i - 1].y);
