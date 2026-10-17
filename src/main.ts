@@ -8,6 +8,7 @@ import { Renderer } from './render';
 import { buildUI } from './ui';
 import { installCrashScreen } from './crash';
 import { exportZine } from './export';
+import { attachNativePen, nativeApp, postNative } from './native';
 
 installCrashScreen();
 
@@ -19,6 +20,7 @@ const store = new Store();
 const state = new InputState();
 
 const renderer = new Renderer(canvas, store, camera, state);
+attachNativePen(canvas); // iPad app: full-precision Pencil (before input.ts, which it feeds)
 const input = attachInput(canvas, camera, store, state, () => renderer.invalidate());
 input.setDropCache((id) => renderer.dropFromCache(id));
 
@@ -30,7 +32,22 @@ const uiHooks = buildUI(ui, state, store, camera, () => renderer.invalidate(), {
   pageThumb: (page, width) => renderer.renderPage(page, width / page.w),
 });
 
+if (nativeApp) {
+  // iPad app: a .zine opened from Files / the share sheet
+  (window as unknown as { __izineImport: (text: string) => boolean }).__izineImport = (text) => store.importJSON(text);
+  // debug builds launched with -izineTest: the scripted Pencil benchmark
+  if (nativeApp.test) void import('./pentest').then((m) => m.installPenTest(store, camera, state, canvas, nativeApp!.test!));
+  // automation hooks (cross-play checks, simulator runs)
+  (window as unknown as { __izineDebug: unknown }).__izineDebug = {
+    exportZine: () => exportZine(store, renderer, { scope: 'all', format: 'zine', dpi: 150, paperPattern: false } as unknown as Parameters<typeof exportZine>[2]),
+    summary: () => ({ name: store.doc.name, elements: store.doc.elements.length, pages: store.doc.pages.length, app: store.doc.app }),
+  };
+}
+
 store.onChange = (info) => {
+  if (nativeApp?.logStrokes) for (const el of info?.added ?? []) {
+    if (el.kind === 'stroke') postNative({ type: 'log', msg: `stroke ${el.tool} ${el.points.length} pts · ${state.penInput}` });
+  }
   renderer.docChanged(info); // targeted: only touched elements leave the caches
   uiHooks.docChanged();
 };

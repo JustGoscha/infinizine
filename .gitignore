@@ -1,3 +1,6 @@
 node_modules/
 dist/
 .DS_Store
+ios/InfiniZine/web/
+ios/InfiniZine.xcodeproj/
+ios/build/

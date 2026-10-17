@@ -18,6 +18,14 @@ Infinite-canvas writing/zine app. Product decisions live in SPEC.md — read it 
 - **Render**: `render.ts` (frame loop, static tiles + baked pattern fills, areas, frozen-area bake) · `clock.ts` (shared animation clock, paused while inking) · `camera.ts`.
 - **UI**: `ui.ts` (toolbar, palette, pages, settings, library, presenting) · `icons.ts` (icons, tool catalogue, cursors) · `pointer-ui.ts` (press-drag, pen taps, sliders) · `toolsample.ts` · `timeline.ts` (animation panel) · `playground.ts` (brush settings modal) · `feedback.ts` (toast, tip) · `style.css`.
 - **Text**: `text.ts` (layout, roles, faces) · `richedit.ts` (markdown ↔ HTML) · `fonts.ts` · `facepool.ts` + `facepool-data.ts`.
+- **iPad app**: `native.ts` (bridge: replays the app's full-precision Pencil as pen PointerEvents, reports the live ink to the native overlay; inert in a browser) · `pentest.ts` (simulator Pencil benchmark, debug app builds only).
+
+## iPad app (ios/)
+
+- The same web app wrapped natively (WKWebView + `izine://app/` scheme): same code, same `.zine` format, cross-play by construction. Don't fork behaviour for the app beyond `native.ts`; anything web-visible must keep working in a plain browser.
+- `bun run ios` builds the web bundle into `ios/InfiniZine/web` and generates the Xcode project (XcodeGen, `ios/project.yml`); see `ios/README.md`.
+- Deployment target iPadOS 16 (first-gen iPad Pros): keep the web code to Safari 16 features, guard newer native APIs with `#available`.
+- Verify input changes in the simulator: `ios/scripts/bench.sh` (scripted Pencil, native vs web) and `xcodebuild test` (real touches through the capture path).
 
 ## Versioning
 

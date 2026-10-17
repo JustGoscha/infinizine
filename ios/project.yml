@@ -1,0 +1,62 @@
+name: InfiniZine
+options:
+  bundleIdPrefix: app.infinizine
+  deploymentTarget:
+    iOS: "16.0" # the first iPad Pros (2015 12.9", 2016 9.7") end at iPadOS 16
+  createIntermediateGroups: true
+settings:
+  base:
+    SWIFT_VERSION: "5.0"
+    MARKETING_VERSION: "1.0"
+    CURRENT_PROJECT_VERSION: "1"
+targets:
+  InfiniZine:
+    type: application
+    platform: iOS
+    sources:
+      - path: InfiniZine
+        excludes:
+          - "web/**"
+          - "Info.plist"
+      # the web app, built by `bun run build:app` (served at izine://app/ by AppSchemeHandler)
+      - path: InfiniZine/web
+        type: folder
+        buildPhase: resources
+        optional: true
+    preBuildScripts:
+      - name: Build web app
+        script: |
+          export PATH="$HOME/.bun/bin:/opt/homebrew/bin:/usr/local/bin:$PATH"
+          cd "$SRCROOT/.."
+          if command -v bun >/dev/null; then bun run build:app; else echo "warning: bun not found; using the existing ios/InfiniZine/web"; fi
+        basedOnDependencyAnalysis: false
+    settings:
+      base:
+        PRODUCT_BUNDLE_IDENTIFIER: app.infinizine.ipad
+        PRODUCT_NAME: InfiniZine
+        INFOPLIST_FILE: InfiniZine/Info.plist
+        TARGETED_DEVICE_FAMILY: "2"
+        CODE_SIGN_STYLE: Automatic
+        ENABLE_USER_SCRIPT_SANDBOXING: NO
+        ASSETCATALOG_COMPILER_APPICON_NAME: AppIcon
+  InfiniZineUITests:
+    type: bundle.ui-testing
+    platform: iOS
+    sources: [InfiniZineUITests]
+    dependencies:
+      - target: InfiniZine
+    settings:
+      base:
+        GENERATE_INFOPLIST_FILE: YES
+        TEST_TARGET_NAME: InfiniZine
+        PRODUCT_BUNDLE_IDENTIFIER: app.infinizine.ipad.uitests
+schemes:
+  InfiniZine:
+    build:
+      targets:
+        InfiniZine: all
+    run:
+      config: Debug
+    test:
+      config: Debug
+      targets: [InfiniZineUITests]

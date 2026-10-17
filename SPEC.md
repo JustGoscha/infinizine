@@ -9,6 +9,7 @@ Name: InfiniZine.
 ## Platform & stack
 
 - **Prototype: web-first.** One TypeScript engine (Vite) that runs in the browser and on the iPad (simulator Safari / thin wrapper). The draw engine can be taken native (Swift/Metal, predicted touches, Pencil APIs) later without changing the document format.
+- **iPad app** (ios/): the same engine in a native wrapper that adds what Safari can't give a page — sub-pixel, 240 Hz Pencil samples with UIKit's predictions, a native overlay that keeps the live ink under the tip, full-rate (120 Hz) rendering, Files import/export. One document format: zines move freely between the app and the web. Supports every Pencil iPad Pro (iPadOS 16+); features degrade, never break, on older devices.
 - **Web render engine** is therefore the same codebase: renders the document format in any browser (perfect-freehand outline algorithm for stroke geometry).
 - No backend for v1.
 

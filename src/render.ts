@@ -4,7 +4,7 @@
 import { Camera, baseZoom } from './camera';
 import { AnimArea, Element, FillShape, Page, Stroke, StrokePoint, TextBox } from './types';
 import { elementBBox, bboxIntersects, LiveDenoiser, denoiseClosed, closeBlob, BBox } from './geometry';
-import { strokeOutline, pencilOutlines, markerPaths, outlineToPath, densify, filterPressure, LiveOutliner, hasPressure } from './outline';
+import { strokeOutline, pencilOutlines, markerPaths, outlineToPath, densify, filterPressure, LiveOutliner, hasPressure, widthAt } from './outline';
 import { easeP, easeTilt, pressure } from './pressure';
 import { layoutText, fontFor, segWidth, LINE_HEIGHT, boxFamily, segFamily, wrapWidth } from './text';
 import { moveHandleRect, moveAllHandleRect, deleteHandleRect, eyeHandleRect, diceHandleRect, copyHandleRect, copyStyleHandleRect, pasteStyleHandleRect } from './handles';
@@ -14,6 +14,7 @@ import { Store, ChangeInfo } from './store';
 import { formatLabel } from './formats';
 import { patternTile, patternTileSize, patternCellSize, cellPath, motifPath, isPixelPattern, PIXEL_CELL } from './patterns';
 import { reportCrash } from './crash';
+import { nativeApp, postNative, perfToNative } from './native';
 
 type View = { x: number; y: number; w: number; h: number }; // camera viewport, world coords
 export interface RegionOpts { time?: number; paperPattern?: boolean }
@@ -1041,6 +1042,21 @@ export class Renderer {
     ctx.restore();
   }
 
+  /** iPad app: tell the native ink overlay how the live stroke looks and what has been painted,
+   * so it draws only the newest piece (see ios/InfiniZine/InkOverlay.swift). */
+  private inkReported = '';
+  private reportInk(live: Stroke | null) {
+    if (!live) { this.inkReported = ''; return; }
+    if (live.id !== this.inkReported) {
+      this.inkReported = live.id;
+      // opaque ink only: the overlay overlapping translucent ink (marker, pencil grain) would show
+      const ok = (live.tool === 'pen' || live.tool === 'fineliner') && live.opacity >= 1 && !live.area && !this.input.patternInk();
+      const widths = ok ? Array.from({ length: 11 }, (_, i) => widthAt(live.tool, live.baseWidth, i / 10) * this.camera.zoom) : [];
+      postNative({ type: 'ink', active: ok, color: live.color, widths });
+    }
+    postNative({ type: 'painted', t: perfToNative(this.input.lastSampleAt) });
+  }
+
   private pencilCache = new Map<string, { c: HTMLCanvasElement; bucket: number; bbox: BBox }>();
   private pencilRaster(el: Stroke, z: number) {
     // raster resolution = zoom bucket × device pixel ratio, so a cached pencil
@@ -1491,6 +1507,7 @@ export class Renderer {
       paintAreas(() => true);
     }
     if (live && live.layer !== 'back') drawLiveTimed();
+    if (nativeApp && !presenting) this.reportInk(live);
     ctx.globalAlpha = 1;
 
     // Page borders sit on top of everything

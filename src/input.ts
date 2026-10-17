@@ -1153,7 +1153,7 @@ export function attachInput(
 
   canvas.addEventListener('pointerdown', (e) => {
     e.preventDefault();
-    canvas.setPointerCapture(e.pointerId);
+    try { canvas.setPointerCapture(e.pointerId); } catch { /* replayed native Pencil: no such browser pointer */ }
     if (e.pointerType === 'pen') lastPenAt = performance.now();
     if (e.pointerType === 'pen' && !state.penDetected) {
       state.penDetected = true;
