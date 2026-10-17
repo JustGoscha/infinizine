@@ -4,6 +4,10 @@ options:
   deploymentTarget:
     iOS: "16.0" # the first iPad Pros (2015 12.9", 2016 9.7") end at iPadOS 16
   createIntermediateGroups: true
+packages:
+  # ScreenEvents (share touches with screen recorders) — sibling checkout of omg-screenevents-standard
+  ScreenEventsKit:
+    path: ../../omg-screenevents-standard/swift/ScreenEventsKit
 settings:
   base:
     SWIFT_VERSION: "5.0"
@@ -23,6 +27,8 @@ targets:
         type: folder
         buildPhase: resources
         optional: true
+    dependencies:
+      - package: ScreenEventsKit
     preBuildScripts:
       - name: Build web app
         script: |

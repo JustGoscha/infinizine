@@ -1,3 +1,4 @@
+import ScreenEventsKit
 import UIKit
 import WebKit
 
@@ -14,6 +15,9 @@ final class WebViewController: UIViewController, WKScriptMessageHandler, WKNavig
     private var downloads: [ObjectIdentifier: URL] = [:]
     private var simulator: AnyObject? // PencilSimulator (debug)
     var overlayTip: PenSample? { overlay.tip }
+    var screenEvents: ScreenEventsTouchCapture?
+    static let screenEventsKey = "screenEvents"
+
 
     /// `-izineTest native|web`: run the scripted Pencil benchmark (see PencilSimulator)
     static let testMode: String? = {
@@ -32,6 +36,7 @@ final class WebViewController: UIViewController, WKScriptMessageHandler, WKNavig
         if let t = Self.testMode { info["test"] = t }
         if Self.flag("-izineLogStrokes") { info["logStrokes"] = true }
         if Self.flag("-izineMousePencil") { info["mousePencil"] = true }
+        info["screenEvents"] = UserDefaults.standard.bool(forKey: Self.screenEventsKey)
         let json = String(data: try! JSONSerialization.data(withJSONObject: info), encoding: .utf8)!
         config.userContentController.addUserScript(WKUserScript(
             source: "window.__izineNativeApp = \(json);", injectionTime: .atDocumentStart, forMainFrameOnly: true))
@@ -123,6 +128,10 @@ final class WebViewController: UIViewController, WKScriptMessageHandler, WKNavig
             #if DEBUG
             (simulator as? PencilSimulator)?.finish(body)
             #endif
+        case "screenEvents":
+            let on = body["enabled"] as? Bool ?? false
+            UserDefaults.standard.set(on, forKey: Self.screenEventsKey)
+            screenEvents?.userEnabled = on
         case "log":
             NSLog("[izine:web] \(body["msg"] ?? "")")
         default: break

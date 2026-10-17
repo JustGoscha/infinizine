@@ -9,7 +9,7 @@
 type NSample = [number, number, number, number, number, number];
 interface NMsg { ph: 'b' | 'm' | 'e' | 'c'; id: number; now: number; s: NSample[]; pr?: NSample[] }
 
-interface NativeInfo { platform: string; version?: string; test?: string; logStrokes?: boolean; mousePencil?: boolean }
+interface NativeInfo { platform: string; version?: string; test?: string; logStrokes?: boolean; mousePencil?: boolean; screenEvents?: boolean }
 declare global {
   interface Window {
     __izineNativeApp?: NativeInfo;

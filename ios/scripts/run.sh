@@ -4,7 +4,7 @@
 # SIM=<udid> picks the simulator (default: the first booted iPad, else an iPad Pro 11-inch (M4)).
 set -e
 cd "$(dirname "$0")/.."
-SIM=${SIM:-$(xcrun simctl list devices booted | grep -m1 -o 'iPad[^(]*([0-9A-F-]\{36\})' | grep -o '[0-9A-F-]\{36\}' || true)}
+SIM=${SIM:-$(xcrun simctl list devices booted | grep -m1 'iPad' | grep -o '[0-9A-F-]\{36\}' || true)}
 SIM=${SIM:-$(xcrun simctl list devices available | grep -m1 'iPad Pro 11-inch (M4) (' | grep -o '[0-9A-F-]\{36\}')}
 xcrun simctl boot "$SIM" 2>/dev/null || true
 open -a Simulator

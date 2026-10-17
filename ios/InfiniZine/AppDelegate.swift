@@ -1,3 +1,4 @@
+import ScreenEventsKit
 import UIKit
 
 @main
@@ -9,6 +10,14 @@ final class AppDelegate: UIResponder, UIApplicationDelegate {
         let controller = WebViewController()
         window.rootViewController = controller
         window.pencil = { [weak controller] in controller?.pencil }
+        // ScreenEvents: share touches with screen recorders (only while recording, only if the user turned it on)
+        let version = Bundle.main.object(forInfoDictionaryKey: "CFBundleShortVersionString") as? String
+        let events = ScreenEventsTouchCapture(window: window, source: Peer(id: "app.infinizine.ipad", name: "InfiniZine", version: version))
+        let args = ProcessInfo.processInfo.arguments
+        events.userEnabled = UserDefaults.standard.bool(forKey: WebViewController.screenEventsKey) || args.contains("-izineScreenEvents")
+        events.ignoreCaptureState = args.contains("-SEForceCapture") // testing: the simulator never reports a recorded screen
+        window.screenEvents = events
+        controller.screenEvents = events
         window.makeKeyAndVisible()
         self.window = window
         return true
@@ -24,8 +33,14 @@ final class AppDelegate: UIResponder, UIApplicationDelegate {
 /// Hands every touch event to the Pencil capture before dispatching it as usual.
 final class PencilWindow: UIWindow {
     var pencil: () -> PencilCapture? = { nil }
+    var screenEvents: ScreenEventsTouchCapture?
     override func sendEvent(_ event: UIEvent) {
         if event.type == .touches { pencil()?.handle(event) }
+        screenEvents?.handle(event)
         super.sendEvent(event)
+    }
+    override func layoutSubviews() {
+        super.layoutSubviews()
+        screenEvents?.refreshDisplay() // rotation, Split View, Stage Manager
     }
 }
