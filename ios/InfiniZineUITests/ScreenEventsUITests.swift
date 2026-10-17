@@ -18,7 +18,7 @@ final class ScreenEventsUITests: XCTestCase {
         XCTAssertTrue(inapp.waitForExistence(timeout: 10))
 
         let app = XCUIApplication()
-        app.launchArguments = ["-SEForceCapture", "-izineScreenEvents", "-izineMousePencil"]
+        app.launchArguments = ["-SEForceCapture", "-izineMousePencil"]
         app.launch()
         sleep(4)
         let win = app.windows.firstMatch

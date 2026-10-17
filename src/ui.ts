@@ -17,7 +17,6 @@ import { Camera, baseZoom, pxPerMm, setPxPerMm } from './camera';
 import { PALETTES, PALETTE_GROUPS, getPalette, shades, sortByLightness } from './palettes';
 import { isPattern, patternPreviewCSS, patternLabel, patternLevels, patternVariants, PATTERN_CATEGORIES, PIXEL_FILL } from './patterns';
 import type { ExportOptions } from './export';
-import { nativeApp, postNative } from './native';
 import { UNITS_PER_MM, uid, FORMAT_VERSION, FILL_BLENDS } from './types';
 import { type Fmt, PRIMARY_FORMATS, FORMAT_GROUPS, fitPage, customFormats, saveCustomFormat, mm } from './formats';
 import { fitBox, FONTS, FACES, chosenFaces, appFaces, setFace, setDocFaces, weightRange, cssOf, ROLE_IDS, boxFamily, type FontRole } from './text';
@@ -112,9 +111,7 @@ export function buildUI(
         <div class="seg" id="set-fundo"><button data-v="1">Undo · redo</button><button data-v="0">Off</button></div></div>
       <div class="set-row"><span>Performance readout</span>
         <div class="seg" id="set-perf"><button data-v="1">On</button><button data-v="0">Off</button></div></div>
-      <div class="set-row" id="set-se-row" hidden><span>Share touches with screen recorders</span>
-        <div class="seg" id="set-se"><button data-v="1">On</button><button data-v="0">Off</button></div></div>
-      <div class="set-note" id="set-se-note" hidden>While the screen is being recorded, your touches and Pencil go to recorders that speak ScreenEvents (like OMG Rec), so they can draw your hands and Pencil over the video. Positions and angles only, never content.</div>
+
       <div class="set-row set-sub"><span class="set-title">Typefaces</span>
         <div class="seg" id="set-faces-scope"><button data-v="zine">This zine</button><button data-v="app">App-wide</button></div></div>
       <div class="set-fonts" id="set-fonts"></div>
@@ -1696,20 +1693,8 @@ export function buildUI(
     settingsPop.querySelectorAll<HTMLElement>('#set-lock button').forEach((b) => b.classList.toggle('active', b.dataset.v === (state.zoomLocked ? '1' : '0')));
     settingsPop.querySelectorAll<HTMLElement>('#set-fundo button').forEach((b) => b.classList.toggle('active', b.dataset.v === (state.fingerUndo ? '1' : '0')));
     settingsPop.querySelectorAll<HTMLElement>('#set-perf button').forEach((b) => b.classList.toggle('active', b.dataset.v === (state.perfHud ? '1' : '0')));
-    settingsPop.querySelectorAll<HTMLElement>('#set-se button').forEach((b) => b.classList.toggle('active', b.dataset.v === (nativeApp?.screenEvents ? '1' : '0')));
   };
-  // iPad app only: ScreenEvents, off by default (the app sends only while the screen is recorded)
-  if (nativeApp) {
-    (settingsPop.querySelector('#set-se-row') as HTMLElement).hidden = false;
-    (settingsPop.querySelector('#set-se-note') as HTMLElement).hidden = false;
-    settingsPop.querySelector('#set-se')!.addEventListener('click', (e) => {
-      const v = (e.target as HTMLElement).closest('button')?.dataset.v;
-      if (!v || !nativeApp) return;
-      nativeApp.screenEvents = v === '1';
-      postNative({ type: 'screenEvents', enabled: nativeApp.screenEvents });
-      syncSettings();
-    });
-  }
+
   // performance readout: a legible pill under the top bar (the canvas badge is too small and sits under the toolbar)
   const perfHud = document.createElement('div');
   perfHud.className = 'perf-hud';

@@ -10,11 +10,11 @@ final class AppDelegate: UIResponder, UIApplicationDelegate {
         let controller = WebViewController()
         window.rootViewController = controller
         window.pencil = { [weak controller] in controller?.pencil }
-        // ScreenEvents: share touches with screen recorders (only while recording, only if the user turned it on)
+        // ScreenEvents: always share touches with screen recorders — but only while the screen is being recorded
         let version = Bundle.main.object(forInfoDictionaryKey: "CFBundleShortVersionString") as? String
         let events = ScreenEventsTouchCapture(window: window, source: Peer(id: "app.infinizine.ipad", name: "InfiniZine", version: version))
         let args = ProcessInfo.processInfo.arguments
-        events.userEnabled = UserDefaults.standard.bool(forKey: WebViewController.screenEventsKey) || args.contains("-izineScreenEvents")
+        events.userEnabled = true
         events.ignoreCaptureState = args.contains("-SEForceCapture") // testing: the simulator never reports a recorded screen
         window.screenEvents = events
         controller.screenEvents = events
