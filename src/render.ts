@@ -47,7 +47,8 @@ const flushCanvas = (g: CanvasRenderingContext2D) => { if (DEFERRED_CANVAS) g.ge
 const PENCIL_RASTER_BUDGET = 12_000_000; // px across all cached pencil rasters (~48 MB); oldest go first
 // `stale`: drawn with a stand-in raster, rebuild when there's time; `redo`: its content changed, rebuild now
 // `born`: when it was first completed (fades in from then)
-interface Tile { i: number; j: number; back: HTMLCanvasElement; front: HTMLCanvasElement | null; stale: boolean; redo?: boolean; born?: number }
+// `mips`: pre-shrunk copies (by size, per layer), made the first time it's drawn that small
+interface Tile { i: number; j: number; back: HTMLCanvasElement; front: HTMLCanvasElement | null; stale: boolean; redo?: boolean; born?: number; mips?: Map<string, HTMLCanvasElement> }
 
 /** How the static ink gets onto the screen — alternatives to compare per device (hardware differs:
  * a desktop can draw a whole screen of tiles in a frame, an iPad can't). */
@@ -72,8 +73,11 @@ export interface RenderOpts {
   /** how: 'layer' a background layer behind the canvas moved by a compositor transform ·
    * 'position' the same layer moved by its background position · 'canvas' painted into the canvas */
   gridMode: 'layer' | 'position' | 'canvas';
+  /** draw the screen straight from vectors instead of tiles when only cheap ink is in view and it
+   * fits the frame on this device ('auto'), never, or always */
+  vector: 'auto' | 'never' | 'always';
 }
-export const RENDER_DEFAULTS: RenderOpts = { schedule: 'adaptive', levels: true, fade: true, motion: true, prefetchDir: true, draft: true, grid: true, gridMode: 'canvas' };
+export const RENDER_DEFAULTS: RenderOpts = { schedule: 'adaptive', levels: true, fade: true, motion: true, prefetchDir: true, draft: true, grid: true, gridMode: 'canvas', vector: 'auto' };
 const FADE_MS = 300;
 /** a new tile's opacity `age` ms after it was built: eased in and out, so detail arrives softly */
 const fadeAlpha = (age: number) => { const u = Math.max(0, Math.min(1, age / FADE_MS)); return u * u * (3 - 2 * u); };
@@ -169,6 +173,17 @@ export class Renderer {
       for (const el of this.store.doc.elements) if (el.frame || (el.kind === 'stroke' && el.area)) this.indexEl(el);
     }
   }
+  /** For input (eraser, hit tests): elements near a world rect — the still ink there (hidden ones
+   * too) plus every animated element (few; the eraser filters by frame). */
+  elementsNear(r: View): Element[] {
+    const ix = this.index();
+    const out = this.stillIn(r, false);
+    for (const l of ix.byFrame.values()) out.push(...l);
+    for (const l of ix.byArea.values()) out.push(...l);
+    return out;
+  }
+  elementById(id: string): Element | undefined { return this.index().byId.get(id); }
+
   /** The still ink intersecting `r`, in drawing order (hidden and dragged ones left out). */
   private stillIn(r: View, skipHidden = true): Element[] {
     const ix = this.index();
@@ -192,6 +207,10 @@ export class Renderer {
   })();
   /** ms a sharp tile takes to build here (smoothed): what 'adaptive' scheduling goes by */
   private tileCost = 16;
+  /** vector mode: on now (hysteresis), and what one cheap element costs to draw directly (ms, learnt) */
+  private vectorMode = false;
+  private vecCost = DEFERRED_CANVAS ? 0.025 : 0.003;
+  private vecFrames = 0;
   private tileCostS = 4; // the tile scale it was measured at (a tile further out holds (s₀/s)² as much)
   private syncBuilt = 0; // sharp tiles built all at once last frame (their real cost shows in the next frame's interval)
   private camPrev = { x: 0, y: 0, zoom: 0, t: 0 };
@@ -443,9 +462,22 @@ export class Renderer {
 
   /** Dragging stopped (dropped, or no move for a while): back into the tiles; the bitmap stays up
    * until the tiles under it are rebuilt, then goes. */
-  private updateFloating(now: number) {
+  private updateFloating(now: number, noTiles = false) {
     if (!this.floating.size) return;
     const set = this.tileSet;
+    if (noTiles) {
+      // vector mode draws them straight from the doc once dropped: no tiles to wait for
+      for (const [id, f] of this.floating) {
+        if (!f.landing && now - f.touched <= 300) continue;
+        const el = this.index().byId.get(id);
+        if (el) { const a = anchorOf(el); if (a.x !== f.ax || a.y !== f.ay) this.dropElementCaches(id); if (this.isStill(el)) this.ix.still.insert(el, this.elBox(el)); }
+        if (f.snap) f.snap.width = f.snap.height = 0;
+        this.floating.delete(id);
+        this.redoTiles(el ? [this.elBox(el)] : []);
+      }
+      this.dirty = true;
+      return;
+    }
     for (const [id, f] of this.floating) {
       const el = this.index().byId.get(id);
       if (!el) { this.floating.delete(id); continue; }
@@ -749,8 +781,32 @@ export class Renderer {
     return this.opts.levels ? Math.pow(2, Math.ceil(Math.log2(x) * 2 - 1e-9) / 2) : x;
   }
 
+  /** Expensive to draw from vectors every frame: pencil stamps, dot tones, line patterns (pixel
+   * patterns are one image blit: cheap). */
+  private static expensive(el: Element): boolean {
+    if (el.kind === 'stroke') return el.tool === 'pencil';
+    if (el.kind === 'fill') return !!el.pattern && !patternCellSize(el.pattern);
+    return false;
+  }
+
+  /** This frame: straight from vectors, or tiles? (`inView`: the still ink in view, in order) */
+  private decideVector(inView: Element[]): boolean {
+    const mode = this.opts.vector;
+    if (mode !== 'auto') return (this.vectorMode = mode === 'always');
+    if (inView.some(Renderer.expensive)) return (this.vectorMode = false);
+    const est = inView.length * this.vecCost, f = this.framePeriod;
+    const was = this.vectorMode;
+    this.vectorMode = false;
+    const tilesReady = this.screenCoverage().sharp >= 1;
+    this.vectorMode = was;
+    if (this.vectorMode) this.vectorMode = est <= (tilesReady ? 0.6 : 1) * f;
+    else this.vectorMode = est <= 0.35 * f;
+    return this.vectorMode;
+  }
+
   /** Benchmarks: how much of the screen has a sharp tile, and how much has anything (sharp, another level, the draft). */
   screenCoverage(): { sharp: number; any: number } {
+    if (this.vectorMode) return { sharp: 1, any: 1 }; // (drawn straight from vectors: all of it, every frame)
     const set = this.tileSet, d = this.draft;
     const dpr = window.devicePixelRatio || 1, z = this.camera.zoom;
     if (!set || set.s !== this.levelFor(z)) return { sharp: 0, any: 0 };
@@ -940,6 +996,29 @@ export class Renderer {
     }
   }
 
+  /** A tile's layer pre-shrunk to the next mip size at or above `px` (128 or 32 px), made once:
+   * shrinking a 512 px tile to a few pixels every frame cost WebKit seconds far out. */
+  private mipsMade = 0; // this frame (a few a frame: the first far-out frame used to make dozens at once)
+  private mipFrame = 0;
+  private mip(t: Tile, layer: 'back' | 'front', c: HTMLCanvasElement, px: number, force = false): HTMLCanvasElement | null {
+    const size = px > 32 ? 128 : 32;
+    const key = `${layer}${size}`;
+    let m = t.mips?.get(key);
+    if (!m) {
+      if (this.mipFrame !== this.lastFrameT) { this.mipFrame = this.lastFrameT; this.mipsMade = 0; }
+      if (!force && this.mipsMade >= 3) { this.dirty = true; return null; } // (drawn full size this once)
+      this.mipsMade++;
+      const src = size === 32 ? this.mip(t, layer, c, 128, true)! : c; // (in steps: smoother, and cheap)
+      m = document.createElement('canvas');
+      m.width = m.height = size;
+      const g = m.getContext('2d')!;
+      g.imageSmoothingQuality = 'high';
+      g.drawImage(src, 0, 0, size, size);
+      (t.mips ??= new Map()).set(key, m);
+    }
+    return m;
+  }
+
   /** Blit a tile set's back or front bitmaps (device-px space; scaled when the set is from another zoom). */
   private blitTiles(set: TileSet, layer: 'back' | 'front', W: number, H: number, ox: number, oy: number, now = -1) {
     const ctx = this.ctx;
@@ -955,7 +1034,8 @@ export class Renderer {
       const age = now >= 0 && t.born !== undefined ? now - t.born : FADE_MS;
       ctx.globalAlpha = age < FADE_MS ? base * fadeAlpha(age) : base;
       if (k === 1) ctx.drawImage(c, x0, y0);
-      else ctx.drawImage(c, x0, y0, x1 - x0, y1 - y0);
+      else if (k >= 0.3) ctx.drawImage(c, x0, y0, x1 - x0, y1 - y0);
+      else ctx.drawImage(this.mip(t, layer, c, x1 - x0) ?? c, x0, y0, x1 - x0, y1 - y0);
     }
     ctx.globalAlpha = base;
   }
@@ -963,7 +1043,9 @@ export class Renderer {
   /** Static ink for this frame: build the tiles that scrolled into view (and, with
    * time to spare, a ring around them), blit the back bitmaps, and return the
    * front blit, which runs after a paint-behind live stroke. */
-  private drawStatic(vw: number, vh: number, dpr: number, frameStart: number): () => void {
+  /** `show` false (vector mode): keep the tiles and the overview building in the background, at a
+   * low budget, without drawing them — so they're ready the moment the view needs tiles. */
+  private drawStatic(vw: number, vh: number, dpr: number, frameStart: number, show = true): () => void {
     const { camera } = this;
     const ctx = this.ctx;
     const opts = this.opts;
@@ -1044,6 +1126,7 @@ export class Renderer {
       const build = (ts: TileSet, i: number, j: number, until: number): boolean => {
         const tile = this.runTileJob(ts, i, j, until);
         if (!tile) return false;
+        if (ts === coarse) for (const layer of ['back', 'front'] as const) { const c = layer === 'back' ? tile.back : tile.front; if (c) this.mip(tile, layer, c, 8, true); }
         const key = `${i},${j}`;
         const old = ts.tiles.get(key);
         // a tile appearing where there was none fades in; a rebuild of one already showing just swaps
@@ -1072,7 +1155,7 @@ export class Renderer {
       const expected = this.tileCost * Math.max(1, (this.tileCostS / fine.s) ** 2); // per tile at this level
       const syncNow = opts.schedule === 'sync' || (opts.schedule === 'adaptive' && missing > 0 && missing <= 4 && missing * expected <= this.framePeriod);
       const slice = this.buildBudget();
-      const deadline = frameStart + (missing && !(opts.motion && moving) ? Math.max(slice, this.framePeriod * 0.75) : slice);
+      const deadline = frameStart + (!show ? slice * 0.5 : missing && !(opts.motion && moving) ? Math.max(slice, this.framePeriod * 0.75) : slice);
       let built = 0;
       let pending = false;
       const cx = (W / 2 - ox) / T - 0.5, cy = (H / 2 - oy) / T - 0.5;
@@ -1086,10 +1169,10 @@ export class Renderer {
         const ei0 = eb ? Math.floor((eb.minX * ds) / TILE) : 0, ei1 = eb ? Math.floor((eb.maxX * ds) / TILE) : -1;
         const ej0 = eb ? Math.floor((eb.minY * ds) / TILE) : 0, ej1 = eb ? Math.floor((eb.maxY * ds) / TILE) : -1;
         const dcx = ((view.x + view.w / 2) * ds) / TILE - 0.5, dcy = ((view.y + view.h / 2) * ds) / TILE - 0.5;
-        for (let j = Math.min(dj0, ej0); j <= Math.max(dj1, ej1); j++) {
-          for (let i = Math.min(di0, ei0); i <= Math.max(di1, ei1); i++) {
+        // (only where the zine is: far out the screen spans thousands of empty overview tiles)
+        for (let j = ej0; j <= ej1; j++) {
+          for (let i = ei0; i <= ei1; i++) {
             const on = i >= di0 && i <= di1 && j >= dj0 && j <= dj1;
-            if (!on && !(i >= ei0 && i <= ei1 && j >= ej0 && j <= ej1)) continue;
             if (coarse.tiles.has(`${i},${j}`)) continue;
             order.push([coarse, i, j, (on && missing && !syncNow ? 0 : 1500) + Math.hypot(i - dcx, j - dcy), on && missing > 0 && !syncNow]);
           }
@@ -1149,7 +1232,10 @@ export class Renderer {
     }
     // editing an area dims everything else: the tiles go down faded over bare paper
     const dimmed = !!this.focusAreaId();
-    const others = [...this.levels].sort((a, b) => a.s - b.s); // sharper on top
+    // other levels as stand-ins, sharper on top — but not ones far sharper than needed: shrinking
+    // hundreds of their tiles to a few pixels each, every frame, took a far-out frame past a second
+    // (the overview covers there instead; they stay cached for zooming back)
+    const others = this.levels.filter((l) => (camera.zoom * dpr) / l.s >= 0.3).sort((a, b) => a.s - b.s);
     const blit = (layer: 'back' | 'front') => {
       ctx.save();
       ctx.setTransform(1, 0, 0, 1, 0, 0);
@@ -1201,6 +1287,7 @@ export class Renderer {
       this.blitTiles(fine, layer, W, H, ox, oy, performance.now());
       ctx.restore();
     };
+    if (!show) return () => {};
     blit('back');
     // (alpha reset inside: a live back-layer marker leaves the context at its 0.45 and would fade the whole front layer)
     return () => blit('front');
@@ -1973,7 +2060,11 @@ export class Renderer {
    * so it draws only the newest piece (see ios/InfiniZine/InkOverlay.swift). */
   private inkReported = '';
   private reportInk(live: Stroke | null) {
-    if (!live) { this.inkReported = ''; return; }
+    if (!live) {
+      if (this.inkReported) postNative({ type: 'ink', active: false }); // (the stroke's done: overlay off)
+      this.inkReported = '';
+      return;
+    }
     if (live.id !== this.inkReported) {
       this.inkReported = live.id;
       // opaque ink only: the overlay overlapping translucent ink (marker, pencil grain) would show
@@ -2115,17 +2206,27 @@ export class Renderer {
     // Static layers for the committed, non-animated content. Skipped while
     // presenting (page clip); elements the eraser hides are left out of their tiles.
     // The back bitmap goes down now; the front one after a paint-behind live stroke.
-    const useStatic = !presenting;
+    const viewNow = camera.viewport(vw, vh);
+    const inViewNow = presenting ? [] : this.stillIn(viewNow);
+    const vector = !presenting && this.decideVector(inViewNow);
+    const useStatic = !presenting && !vector;
     let blitFront: () => void = () => {};
     if (useStatic) {
       this.updatePaper(vw, vh, paper, true);
       blitFront = this.drawStatic(vw, vh, dpr, frameStart);
+    } else if (vector) {
+      // vector mode: the paper behind, its grid first, the ink drawn straight over it below
+      // (tiles keep building unseen, for when the view gets busier)
+      this.drawStatic(vw, vh, dpr, frameStart, false);
+      ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
+      this.updatePaper(vw, vh, paper, true);
+      ctx.clearRect(0, 0, vw, vh);
+      if (this.opts.grid) this.drawPaperGrid(vw, vh, paper, 'source-over');
     } else {
       this.updatePaper(vw, vh, paper, false);
       // Desk (chosen paper color)
       ctx.fillStyle = paper;
       ctx.fillRect(0, 0, vw, vh);
-      if (!presenting) this.drawPattern(vw, vh, paper);
     }
 
     const view = camera.viewport(vw, vh);
@@ -2403,10 +2504,21 @@ export class Renderer {
       }
     } else {
       dimFactor = focusAreaId ? 0.3 : 1;
-      const inView = this.stillIn(view);
+      const inView = vector ? inViewNow : this.stillIn(view);
+      const t0 = performance.now();
       for (const el of inView) if (el.layer === 'back') drawEl(el);
       for (const el of inView) if (el.layer !== 'back') drawEl(el);
+      // what a cheap element costs here, now and then (WebKit: with the drawing made to finish)
+      if (vector && inView.length >= 20 && ++this.vecFrames % 30 === 0) {
+        if (DEFERRED_CANVAS) ctx.getImageData(0, 0, 1, 1);
+        const per = (performance.now() - t0) / inView.length;
+        this.vecCost += (per - this.vecCost) * 0.3;
+      }
       dimFactor = 1;
+      if (vector) {
+        this.updateFloating(frameStart, true);
+        this.drawFloating();
+      }
     }
 
     // Animated elements: per area, per layer (bottom first); frame ownership decides the layer

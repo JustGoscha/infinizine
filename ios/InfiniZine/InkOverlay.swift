@@ -56,6 +56,10 @@ final class InkOverlay: UIView {
             painted = 0
             reports = []
             ended = false
+            // nothing until the page says this touch is an ink stroke (its "ink" message): a touch
+            // with the eraser or the selector, or one on the toolbar, must never get native ink
+            active = false
+            shape.path = nil
         }
         samples += s
         predicted = pr

@@ -23,6 +23,7 @@ const renderer = new Renderer(canvas, store, camera, state);
 attachNativePen(canvas); // iPad app: full-precision Pencil (before input.ts, which it feeds)
 const input = attachInput(canvas, camera, store, state, () => renderer.invalidate());
 input.setDropCache((id) => renderer.dropFromCache(id));
+input.setIndex((id) => renderer.elementById(id), (r) => renderer.elementsNear(r));
 
 const uiHooks = buildUI(ui, state, store, camera, () => renderer.invalidate(), {
   copy: () => input.copySelection(),

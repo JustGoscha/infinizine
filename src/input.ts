@@ -288,7 +288,7 @@ export function attachInput(
    * press landed on one and an action (drag or tap) started. */
   function startHandleAction(e: PointerEvent, w: { x: number; y: number }): boolean {
     // Image handles (any tool, on hovered/selected image)
-    for (const el of store.doc.elements) {
+    for (const el of byIds([...state.selection, state.hoverImage ?? ''])) {
       if (el.kind !== 'image') continue;
       if (state.hoverImage !== el.id && !state.selection.has(el.id)) continue;
       const z = camera.zoom;
@@ -323,7 +323,7 @@ export function attachInput(
 
     // Textbox handles (any tool, on hovered/selected box):
     // top-left = move, bottom-right = scale, left/right edge = width
-    for (const el of store.doc.elements) {
+    for (const el of byIds([...state.selection, state.hoverText ?? ''])) {
       if (el.kind !== 'text') continue;
       if (state.hoverText !== el.id && !state.selection.has(el.id)) continue;
       const z = camera.zoom;
@@ -642,7 +642,7 @@ export function attachInput(
     const r = state.eraserRadius(camera.zoom);
     state.eraserAt = w;
     invalidate();
-    for (const el of store.doc.elements) {
+    for (const el of near({ x: w.x - r, y: w.y - r, w: 2 * r, h: 2 * r })) {
       if (state.hidden.has(el.id)) continue;
       if (!frameEditable(el, state)) continue;
       if (hitElement(el, w.x, w.y, r)) {
@@ -675,9 +675,7 @@ export function attachInput(
         const stepX = dx - pageAllApplied.x;
         const stepY = dy - pageAllApplied.y;
         pageAllApplied = { x: dx, y: dy };
-        const idSet = new Set(pageAllIds);
-        for (const el of store.doc.elements) {
-          if (!idSet.has(el.id)) continue;
+        for (const el of byIds(pageAllIds)) {
           translateElement(el, stepX, stepY);
           dropCache(el.id);
         }
@@ -692,8 +690,7 @@ export function attachInput(
     }
     if (dragSelection) {
       const dx = w.x - dragStartWorld.x, dy = w.y - dragStartWorld.y;
-      for (const el of store.doc.elements) {
-        if (!state.selection.has(el.id)) continue;
+      for (const el of byIds(state.selection)) {
         translateElement(el, dx, dy);
         dropCache(el.id);
       }
@@ -757,9 +754,7 @@ export function attachInput(
           const stepX = dx - moveAllApplied.x;
           const stepY = dy - moveAllApplied.y;
           moveAllApplied = { x: dx, y: dy };
-          const idSet = new Set(moveAllIds);
-          for (const el of store.doc.elements) {
-            if (!idSet.has(el.id)) continue;
+          for (const el of byIds(moveAllIds)) {
             translateElement(el, stepX, stepY);
             dropCache(el.id);
           }
@@ -906,9 +901,7 @@ export function attachInput(
       // revert live mutation, then commit as a single undoable op
       p.x = dragPageStart.x; p.y = dragPageStart.y;
       if (wasAll) {
-        const idSet = new Set(pageAllIds);
-        for (const el of store.doc.elements) {
-          if (!idSet.has(el.id)) continue;
+        for (const el of byIds(pageAllIds)) {
           translateElement(el, -dx, -dy);
           dropCache(el.id);
         }
@@ -926,8 +919,7 @@ export function attachInput(
     }
     if (dragSelection) {
       const ids = [...state.selection];
-      for (const el of store.doc.elements) {
-        if (!state.selection.has(el.id)) continue;
+      for (const el of byIds(state.selection)) {
         translateElement(el, -dragTotal.x, -dragTotal.y);
         dropCache(el.id);
       }
@@ -1019,9 +1011,7 @@ export function attachInput(
         const dx = a.x - st.x, dy = a.y - st.y;
         a.x = st.x; a.y = st.y;
         if (resizeAreaMode === 'move-all') {
-          const idSet = new Set(moveAllIds);
-          for (const el of store.doc.elements) {
-            if (!idSet.has(el.id)) continue;
+          for (const el of byIds(moveAllIds)) {
             translateElement(el, -dx, -dy);
             dropCache(el.id);
           }
@@ -1140,12 +1130,34 @@ export function attachInput(
 
 
   let dropCache: (id: string) => void = () => {};
+
+
+
+
+  // element lookups (the renderer's index once wired; a scan until then)
+
+
+
+
+  let lookup: (id: string) => Element | undefined = (id) => store.doc.elements.find((e) => e.id === id);
+
+
+
+
+  let near: (r: { x: number; y: number; w: number; h: number }) => Element[] = () => store.doc.elements;
+
+
+
+
+  const byIds = (ids: Iterable<string>): Element[] => { const out: Element[] = []; for (const id of ids) { const el = id ? lookup(id) : undefined; if (el) out.push(el); } return out; };
   // live mutations of text/image boxes (resize previews) aren't store changes:
   // the renderer's static tiles must be told to rebuild so the preview shows
   const invalidateStatic = () => { dropCache('*'); invalidate(); };
   const clip = createClipboard(store, state, camera, invalidate);
   const api = {
     setDropCache(fn: (id: string) => void) { dropCache = fn; },
+    /** the renderer's element index: lookups by id, and what's near a world rect */
+    setIndex(byId: (id: string) => Element | undefined, nearRect: (r: { x: number; y: number; w: number; h: number }) => Element[]) { lookup = byId; near = nearRect; },
     copySelection: clip.copySelection,
     cutSelection: clip.cutSelection,
     pasteSmart: clip.pasteSmart,
