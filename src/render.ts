@@ -43,11 +43,34 @@ const DEFERRED_CANVAS = /AppleWebKit/.test(navigator.userAgent) && !/Chrome|Chro
 const flushCanvas = (g: CanvasRenderingContext2D) => { if (DEFERRED_CANVAS) g.getImageData(0, 0, 1, 1); };
 const PENCIL_RASTER_BUDGET = 12_000_000; // px across all cached pencil rasters (~48 MB); oldest go first
 // `stale`: drawn with a stand-in raster, rebuild when there's time; `redo`: its content changed, rebuild now
-interface Tile { i: number; j: number; back: HTMLCanvasElement; front: HTMLCanvasElement | null; stale: boolean; redo?: boolean }
+// `born`: when it was first completed (fades in from then)
+interface Tile { i: number; j: number; back: HTMLCanvasElement; front: HTMLCanvasElement | null; stale: boolean; redo?: boolean; born?: number }
+
+/** How the static ink gets onto the screen — alternatives to compare per device (hardware differs:
+ * a desktop can draw a whole screen of tiles in a frame, an iPad can't). */
+export interface RenderOpts {
+  /** when missing tiles get built: 'sync' all at once (stalls a frame, fills instantly) · 'sliced'
+   * a budget per frame (never stalls, fills over frames) · 'adaptive' sync when this device's
+   * measured tile cost says they fit in about a frame, else sliced */
+  schedule: 'sync' | 'sliced' | 'adaptive';
+  /** tiles at fixed zoom levels √2 apart (drawn slightly shrunk in between), kept for a couple of
+   * levels — like map tiles: most zooms re-render nothing; off: tiles at the exact zoom */
+  levels: boolean;
+  /** new tiles fade in (~150 ms) instead of popping square by square */
+  fade: boolean;
+  /** while the view moves, keep the frame for smoothness; sharpen hard once it stops */
+  motion: boolean;
+  /** build ahead in the direction the view is moving */
+  prefetchDir: boolean;
+  /** the whole-zine overview under everything (what shows where no tile is ready) */
+  draft: boolean;
+}
+export const RENDER_DEFAULTS: RenderOpts = { schedule: 'adaptive', levels: true, fade: true, motion: true, prefetchDir: true, draft: true };
+const FADE_MS = 150;
 /** a tile being built a slice per frame: its elements by layer, where it got to (element k of
  * pass 0 = back, 1 = front; within a long pencil stroke, the next stamp) */
 interface TileJob {
-  i: number; j: number; back: HTMLCanvasElement; front: HTMLCanvasElement | null;
+  i: number; j: number; back: HTMLCanvasElement; front: HTMLCanvasElement | null; spent: number;
   layers: [Element[], Element[]]; pass: number; k: number;
   stamp: { next: number; state: { sinceX: number; sinceY: number; skipped: number } } | null;
   stale: boolean;
@@ -76,8 +99,18 @@ export class Renderer {
   // `back` holds paper + the 'back' layer, `front` the rest (null when empty), so a
   // paint-behind live stroke can slip between them without repainting anything.
   private tileSet: TileSet | null = null;
-  /** the previous zoom's tiles: scaled into the gaps while the new zoom's tiles build */
-  private prevTiles: TileSet | null = null;
+  /** other zoom levels' tiles (most recent first): kept so zooming back finds them, and drawn
+   * (scaled) into the gaps while the current level's tiles build */
+  private levels: TileSet[] = [];
+  opts: RenderOpts = (() => {
+    try { return { ...RENDER_DEFAULTS, ...JSON.parse(localStorage.getItem('izine-render-opts') ?? '{}') }; } catch { return { ...RENDER_DEFAULTS }; }
+  })();
+  /** ms a sharp tile takes to build here (smoothed): what 'adaptive' scheduling goes by */
+  private tileCost = 16;
+  private syncBuilt = 0; // sharp tiles built all at once last frame (their real cost shows in the next frame's interval)
+  private camPrev = { x: 0, y: 0, zoom: 0, t: 0 };
+  private movingUntil = 0;
+  private vel = { x: 0, y: 0 }; // screen px per ms the view is moving (content moves the other way)
   /** the draft: an overview of the whole zine at one fixed, modest scale with light detail (pencil
    * outlines in a graphite tone, dot tones as their tint), built once in the background and kept
    * up to date — it doesn't depend on the zoom, so any pan or zoom finds it ready: what shows
@@ -188,6 +221,13 @@ export class Renderer {
     const dt = t - this.lastFrameT;
     this.lastFrameT = t;
     if (dt > 4 && dt < 40) this.framePeriod += (dt - this.framePeriod) * 0.1;
+    // a frame that built tiles all at once and came late: that's what a tile really costs here
+    // (the clock alone sees only the recording where the browser draws later — Chrome, WebKit)
+    if (this.syncBuilt && dt > 0 && dt < 2000) {
+      const real = Math.max(0, dt - this.framePeriod) / this.syncBuilt;
+      this.tileCost += (real - this.tileCost) * (real > this.tileCost ? 0.7 : 0.2);
+    }
+    this.syncBuilt = 0;
     // fps debug: rAF cadence — drops when the main thread struggles
     this.fpsFrames++;
     if (t - this.fpsT >= 500) {
@@ -262,7 +302,7 @@ export class Renderer {
     const before = info.ids.map((id) => this.tileBoxes.get(id));
     for (const id of info.ids) { this.cache.delete(id); this.boxCache.delete(id); this.dotCache.delete(id); this.dropDotBake(id); this.dropCellImage(id); this.dropPencilRaster(id); this.dropPencilJob(id); this.stampCache.delete(id); this.dropFillRaster(id); }
     const set = this.tileSet;
-    const current = !!set && set.content === this.contentKey() && set.zoom === this.camera.zoom;
+    const current = !!set && set.content === this.contentKey() && set.s === this.levelFor(this.camera.zoom);
     const canAppend = current && info.added && info.added.length && info.added.every((el) => this.isStill(el));
     if (canAppend) {
       const boxes = info.added!.map((el) => this.elBox(el));
@@ -294,8 +334,7 @@ export class Renderer {
     const set = this.tileSet;
     if (!set || !boxes.length) return;
     this.dropTileJobs(boxes);
-    this.dropSet(this.prevTiles);
-    this.prevTiles = null;
+    this.dropLevelTiles(boxes);
     for (const ts of [set, this.draft]) {
       if (!ts) continue;
       for (const t of ts.tiles.values()) {
@@ -510,6 +549,32 @@ export class Renderer {
     set.jobs.clear();
   }
 
+  /** The tile scale (device px per world unit) for a zoom: a level √2 apart at or above it
+   * (drawn ≤ 1.41× shrunk, so always sharp), or the exact zoom with levels off. */
+  levelFor(zoom: number): number {
+    const x = zoom * (window.devicePixelRatio || 1);
+    return this.opts.levels ? Math.pow(2, Math.ceil(Math.log2(x) * 2 - 1e-9) / 2) : x;
+  }
+
+  /** Benchmarks: how much of the screen has a sharp tile, and how much has anything (sharp, another level, the draft). */
+  screenCoverage(): { sharp: number; any: number } {
+    const set = this.tileSet, d = this.draft;
+    const dpr = window.devicePixelRatio || 1, z = this.camera.zoom;
+    if (!set || set.s !== this.levelFor(z)) return { sharp: 0, any: 0 };
+    const W = this.canvas.clientWidth * dpr, H = this.canvas.clientHeight * dpr;
+    const { ox, oy } = this.worldMatrix(this.canvas.clientWidth, this.canvas.clientHeight, dpr);
+    const T = (TILE * z * dpr) / set.s;
+    const i0 = Math.floor(-ox / T), i1 = Math.floor((W - 1 - ox) / T), j0 = Math.floor(-oy / T), j1 = Math.floor((H - 1 - oy) / T);
+    let n = 0, sharp = 0, any = 0;
+    for (let j = j0; j <= j1; j++) for (let i = i0; i <= i1; i++) {
+      n++;
+      const wx = ((i + 0.5) * TILE) / set.s, wy = ((j + 0.5) * TILE) / set.s;
+      const covered = (ts: TileSet | null) => !!ts && ts.tiles.has(`${Math.floor((wx * ts.s) / TILE)},${Math.floor((wy * ts.s) / TILE)}`);
+      if (set.tiles.has(`${i},${j}`)) { sharp++; any++; } else if (covered(d) || this.levels.some(covered)) any++;
+    }
+    return { sharp: sharp / n, any: any / n };
+  }
+
   /** world rect of tile (i, j) at `s` device px per world unit */
   private tileView(i: number, j: number, s: number): View {
     return { x: (i * TILE) / s, y: (j * TILE) / s, w: TILE / s, h: TILE / s };
@@ -563,18 +628,23 @@ export class Renderer {
       const g = back.getContext('2d')!;
       g.fillStyle = paper;
       g.fillRect(0, 0, TILE, TILE);
-      if (!set.draft) this.paintPaperTile(g, i, j, paper); // (the draft is zoom-free: no zoom-stepped paper marks)
+      if (!set.draft) this.paintPaperTile(g, i, j, paper, set.s); // (the draft is zoom-free: no zoom-stepped paper marks)
       const here = (el: Element) => bboxIntersects(this.elBox(el), view);
-      job = { i, j, back, front: null, layers: [near.back.filter(here), near.front.filter(here)], pass: 0, k: 0, stamp: null, stale: false };
+      job = { i, j, back, front: null, spent: 0, layers: [near.back.filter(here), near.front.filter(here)], pass: 0, k: 0, stamp: null, stale: false };
       set.jobs.set(key, job);
     }
     const pending = this.rastersPending;
     this.rastersPending = false;
+    const t0 = performance.now();
     const done = this.advanceTileJob(job, set, view, until);
+    job.spent += performance.now() - t0;
     job.stale ||= this.rastersPending; // a pattern fill drawn from another zoom's bake: rebuild once it's ready
     this.rastersPending ||= pending;
     if (!done) return null;
     set.jobs.delete(key);
+    // what a tile costs on this device — only where the clock sees the drawing (WebKit, flushed);
+    // elsewhere it's learnt from late frames (see frame)
+    if (!set.draft && DEFERRED_CANVAS) this.tileCost += (job.spent - this.tileCost) * 0.2;
     return { i, j, back: job.back, front: job.front, stale: job.stale };
   }
 
@@ -660,6 +730,14 @@ export class Renderer {
     return true;
   }
 
+  /** Other levels' tiles under `boxes` are out of date: forget them (they're rebuilt if that level comes back). */
+  private dropLevelTiles(boxes: BBox[]) {
+    for (const l of this.levels) {
+      for (const [key, t] of l.tiles) if (boxes.some((b) => bboxIntersects(b, this.tileView(t.i, t.j, l.s)))) { this.dropTile(t); l.tiles.delete(key); }
+      for (const [key, job] of l.jobs) if (boxes.some((b) => bboxIntersects(b, this.tileView(job.i, job.j, l.s)))) { this.recycle(job.back); this.recycle(job.front); l.jobs.delete(key); }
+    }
+  }
+
   /** Forget unfinished tiles (all, or those under `boxes`): their element lists are out of date. */
   private dropTileJobs(boxes?: BBox[]) {
     for (const set of [this.tileSet, this.draft]) {
@@ -674,16 +752,15 @@ export class Renderer {
   }
 
   /** The paper's dot/grid/lines marks on tile (i, j): the same world-anchored cells as drawPattern. */
-  private paintPaperTile(g: CanvasRenderingContext2D, i: number, j: number, paper: string, coarse = 1) {
+  private paintPaperTile(g: CanvasRenderingContext2D, i: number, j: number, paper: string, s: number) {
     const pattern = this.store.doc.pattern ?? 'dots';
     if (pattern === 'blank') return;
-    // (`coarse`: a draft tile's pixels are this many screen pixels: marks drawn that much smaller)
-    const dpr = (window.devicePixelRatio || 1) / coarse;
+    const dpr = window.devicePixelRatio || 1;
     const dark = darkPaper(paper);
-    let sp = 10 * this.camera.zoom; // 5 mm, in CSS px; doubled/halved like drawPattern
-    while (sp < 8) sp *= 2;
-    while (sp > 120) sp /= 2;
-    const d = sp * dpr;
+    // 5 mm cells (10 world units) at the tile's scale, doubled/halved like drawPattern
+    let d = 10 * s;
+    while (d < 8 * dpr) d *= 2;
+    while (d > 120 * dpr) d /= 2;
     const x0 = i * TILE, y0 = j * TILE;
     const k0 = Math.floor(x0 / d), k1 = Math.ceil((x0 + TILE) / d);
     const l0 = Math.floor(y0 / d), l1 = Math.ceil((y0 + TILE) / d);
@@ -704,9 +781,10 @@ export class Renderer {
   }
 
   /** Blit a tile set's back or front bitmaps (device-px space; scaled when the set is from another zoom). */
-  private blitTiles(set: TileSet, layer: 'back' | 'front', W: number, H: number, ox: number, oy: number) {
+  private blitTiles(set: TileSet, layer: 'back' | 'front', W: number, H: number, ox: number, oy: number, now = -1) {
     const ctx = this.ctx;
     const k = (this.camera.zoom * (window.devicePixelRatio || 1)) / set.s;
+    const base = ctx.globalAlpha;
     for (const t of set.tiles.values()) {
       const c = layer === 'back' ? t.back : t.front;
       if (!c) continue;
@@ -714,9 +792,12 @@ export class Renderer {
       const x0 = Math.round(t.i * TILE * k) + ox, x1 = Math.round((t.i + 1) * TILE * k) + ox;
       const y0 = Math.round(t.j * TILE * k) + oy, y1 = Math.round((t.j + 1) * TILE * k) + oy;
       if (x1 <= 0 || y1 <= 0 || x0 >= W || y0 >= H) continue;
+      const age = now >= 0 && t.born !== undefined ? now - t.born : FADE_MS;
+      ctx.globalAlpha = age < FADE_MS ? base * Math.max(0, age / FADE_MS) : base;
       if (k === 1) ctx.drawImage(c, x0, y0);
       else ctx.drawImage(c, x0, y0, x1 - x0, y1 - y0);
     }
+    ctx.globalAlpha = base;
   }
 
   /** Static ink for this frame: build the tiles that scrolled into view (and, with
@@ -725,27 +806,48 @@ export class Renderer {
   private drawStatic(vw: number, vh: number, dpr: number, frameStart: number): () => void {
     const { camera } = this;
     const ctx = this.ctx;
+    const opts = this.opts;
     const content = this.contentKey();
+    const level = this.levelFor(camera.zoom);
     const zooming = frameStart - this.lastZoomChangeAt < 180;
-    if (this.prevTiles && this.prevTiles.content !== content) { this.dropSet(this.prevTiles); this.prevTiles = null; }
+    // the view's motion (for motion-aware budgets and prefetching ahead)
+    const pc = this.camPrev;
+    if (camera.x !== pc.x || camera.y !== pc.y || camera.zoom !== pc.zoom) {
+      const dt = Math.max(1, frameStart - pc.t), z = camera.zoom * dpr;
+      if (pc.t && camera.zoom === pc.zoom) {
+        this.vel.x += (((camera.x - pc.x) * z) / dt - this.vel.x) * 0.5;
+        this.vel.y += (((camera.y - pc.y) * z) / dt - this.vel.y) * 0.5;
+      }
+      this.movingUntil = frameStart + 120;
+    } else if (frameStart > this.movingUntil) {
+      this.vel.x = this.vel.y = 0;
+    }
+    this.camPrev = { x: camera.x, y: camera.y, zoom: camera.zoom, t: frameStart };
+    const moving = frameStart < this.movingUntil;
+
+    this.levels = this.levels.filter((l) => { if (l.content === content) return true; this.dropSet(l); return false; });
     if (this.tileSet && this.tileSet.content !== content) { this.dropSet(this.tileSet); this.tileSet = null; }
     let set = this.tileSet;
-    if (set && set.zoom !== camera.zoom && !zooming) {
-      // the zoom settled: these stand in, scaled, while the new zoom's tiles build
-      this.dropSet(this.prevTiles);
-      this.prevTiles = set;
-      set = null;
+    // (a level we still have comes back at once; a new one waits for the zoom gesture to settle)
+    if (set && set.s !== level && (!zooming || this.levels.some((l) => l.s === level))) {
+      // the zoom settled on another level: this one joins the cache; a cached set of the new level comes back
+      this.levels.unshift(set);
+      const hit = this.levels.findIndex((l) => l.s === level);
+      set = hit >= 0 ? this.levels.splice(hit, 1)[0] : null;
+      while (this.levels.length > 2) this.dropSet(this.levels.pop()!);
     }
-    if (!set) set = this.tileSet = { content, zoom: camera.zoom, s: camera.zoom * dpr, tiles: new Map(), jobs: new Map() };
+    if (!set) set = { content, zoom: camera.zoom, s: level, tiles: new Map(), jobs: new Map() };
+    this.tileSet = set;
     const fine: TileSet = set;
     const ext = this.draftScale();
     let draft = this.draft;
-    if (draft && (draft.content !== content || draft.s !== ext.s)) { this.dropSet(draft); draft = this.draft = null; }
-    if (!draft) draft = this.draft = { content, zoom: 0, s: ext.s, tiles: new Map(), jobs: new Map(), draft: true };
-    const coarse: TileSet = draft;
+    if (draft && (draft.content !== content || draft.s !== ext.s || !opts.draft)) { this.dropSet(draft); draft = this.draft = null; }
+    if (!draft && opts.draft) draft = this.draft = { content, zoom: 0, s: ext.s, tiles: new Map(), jobs: new Map(), draft: true };
+    const coarse = draft;
+    const settled = fine.s === level;
     // the eraser hides elements as it goes: repaint just the tiles they were on (and back, if un-hidden)
     const hidden = this.input.hidden;
-    if (fine.zoom === camera.zoom && (hidden.size || this.tileHidden.size)) {
+    if (settled && (hidden.size || this.tileHidden.size)) {
       const changed: BBox[] = [];
       for (const id of hidden) if (!this.tileHidden.has(id)) { const b = this.tileBoxes.get(id); if (b) changed.push(b); }
       for (const id of this.tileHidden) {
@@ -758,20 +860,15 @@ export class Renderer {
     }
     const { ox, oy } = this.worldMatrix(vw, vh, dpr);
     const W = vw * dpr, H = vh * dpr;
-    const holes = new Path2D(); // screen rects still without a sharp tile of this zoom
+    const k = (camera.zoom * dpr) / fine.s, T = TILE * k; // a sharp tile on screen, device px
+    const holes = new Path2D(); // screen rects without a settled sharp tile (missing or still fading in)
     let holed = false;
-    if (fine.zoom === camera.zoom) {
+    let fading = false;
+    if (settled) {
       const tiles = fine.tiles;
-      const i0 = Math.floor(-ox / TILE), i1 = Math.floor((W - 1 - ox) / TILE);
-      const j0 = Math.floor(-oy / TILE), j1 = Math.floor((H - 1 - oy) / TILE);
-      // the draft tiles over the screen, and over the whole zine
-      const view = camera.viewport(vw, vh), ds = coarse.s;
-      const di0 = Math.floor((view.x * ds) / TILE), di1 = Math.floor(((view.x + view.w) * ds) / TILE);
-      const dj0 = Math.floor((view.y * ds) / TILE), dj1 = Math.floor(((view.y + view.h) * ds) / TILE);
-      const eb = ext.box;
-      const ei0 = eb ? Math.floor((eb.minX * ds) / TILE) : 0, ei1 = eb ? Math.floor((eb.maxX * ds) / TILE) : -1;
-      const ej0 = eb ? Math.floor((eb.minY * ds) / TILE) : 0, ej1 = eb ? Math.floor((eb.maxY * ds) / TILE) : -1;
-      // still elements around a region, by layer (once per frame per layer)
+      const i0 = Math.floor(-ox / T), i1 = Math.floor((W - 1 - ox) / T);
+      const j0 = Math.floor(-oy / T), j1 = Math.floor((H - 1 - oy) / T);
+      const view = camera.viewport(vw, vh);
       const nearOf = (rect: View) => {
         const near = { back: [] as Element[], front: [] as Element[] };
         for (const el of this.store.doc.elements) {
@@ -782,13 +879,17 @@ export class Renderer {
       };
       type Near = { back: Element[]; front: Element[] };
       let nearFine: Near | null = null, nearDraft: Near | null = null;
+      const eb = ext.box;
+      // (one more ring on the side the view is heading)
+      const lead = opts.prefetchDir && moving ? { x: Math.sign(Math.round(this.vel.x * 4)), y: Math.sign(Math.round(this.vel.y * 4)) } : { x: 0, y: 0 };
+      const ri0 = i0 - PREFETCH - (lead.x < 0 ? 1 : 0), ri1 = i1 + PREFETCH + (lead.x > 0 ? 1 : 0);
+      const rj0 = j0 - PREFETCH - (lead.y < 0 ? 1 : 0), rj1 = j1 + PREFETCH + (lead.y > 0 ? 1 : 0);
       const build = (ts: TileSet, i: number, j: number, until: number): boolean => {
         let near: Near;
         if (ts === fine) {
           if (!nearFine) {
-            const ring = this.tileView(i0 - PREFETCH, j0 - PREFETCH, fine.s);
-            ring.w *= i1 - i0 + 1 + 2 * PREFETCH;
-            ring.h *= j1 - j0 + 1 + 2 * PREFETCH;
+            const a = this.tileView(ri0, rj0, fine.s), b = this.tileView(ri1, rj1, fine.s);
+            const ring = { x: a.x, y: a.y, w: b.x + b.w - a.x, h: b.y + b.h - a.y };
             this.keepRect = ring;
             nearFine = nearOf(ring);
           }
@@ -800,118 +901,124 @@ export class Renderer {
         const tile = this.runTileJob(ts, i, j, near, until);
         if (!tile) return false;
         const key = `${i},${j}`;
-        this.dropTile(ts.tiles.get(key));
+        const old = ts.tiles.get(key);
+        // a tile appearing where there was none fades in; a rebuild of one already showing just swaps
+        if (opts.fade && ts === fine && !old) tile.born = performance.now();
+        this.dropTile(old);
         ts.tiles.set(key, tile);
         return true;
       };
-      const fallback = this.prevTiles;
-      const sharpMissingNow = () => {
-        for (let j = j0; j <= j1; j++) for (let i = i0; i <= i1; i++) if (!tiles.has(`${i},${j}`) && !(fallback && fallback.s > fine.s && coveredByPrevEarly(i, j))) return true;
-        return false;
+      // a sharper cached level (we zoomed out) covering a tile: it can wait — shrunk, those stay crisp
+      const coveredBySharper = (i: number, j: number) => {
+        const v = this.tileView(i, j, fine.s);
+        return this.levels.some((l) => {
+          if (l.s <= fine.s) return false;
+          const a0 = Math.floor((v.x * l.s) / TILE), a1 = Math.floor(((v.x + v.w) * l.s - 1e-6) / TILE);
+          const b0 = Math.floor((v.y * l.s) / TILE), b1 = Math.floor(((v.y + v.h) * l.s - 1e-6) / TILE);
+          for (let b = b0; b <= b1; b++) for (let a = a0; a <= a1; a++) if (!l.tiles.has(`${a},${b}`)) return false;
+          return true;
+        });
       };
-      const coveredByPrevEarly = (i: number, j: number) => {
-        const p = fallback!, v = this.tileView(i, j, fine.s), k = p.s;
-        const a0 = Math.floor((v.x * k) / TILE), a1 = Math.floor(((v.x + v.w) * k - 1e-6) / TILE);
-        const b0 = Math.floor((v.y * k) / TILE), b1 = Math.floor(((v.y + v.h) * k - 1e-6) / TILE);
-        for (let b = b0; b <= b1; b++) for (let a = a0; a <= a1; a++) if (!p.tiles.has(`${a},${b}`)) return false;
-        return true;
-      };
-      // ms of tile building per frame: most of the frame while there are gaps on screen (they look
-      // broken), a third of it for the prefetch otherwise
-      const deadline = frameStart + (sharpMissingNow() ? Math.max(this.buildBudget(), this.framePeriod * 0.75) : this.buildBudget());
+      let missing = 0;
+      for (let j = j0; j <= j1; j++) for (let i = i0; i <= i1; i++) if (!tiles.has(`${i},${j}`) && !coveredBySharper(i, j)) missing++;
+      // when to build: all at once if that fits about a frame on this device (or always, with 'sync'),
+      // else a budget per frame — most of the frame while gaps show and the view is still, a third
+      // of it while it moves (smoothness first) or for prefetching
+      // (adaptive: only small gaps — the edge a slow pan reveals — and only when they fit a frame here)
+      const syncNow = opts.schedule === 'sync' || (opts.schedule === 'adaptive' && missing > 0 && missing <= 4 && missing * this.tileCost <= this.framePeriod);
+      const slice = this.buildBudget();
+      const deadline = frameStart + (missing && !(opts.motion && moving) ? Math.max(slice, this.framePeriod * 0.75) : slice);
       let built = 0;
       let pending = false;
-      // what to build, most needed first: the draft over the screen while sharp tiles are missing
-      // there (and no old zoom's tiles stand in) → the sharp tiles, centre out → a draft ring
-      // around the screen (a fling lands on draft, not paper) → the sharp prefetch rings
-      let sharpMissing = false;
-      for (let j = j0; j <= j1 && !sharpMissing; j++) for (let i = i0; i <= i1; i++) if (!tiles.has(`${i},${j}`)) { sharpMissing = true; break; }
-      const cx = (W / 2 - ox) / TILE - 0.5, cy = (H / 2 - oy) / TILE - 0.5;
+      const cx = (W / 2 - ox) / T - 0.5, cy = (H / 2 - oy) / T - 0.5;
       const order: [TileSet, number, number, number, boolean][] = []; // set, i, j, priority, on screen
-      // the draft: over the screen first while sharp tiles are missing there, then the rest of
-      // the zine in spare time (so later pans and zooms find it ready)
-      const dcx = ((view.x + view.w / 2) * ds) / TILE - 0.5, dcy = ((view.y + view.h / 2) * ds) / TILE - 0.5;
-      for (let j = Math.min(dj0, ej0); j <= Math.max(dj1, ej1); j++) {
-        for (let i = Math.min(di0, ei0); i <= Math.max(di1, ei1); i++) {
-          const on = i >= di0 && i <= di1 && j >= dj0 && j <= dj1;
-          const inZine = i >= ei0 && i <= ei1 && j >= ej0 && j <= ej1;
-          if (!inZine && !on) continue;
-          if (on && !sharpMissing && coarse.tiles.has(`${i},${j}`)) continue;
-          order.push([coarse, i, j, (on && sharpMissing ? 0 : 1500) + Math.hypot(i - dcx, j - dcy), on && sharpMissing]);
+      if (coarse) {
+        // the draft: over the screen first while sharp tiles are missing there, then the rest of
+        // the zine in spare time (so later pans and zooms find it ready)
+        const ds = coarse.s;
+        const di0 = Math.floor((view.x * ds) / TILE), di1 = Math.floor(((view.x + view.w) * ds) / TILE);
+        const dj0 = Math.floor((view.y * ds) / TILE), dj1 = Math.floor(((view.y + view.h) * ds) / TILE);
+        const ei0 = eb ? Math.floor((eb.minX * ds) / TILE) : 0, ei1 = eb ? Math.floor((eb.maxX * ds) / TILE) : -1;
+        const ej0 = eb ? Math.floor((eb.minY * ds) / TILE) : 0, ej1 = eb ? Math.floor((eb.maxY * ds) / TILE) : -1;
+        const dcx = ((view.x + view.w / 2) * ds) / TILE - 0.5, dcy = ((view.y + view.h / 2) * ds) / TILE - 0.5;
+        for (let j = Math.min(dj0, ej0); j <= Math.max(dj1, ej1); j++) {
+          for (let i = Math.min(di0, ei0); i <= Math.max(di1, ei1); i++) {
+            const on = i >= di0 && i <= di1 && j >= dj0 && j <= dj1;
+            if (!on && !(i >= ei0 && i <= ei1 && j >= ej0 && j <= ej1)) continue;
+            if (coarse.tiles.has(`${i},${j}`)) continue;
+            order.push([coarse, i, j, (on && missing && !syncNow ? 0 : 1500) + Math.hypot(i - dcx, j - dcy), on && missing > 0 && !syncNow]);
+          }
         }
+        for (const [key, t] of coarse.tiles) if (t.redo) order.push([coarse, t.i, t.j, 1500, false]), void key;
       }
-      // zoomed out: the old zoom's tiles are sharper than needed, and shrunk they stay crisp —
-      // where they cover a tile it can wait (built exactly later, in spare time)
-      const sharpPrev = fallback && fallback.s > fine.s ? fallback : null;
-      const coveredByPrev = (i: number, j: number) => {
-        if (!sharpPrev) return false;
-        const v = this.tileView(i, j, fine.s), k = sharpPrev.s;
-        const a0 = Math.floor((v.x * k) / TILE), a1 = Math.floor(((v.x + v.w) * k - 1e-6) / TILE);
-        const b0 = Math.floor((v.y * k) / TILE), b1 = Math.floor(((v.y + v.h) * k - 1e-6) / TILE);
-        for (let b = b0; b <= b1; b++) for (let a = a0; a <= a1; a++) if (!sharpPrev.tiles.has(`${a},${b}`)) return false;
-        return true;
-      };
-      for (let j = j0 - PREFETCH; j <= j1 + PREFETCH; j++) {
-        for (let i = i0 - PREFETCH; i <= i1 + PREFETCH; i++) {
+      for (let j = rj0; j <= rj1; j++) {
+        for (let i = ri0; i <= ri1; i++) {
           const on = i >= i0 && i <= i1 && j >= j0 && j <= j1;
-          const wait = on && coveredByPrev(i, j);
-          order.push([fine, i, j, (on ? (wait ? 800 : 100) : 1000) + Math.hypot(i - cx, j - cy), on]);
+          const wait = on && coveredBySharper(i, j);
+          // ahead of the motion first (the side about to come into view)
+          const ahead = lead.x || lead.y ? -0.6 * ((i - cx) * lead.x + (j - cy) * lead.y) : 0;
+          order.push([fine, i, j, (on ? (wait ? 800 : 100) : 1000) + Math.hypot(i - cx, j - cy) + ahead, on]);
         }
       }
       order.sort((a, b) => a[3] - b[3]);
       for (const [ts, i, j, , onScreen] of order) {
         const t = ts.tiles.get(`${i},${j}`);
         if (t && !t.redo && (!t.stale || !onScreen || ts === coarse)) continue;
-        // interaction first: whatever doesn't fit this frame's budget waits for the next one;
-        // the first tile of a frame always gets a couple of ms, so something always progresses
+        const sync = syncNow && ts === fine && onScreen;
         const now = performance.now();
-        if (built && now > deadline) { pending = true; if (onScreen) continue; break; }
+        if (!sync && built && now > deadline) { pending = true; if (onScreen) continue; break; }
         built++;
-        if (!build(ts, i, j, built === 1 ? Math.max(deadline, now + 2) : deadline)) pending = true;
+        if (sync) this.syncBuilt++;
+        // (the first tile of a frame always gets a couple of ms, so something always progresses)
+        if (!build(ts, i, j, sync ? Infinity : built === 1 ? Math.max(deadline, now + 2) : deadline)) pending = true;
       }
       // forget tiles (and half-built ones) that scrolled well away
       const far = (ts: TileSet, i: number, j: number) => ts === fine
-        ? i < i0 - PREFETCH - 1 || i > i1 + PREFETCH + 1 || j < j0 - PREFETCH - 1 || j > j1 + PREFETCH + 1
-        : (i < ei0 || i > ei1 || j < ej0 || j > ej1) && (i < di0 - 1 || i > di1 + 1 || j < dj0 - 1 || j > dj1 + 1); // (the draft keeps the whole zine)
-      for (const ts of [fine, coarse]) {
+        ? i < ri0 - 1 || i > ri1 + 1 || j < rj0 - 1 || j > rj1 + 1
+        : !eb || i < Math.floor((eb.minX * ts.s) / TILE) - 1 || i > Math.floor((eb.maxX * ts.s) / TILE) + 1 || j < Math.floor((eb.minY * ts.s) / TILE) - 1 || j > Math.floor((eb.maxY * ts.s) / TILE) + 1;
+      for (const ts of coarse ? [fine, coarse] : [fine]) {
         for (const [key, t] of ts.tiles) if (far(ts, t.i, t.j)) { this.dropTile(t); ts.tiles.delete(key); }
         for (const [key, job] of ts.jobs) if (far(ts, job.i, job.j)) { this.recycle(job.back); this.recycle(job.front); ts.jobs.delete(key); }
       }
+      const nowMs = performance.now();
       for (let j = j0; j <= j1; j++) {
         for (let i = i0; i <= i1; i++) {
-          if (!tiles.has(`${i},${j}`)) { holes.rect(i * TILE + ox, j * TILE + oy, TILE, TILE); holed = true; }
+          const t = tiles.get(`${i},${j}`);
+          const fadingIn = !!t && t.born !== undefined && nowMs - t.born < FADE_MS;
+          if (!t || fadingIn) {
+            const x0 = Math.round(i * T) + ox, y0 = Math.round(j * T) + oy;
+            holes.rect(x0, y0, Math.round((i + 1) * T) + ox - x0, Math.round((j + 1) * T) + oy - y0);
+            holed = true;
+            fading ||= fadingIn;
+          }
         }
       }
-      if (!holed && fallback) { this.dropSet(fallback); this.prevTiles = null; }
-      if (pending) this.dirty = true;
+      if (pending || fading) this.dirty = true;
     } else {
-      this.dirty = true; // mid-zoom: the last zoom's tiles, scaled, until the gesture settles
+      this.dirty = true; // mid-zoom across levels: what we have, scaled, until the gesture settles
     }
-    const prev = holed ? this.prevTiles : null;
     // editing an area dims everything else: the tiles go down faded over bare paper
     const dimmed = !!this.focusAreaId();
+    const others = [...this.levels].sort((a, b) => a.s - b.s); // sharper on top
     const blit = (layer: 'back' | 'front') => {
       ctx.save();
       ctx.setTransform(1, 0, 0, 1, 0, 0);
       ctx.globalAlpha = 1;
       ctx.globalCompositeOperation = 'source-over';
-      if (layer === 'back' && (holed || dimmed || fine.zoom !== camera.zoom)) {
+      if (layer === 'back' && (holed || dimmed || !settled)) {
         ctx.fillStyle = this.store.doc.paper ?? '#F7F4EC';
         ctx.fillRect(0, 0, W, H);
       }
       if (dimmed) ctx.globalAlpha = 0.3;
-      if (fine.zoom !== camera.zoom) {
-        // mid-zoom: the draft everywhere, the last zoom's tiles (scaled) over it where they reach
-        if (coarse.tiles.size) this.blitTiles(coarse, layer, W, H, ox, oy);
-      } else if (holed) {
-        // where a sharp tile isn't ready: the draft, and over it the old zoom's tiles where they reach
+      if (!settled || holed) {
+        // under the gaps (and under tiles fading in): the draft, then other levels' tiles, sharper on top
         ctx.save();
-        ctx.clip(holes);
-        if (coarse.tiles.size) this.blitTiles(coarse, layer, W, H, ox, oy);
-        if (prev) this.blitTiles(prev, layer, W, H, ox, oy);
+        if (settled) ctx.clip(holes);
+        if (coarse?.tiles.size) this.blitTiles(coarse, layer, W, H, ox, oy);
+        for (const l of others) this.blitTiles(l, layer, W, H, ox, oy);
         ctx.restore();
       }
-      this.blitTiles(fine, layer, W, H, ox, oy);
+      this.blitTiles(fine, layer, W, H, ox, oy, performance.now());
       ctx.restore();
     };
     blit('back');
@@ -922,8 +1029,7 @@ export class Renderer {
   /** Append freshly committed elements onto the built tiles. */
   private paintOntoTiles(els: Element[]) {
     const set = this.tileSet!;
-    this.dropSet(this.prevTiles); // stand-ins would miss the new ink
-    this.prevTiles = null;
+    this.dropLevelTiles(els.map((el) => this.elBox(el))); // other levels' tiles there would miss the new ink
     const back = els.filter((el) => el.layer === 'back');
     const front = els.filter((el) => el.layer !== 'back');
     for (const t of set.tiles.values()) {
