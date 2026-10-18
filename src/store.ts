@@ -82,9 +82,14 @@ function changeInfo(op: Op): ChangeInfo {
     case 'delete-frame':
     case 'add-anim-layer':
     case 'delete-anim-layer':
-      return { ids: op.elements.map((e) => e.id) };
+      // (elements moving into / out of an area leave / join the still ink: repaint just theirs)
+      return { ids: op.elements.map((e) => e.id), local: true };
+    case 'doc-faces': // typefaces: every text box may change
+      return { ids: [] };
     default:
-      return { ids: [] }; // pages, area rects, ordering, styles: element caches stay valid
+      // pages, area rects and settings, frame order/timing, renames, paper: no still ink changed
+      // (pages and areas are drawn over the tiles every frame; paper/pattern are in the tiles' key)
+      return { ids: [], local: true };
   }
 }
 
@@ -423,7 +428,7 @@ export class Store {
       if (next) void this.openDoc(next.id);
       else this.newDoc();
     } else {
-      this.onChange();
+      this.onChange({ ids: [], local: true }); // another zine went: nothing on the canvas changed
     }
   }
 
@@ -433,7 +438,7 @@ export class Store {
     this.doc.name = n;
     this.metaDirty = true;
     void this.flush();
-    this.onChange();
+    this.onChange({ ids: [], local: true }); // (the name isn't drawn: the tiles stay)
   }
 
   /** Self-contained export: plain JSON, the whole document (numbers to 1/1000 unit — sub-micron). */

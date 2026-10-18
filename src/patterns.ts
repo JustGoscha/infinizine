@@ -207,6 +207,28 @@ export function cellPath(points: { x: number; y: number }[], id: string, m = 1):
   return path;
 }
 
+/** The same cells as cellPath, as a mask with one byte per cell (255 = ink) — drawn as a tiny
+ * image scaled up without smoothing, a pixel fill costs one blit at any zoom instead of a path
+ * of thousands of squares. `c0`, `r0`: the mask's first column / row on the world cell grid. */
+export function cellMask(points: { x: number; y: number }[], id: string): { mask: Uint8Array; c0: number; r0: number; cols: number; rows: number; cell: number } | null {
+  const rule = cellRule(id);
+  const cell = patternCellSize(id) ?? 0;
+  if (!rule || !cell || points.length < 3) return null;
+  let minX = Infinity, minY = Infinity, maxX = -Infinity, maxY = -Infinity;
+  for (const q of points) { minX = Math.min(minX, q.x); minY = Math.min(minY, q.y); maxX = Math.max(maxX, q.x); maxY = Math.max(maxY, q.y); }
+  const c0 = Math.floor(minX / cell), c1 = Math.ceil(maxX / cell);
+  const r0 = Math.floor(minY / cell), r1 = Math.ceil(maxY / cell);
+  const cols = c1 - c0, rows = r1 - r0;
+  if (cols <= 0 || rows <= 0 || cols * rows > 4_000_000) return null;
+  const inPoly = polygonTesterNZ(points);
+  const mask = new Uint8Array(cols * rows);
+  for (let r = r0; r < r1; r++) {
+    const cy = (r + 0.5) * cell, o = (r - r0) * cols - c0;
+    for (let c = c0; c < c1; c++) if (rule(r, c) && inPoly((c + 0.5) * cell, cy)) mask[o + c] = 255;
+  }
+  return { mask, c0, r0, cols, rows, cell };
+}
+
 /** A polygon snapped to a cell grid anchored at the world origin: every cell
  * whose centre lies inside is included whole — the fill's edge becomes pixel
  * steps, never a cell cut in half. Rows are emitted as horizontal runs. */
@@ -245,6 +267,15 @@ export function motifPath(points: { x: number; y: number }[], id: string, angleD
     path.arc(x, y, d.r, 0, Math.PI * 2);
   }
   return path;
+}
+
+/** How much of the area a dot-family fill inks (0–1): its look as an even tint, for previews. */
+export function motifCoverage(id: string): number {
+  const p = parse(id);
+  if (!p) return 0.3;
+  if (p.fam === 'tone') return Math.min(1, lv('tone', p.k)); // dot radius is chosen for exactly this coverage
+  if (p.fam === 'sand') return Math.min(1, (lv('sand', p.k) * Math.PI * 0.13 * 0.13) / 16);
+  return 0.3;
 }
 
 /** The whole dots of a dot-family fill (see motifPath): centres (world) and radius. */
