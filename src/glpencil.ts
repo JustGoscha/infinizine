@@ -123,6 +123,36 @@ export class GLPencil {
     return tex;
   }
 
+  /** Draw `count` stamps (STAMP_FLOATS each, in `target`'s pixels) and composite them over
+   * `target`'s top-left w×h (≤ BLOCK) — source-over is associative, so this equals stamping
+   * them into it one by one. False if the GPU path failed (nothing drawn). */
+  stampInto(target: CanvasRenderingContext2D, w: number, h: number, color: string, nibs: HTMLCanvasElement[], data: Float32Array, count: number): boolean {
+    if (!this.ok || w > BLOCK || h > BLOCK) return false;
+    const { gl, canvas } = this;
+    gl.useProgram(this.prog);
+    gl.activeTexture(gl.TEXTURE0);
+    gl.bindTexture(gl.TEXTURE_2D_ARRAY, this.nibTexture(color, nibs));
+    gl.bindBuffer(gl.ARRAY_BUFFER, this.stamps);
+    gl.bufferData(gl.ARRAY_BUFFER, data.subarray(0, count * STAMP_FLOATS), gl.STREAM_DRAW);
+    gl.viewport(0, BLOCK - h, w, h);
+    gl.enable(gl.SCISSOR_TEST);
+    gl.scissor(0, BLOCK - h, w, h);
+    gl.clearColor(0, 0, 0, 0);
+    gl.clear(gl.COLOR_BUFFER_BIT);
+    gl.uniform2f(this.sizeLoc, w, h);
+    gl.uniform2f(this.originLoc, 0, 0);
+    gl.drawArraysInstanced(gl.TRIANGLE_STRIP, 0, 4, count);
+    gl.disable(gl.SCISSOR_TEST);
+    if (gl.isContextLost()) return false;
+    target.save();
+    target.setTransform(1, 0, 0, 1, 0, 0);
+    target.globalAlpha = 1;
+    target.globalCompositeOperation = 'source-over';
+    target.drawImage(canvas, 0, 0, w, h, 0, 0, w, h); // same task as the draw: the buffer is still there
+    target.restore();
+    return true;
+  }
+
   /** Draw `count` stamps (STAMP_FLOATS each, in raster px) into a new w×h canvas.
    * `nibs`: the colour's 16 nib canvases (layer = index). Null if the GPU path failed. */
   render(w: number, h: number, color: string, nibs: HTMLCanvasElement[], data: Float32Array, count: number): HTMLCanvasElement | null {

@@ -29,7 +29,7 @@ function frameAtTick(frames: { id: string; duration: number }[], tick: number): 
 }
 const TILE = 512; // static tile side, device px
 const TILE_POOL = 16;
-const DRAFT = 4; // the draft layer's tiles: this many times coarser (one covers DRAFT × DRAFT tiles)
+const DRAFT_PX = 8_000_000; // the draft (whole-zine overview) at most this many px (~32 MB)
 const PREFETCH = 2; // rings of tiles built around the screen in spare time (kept up to one more) // spare tile bitmaps kept for reuse (iOS is slow to allocate and slow to free canvases)
 const FILL_RASTER_MAX = 4_000_000; // px: bigger pattern fills are filled directly
 const FILL_RASTER_BUDGET = 8_000_000; // px across baked pattern fills away from the screen (~32 MB)
@@ -78,10 +78,27 @@ export class Renderer {
   private tileSet: TileSet | null = null;
   /** the previous zoom's tiles: scaled into the gaps while the new zoom's tiles build */
   private prevTiles: TileSet | null = null;
-  /** the draft layer: the whole screen at a quarter of the resolution with lighter detail (pencil
-   * from fewer stamps, dot tones as their tint), quick to build — what shows where a tile isn't
-   * ready yet (rather than bare paper), until the sharp tiles cover it */
+  /** the draft: an overview of the whole zine at one fixed, modest scale with light detail (pencil
+   * outlines in a graphite tone, dot tones as their tint), built once in the background and kept
+   * up to date — it doesn't depend on the zoom, so any pan or zoom finds it ready: what shows
+   * where a sharp tile isn't (rather than bare paper), until the sharp tiles cover it */
   private draft: TileSet | null = null;
+  private draftExtent: { key: string; box: BBox | null; s: number } = { key: '', box: null, s: 1 };
+  /** the still ink's extent and the draft's scale (a power of two, so it changes rarely as the zine grows) */
+  private draftScale(): { box: BBox | null; s: number } {
+    const key = `${this.tileGen}|${this.store.doc.elements.length}`;
+    if (this.draftExtent.key === key) return this.draftExtent;
+    let box: BBox | null = null;
+    for (const el of this.store.doc.elements) {
+      if (!this.isStill(el)) continue;
+      const b = this.elBox(el);
+      box = box ? { minX: Math.min(box.minX, b.minX), minY: Math.min(box.minY, b.minY), maxX: Math.max(box.maxX, b.maxX), maxY: Math.max(box.maxY, b.maxY) } : { ...b };
+    }
+    const area = box ? Math.max(1, (box.maxX - box.minX) * (box.maxY - box.minY)) : 1;
+    const s = Math.pow(2, Math.floor(Math.log2(Math.min(2, Math.sqrt(DRAFT_PX / area)))));
+    this.draftExtent = { key, box, s };
+    return this.draftExtent;
+  }
   private tilePool: HTMLCanvasElement[] = [];
   private tileGen = 0; // bumped whenever committed ink changes in a way tiles can't patch
   /** device px per world unit while a tile is being painted (pattern fills then come from fillRasters) */
@@ -546,7 +563,7 @@ export class Renderer {
       const g = back.getContext('2d')!;
       g.fillStyle = paper;
       g.fillRect(0, 0, TILE, TILE);
-      this.paintPaperTile(g, i, j, paper, set.draft ? DRAFT : 1);
+      if (!set.draft) this.paintPaperTile(g, i, j, paper); // (the draft is zoom-free: no zoom-stepped paper marks)
       const here = (el: Element) => bboxIntersects(this.elBox(el), view);
       job = { i, j, back, front: null, layers: [near.back.filter(here), near.front.filter(here)], pass: 0, k: 0, stamp: null, stale: false };
       set.jobs.set(key, job);
@@ -582,7 +599,16 @@ export class Renderer {
           const el = els[job.k];
           this.lastTileEl = el; this.lastTileDraft = !!set.draft; // (the pan benchmark's profiler reads these)
           this.tileBoxes.set(el.id, this.elBox(el));
-          if (el.kind === 'stroke' && el.tool === 'pencil') {
+          if (el.kind === 'stroke' && el.tool === 'pencil' && set.draft) {
+            // draft: the stroke's outline in an averaged graphite tone — no stamps at all
+            g.save();
+            g.globalAlpha = el.opacity * dim * 0.28; // (soft graphite reads lighter than its outline)
+            g.fillStyle = el.color;
+            g.fill(this.entry(el).path);
+            g.restore();
+          } else if (el.kind === 'stroke' && el.tool === 'pencil' && !job.stamp && this.gpuStampTile(g, el, el.opacity * dim, set, view, job.i, job.j)) {
+            // the whole stroke's stamps on this tile in one GPU draw
+          } else if (el.kind === 'stroke' && el.tool === 'pencil') {
             const st = job.stamp ??= { next: 0, state: { sinceX: NaN, sinceY: NaN, skipped: 0 } };
             // as many stamps as the time left allows at the measured rate; then make WebKit draw
             // them now, so the time spent is real and the rate stays honest
@@ -712,9 +738,10 @@ export class Renderer {
     }
     if (!set) set = this.tileSet = { content, zoom: camera.zoom, s: camera.zoom * dpr, tiles: new Map(), jobs: new Map() };
     const fine: TileSet = set;
+    const ext = this.draftScale();
     let draft = this.draft;
-    if (draft && (draft.content !== content || draft.zoom !== fine.zoom)) { this.dropSet(draft); draft = this.draft = null; }
-    if (!draft) draft = this.draft = { content, zoom: fine.zoom, s: fine.s / DRAFT, tiles: new Map(), jobs: new Map(), draft: true };
+    if (draft && (draft.content !== content || draft.s !== ext.s)) { this.dropSet(draft); draft = this.draft = null; }
+    if (!draft) draft = this.draft = { content, zoom: 0, s: ext.s, tiles: new Map(), jobs: new Map(), draft: true };
     const coarse: TileSet = draft;
     // the eraser hides elements as it goes: repaint just the tiles they were on (and back, if un-hidden)
     const hidden = this.input.hidden;
@@ -737,8 +764,13 @@ export class Renderer {
       const tiles = fine.tiles;
       const i0 = Math.floor(-ox / TILE), i1 = Math.floor((W - 1 - ox) / TILE);
       const j0 = Math.floor(-oy / TILE), j1 = Math.floor((H - 1 - oy) / TILE);
-      // the draft tiles over the screen (a draft tile spans DRAFT × DRAFT sharp ones)
-      const di0 = Math.floor(i0 / DRAFT), di1 = Math.floor(i1 / DRAFT), dj0 = Math.floor(j0 / DRAFT), dj1 = Math.floor(j1 / DRAFT);
+      // the draft tiles over the screen, and over the whole zine
+      const view = camera.viewport(vw, vh), ds = coarse.s;
+      const di0 = Math.floor((view.x * ds) / TILE), di1 = Math.floor(((view.x + view.w) * ds) / TILE);
+      const dj0 = Math.floor((view.y * ds) / TILE), dj1 = Math.floor(((view.y + view.h) * ds) / TILE);
+      const eb = ext.box;
+      const ei0 = eb ? Math.floor((eb.minX * ds) / TILE) : 0, ei1 = eb ? Math.floor((eb.maxX * ds) / TILE) : -1;
+      const ej0 = eb ? Math.floor((eb.minY * ds) / TILE) : 0, ej1 = eb ? Math.floor((eb.maxY * ds) / TILE) : -1;
       // still elements around a region, by layer (once per frame per layer)
       const nearOf = (rect: View) => {
         const near = { back: [] as Element[], front: [] as Element[] };
@@ -762,12 +794,7 @@ export class Renderer {
           }
           near = nearFine;
         } else {
-          if (!nearDraft) {
-            const ring = this.tileView(di0 - 1, dj0 - 1, coarse.s);
-            ring.w *= di1 - di0 + 3;
-            ring.h *= dj1 - dj0 + 3;
-            nearDraft = nearOf(ring);
-          }
+          if (!nearDraft) nearDraft = nearOf(eb ? { x: eb.minX, y: eb.minY, w: eb.maxX - eb.minX, h: eb.maxY - eb.minY } : view);
           near = nearDraft;
         }
         const tile = this.runTileJob(ts, i, j, near, until);
@@ -778,7 +805,20 @@ export class Renderer {
         return true;
       };
       const fallback = this.prevTiles;
-      const deadline = frameStart + this.buildBudget(); // ms of tile building per frame
+      const sharpMissingNow = () => {
+        for (let j = j0; j <= j1; j++) for (let i = i0; i <= i1; i++) if (!tiles.has(`${i},${j}`) && !(fallback && fallback.s > fine.s && coveredByPrevEarly(i, j))) return true;
+        return false;
+      };
+      const coveredByPrevEarly = (i: number, j: number) => {
+        const p = fallback!, v = this.tileView(i, j, fine.s), k = p.s;
+        const a0 = Math.floor((v.x * k) / TILE), a1 = Math.floor(((v.x + v.w) * k - 1e-6) / TILE);
+        const b0 = Math.floor((v.y * k) / TILE), b1 = Math.floor(((v.y + v.h) * k - 1e-6) / TILE);
+        for (let b = b0; b <= b1; b++) for (let a = a0; a <= a1; a++) if (!p.tiles.has(`${a},${b}`)) return false;
+        return true;
+      };
+      // ms of tile building per frame: most of the frame while there are gaps on screen (they look
+      // broken), a third of it for the prefetch otherwise
+      const deadline = frameStart + (sharpMissingNow() ? Math.max(this.buildBudget(), this.framePeriod * 0.75) : this.buildBudget());
       let built = 0;
       let pending = false;
       // what to build, most needed first: the draft over the screen while sharp tiles are missing
@@ -788,17 +828,34 @@ export class Renderer {
       for (let j = j0; j <= j1 && !sharpMissing; j++) for (let i = i0; i <= i1; i++) if (!tiles.has(`${i},${j}`)) { sharpMissing = true; break; }
       const cx = (W / 2 - ox) / TILE - 0.5, cy = (H / 2 - oy) / TILE - 0.5;
       const order: [TileSet, number, number, number, boolean][] = []; // set, i, j, priority, on screen
-      for (let j = dj0 - 1; j <= dj1 + 1; j++) {
-        for (let i = di0 - 1; i <= di1 + 1; i++) {
+      // the draft: over the screen first while sharp tiles are missing there, then the rest of
+      // the zine in spare time (so later pans and zooms find it ready)
+      const dcx = ((view.x + view.w / 2) * ds) / TILE - 0.5, dcy = ((view.y + view.h / 2) * ds) / TILE - 0.5;
+      for (let j = Math.min(dj0, ej0); j <= Math.max(dj1, ej1); j++) {
+        for (let i = Math.min(di0, ei0); i <= Math.max(di1, ei1); i++) {
           const on = i >= di0 && i <= di1 && j >= dj0 && j <= dj1;
-          if (on && !(sharpMissing && !fallback)) continue;
-          order.push([coarse, i, j, (on ? 0 : 500) + Math.hypot((i + 0.5) * DRAFT - 0.5 - cx, (j + 0.5) * DRAFT - 0.5 - cy) / DRAFT, on]);
+          const inZine = i >= ei0 && i <= ei1 && j >= ej0 && j <= ej1;
+          if (!inZine && !on) continue;
+          if (on && !sharpMissing && coarse.tiles.has(`${i},${j}`)) continue;
+          order.push([coarse, i, j, (on && sharpMissing ? 0 : 1500) + Math.hypot(i - dcx, j - dcy), on && sharpMissing]);
         }
       }
+      // zoomed out: the old zoom's tiles are sharper than needed, and shrunk they stay crisp —
+      // where they cover a tile it can wait (built exactly later, in spare time)
+      const sharpPrev = fallback && fallback.s > fine.s ? fallback : null;
+      const coveredByPrev = (i: number, j: number) => {
+        if (!sharpPrev) return false;
+        const v = this.tileView(i, j, fine.s), k = sharpPrev.s;
+        const a0 = Math.floor((v.x * k) / TILE), a1 = Math.floor(((v.x + v.w) * k - 1e-6) / TILE);
+        const b0 = Math.floor((v.y * k) / TILE), b1 = Math.floor(((v.y + v.h) * k - 1e-6) / TILE);
+        for (let b = b0; b <= b1; b++) for (let a = a0; a <= a1; a++) if (!sharpPrev.tiles.has(`${a},${b}`)) return false;
+        return true;
+      };
       for (let j = j0 - PREFETCH; j <= j1 + PREFETCH; j++) {
         for (let i = i0 - PREFETCH; i <= i1 + PREFETCH; i++) {
           const on = i >= i0 && i <= i1 && j >= j0 && j <= j1;
-          order.push([fine, i, j, (on ? 100 : 1000) + Math.hypot(i - cx, j - cy), on]);
+          const wait = on && coveredByPrev(i, j);
+          order.push([fine, i, j, (on ? (wait ? 800 : 100) : 1000) + Math.hypot(i - cx, j - cy), on]);
         }
       }
       order.sort((a, b) => a[3] - b[3]);
@@ -815,7 +872,7 @@ export class Renderer {
       // forget tiles (and half-built ones) that scrolled well away
       const far = (ts: TileSet, i: number, j: number) => ts === fine
         ? i < i0 - PREFETCH - 1 || i > i1 + PREFETCH + 1 || j < j0 - PREFETCH - 1 || j > j1 + PREFETCH + 1
-        : i < di0 - 2 || i > di1 + 2 || j < dj0 - 2 || j > dj1 + 2;
+        : (i < ei0 || i > ei1 || j < ej0 || j > ej1) && (i < di0 - 1 || i > di1 + 1 || j < dj0 - 1 || j > dj1 + 1); // (the draft keeps the whole zine)
       for (const ts of [fine, coarse]) {
         for (const [key, t] of ts.tiles) if (far(ts, t.i, t.j)) { this.dropTile(t); ts.tiles.delete(key); }
         for (const [key, job] of ts.jobs) if (far(ts, job.i, job.j)) { this.recycle(job.back); this.recycle(job.front); ts.jobs.delete(key); }
@@ -843,7 +900,10 @@ export class Renderer {
         ctx.fillRect(0, 0, W, H);
       }
       if (dimmed) ctx.globalAlpha = 0.3;
-      if (holed) {
+      if (fine.zoom !== camera.zoom) {
+        // mid-zoom: the draft everywhere, the last zoom's tiles (scaled) over it where they reach
+        if (coarse.tiles.size) this.blitTiles(coarse, layer, W, H, ox, oy);
+      } else if (holed) {
         // where a sharp tile isn't ready: the draft, and over it the old zoom's tiles where they reach
         ctx.save();
         ctx.clip(holes);
@@ -1476,9 +1536,56 @@ export class Renderer {
     return stamps.length;
   }
 
+  /** A pencil stroke's stamps that land on tile (i, j), drawn on the GPU in one go and composited
+   * into the tile. False → stamp it in 2D. */
+  private gpuStampTile(g: CanvasRenderingContext2D, el: Stroke, alpha: number, set: TileSet, view: View, i: number, j: number): boolean {
+    if (this.glPencil === undefined) {
+      this.glPencil = GLPencil.create();
+      try {
+        localStorage.setItem('izine-gpu-pencil', this.glPencil ? 'running' : 'off');
+        if (this.glPencil) {
+          // only a death in the foreground counts: going to the background (or away) clears the flag
+          const mark = (on: boolean) => { try { if (on) localStorage.setItem('izine-gpu-pencil', 'running'); else localStorage.removeItem('izine-gpu-pencil'); } catch { /* ignore */ } };
+          window.addEventListener('pagehide', () => mark(false));
+          document.addEventListener('visibilitychange', () => mark(document.visibilityState === 'visible'));
+        }
+      } catch { /* ignore */ }
+    }
+    const gp = this.glPencil;
+    if (!gp || !gp.ok) return false;
+    const s = set.s, ox = i * TILE, oy = j * TILE;
+    const minSpacing = set.draft ? Math.max(0.7 / s, el.baseWidth * 0.5) : 0.7 / s;
+    let n = 0;
+    this.eachStamp(el, alpha, 0, { minSpacing, cache: true }, (x, y, r, rot, a, layer) => {
+      const m = r * 1.5;
+      if (x + m < view.x || y + m < view.y || x - m > view.x + view.w || y - m > view.y + view.h) return;
+      if ((n + 1) * STAMP_FLOATS > this.glStamps.length) {
+        const grown = new Float32Array(this.glStamps.length * 2);
+        grown.set(this.glStamps);
+        this.glStamps = grown;
+      }
+      const d = this.glStamps, k = n * STAMP_FLOATS;
+      d[k] = x * s - ox; d[k + 1] = y * s - oy; d[k + 2] = r * s; d[k + 3] = rot; d[k + 4] = a; d[k + 5] = layer;
+      n++;
+    });
+    if (!n) return true;
+    const nib = this.nibs(el.color);
+    return gp.stampInto(g, TILE, TILE, el.color, [...nib.grain, ...nib.dense], this.glStamps, n);
+  }
+
   /** A committed pencil stroke rasterised on the GPU (see glpencil.ts); null → stamp in 2D. */
-  // opt-in while it's being proven on the iPad (WebKit dropped the page with it on); undefined = try
-  private glPencil: GLPencil | null | undefined = (() => { try { return localStorage.getItem('izine-gpu-pencil') === '1' ? undefined : null; } catch { return null; } })();
+  // GPU pencil (see glpencil.ts): on unless a session died while it was on — WebKit once dropped
+  // the page with it (then, per-stroke bitmaps were eating ~800 MB). The guard flag is set while
+  // the page runs with it and cleared when the page goes away cleanly.
+  private glPencil: GLPencil | null | undefined = (() => {
+    try {
+      // (opt-in: in WebKit a 2D canvas rasterises on the CPU, so every GPU result has to be read
+      // back to land in a tile — slower than stamping in 2D. Kept for experiments: set 'on')
+      const st = localStorage.getItem('izine-gpu-pencil');
+      if (st === 'running') { localStorage.setItem('izine-gpu-pencil', 'off'); return null; }
+      return st === 'on' ? undefined : null;
+    } catch { return null; }
+  })();
   private glStamps = new Float32Array(STAMP_FLOATS * 4096);
   private gpuPencilRaster(el: Stroke, w: number, h: number, bucket: number, bbox: BBox): HTMLCanvasElement | null {
     if (this.glPencil === undefined) this.glPencil = GLPencil.create();
