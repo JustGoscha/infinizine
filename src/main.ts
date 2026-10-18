@@ -32,6 +32,24 @@ const uiHooks = buildUI(ui, state, store, camera, () => renderer.invalidate(), {
   pageThumb: (page, width) => renderer.renderPage(page, width / page.w),
 });
 
+// ?bench (web): compare the render strategies on the open zine, results on screen (nothing uploaded,
+// the zine untouched; only the view moves, and it's put back)
+if (!nativeApp && new URLSearchParams(location.search).has('bench')) {
+  void store.ready.then(async () => {
+    await new Promise((r) => setTimeout(r, 1500));
+    const pre = document.createElement('pre');
+    pre.style.cssText = 'position:fixed;left:8px;right:8px;bottom:8px;max-height:60vh;overflow:auto;z-index:99999;margin:0;padding:10px;font:11px/1.45 ui-monospace,monospace;white-space:pre-wrap;background:rgba(255,255,255,0.94);border:1px solid #999;border-radius:8px;user-select:text;-webkit-user-select:text';
+    pre.textContent = `render bench — ${navigator.userAgent}\n${screen.width}×${screen.height} @${devicePixelRatio} · ${store.doc.elements.length} elements\n`;
+    document.body.appendChild(pre);
+    const cam = { x: camera.x, y: camera.y, zoom: camera.zoom };
+    const { runRenderBench } = await import('./pentest');
+    await runRenderBench(store, camera, renderer, (m) => { pre.textContent += m + '\n'; });
+    Object.assign(camera, cam);
+    renderer.invalidate();
+    pre.textContent += 'done — select and copy this text';
+  });
+}
+
 if (nativeApp) {
   // iPad app: a .zine opened from Files / the share sheet
   // (after the library has loaded: an import during startup was overridden by the zine that was open last)
