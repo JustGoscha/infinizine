@@ -2,6 +2,8 @@
 // instead of silently dying. The render loop keeps running; the offending
 // live stroke is dropped so the canvas stays usable.
 
+import { postNative } from './native';
+
 let el: HTMLElement | null = null;
 let lastMsg = '';
 let lastAt = 0;
@@ -56,6 +58,7 @@ export function reportCrash(where: string, err: unknown) {
   const now = performance.now();
   if (msg === lastMsg && now - lastAt < 3000) return;
   lastMsg = msg; lastAt = now;
+  postNative({ type: 'log', msg: `crash ${msg}\n${stack}` }); // iPad app: lands in the device log
   if (!el) build();
   (el!.querySelector('.crash-msg') as HTMLElement).textContent = `${msg}\n\n${stack}`;
   (el!.querySelector('[data-act="copy"]') as HTMLElement).textContent = 'Copy report';

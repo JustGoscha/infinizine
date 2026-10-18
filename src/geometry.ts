@@ -291,6 +291,35 @@ export function pointInPolygonNZ(x: number, y: number, poly: { x: number; y: num
   return wn !== 0;
 }
 
+/** pointInPolygonNZ for many queries against one polygon: the edges are bucketed into
+ * horizontal bands, so a query only looks at the edges crossing its band (pattern fills test
+ * tens of thousands of cells or dots against outlines of hundreds of points). Same answers. */
+export function polygonTesterNZ(poly: { x: number; y: number }[]): (x: number, y: number) => boolean {
+  const n = poly.length;
+  let minY = Infinity, maxY = -Infinity;
+  for (const q of poly) { if (q.y < minY) minY = q.y; if (q.y > maxY) maxY = q.y; }
+  const bands = Math.max(1, Math.min(1024, Math.ceil(n / 4)));
+  const h = (maxY - minY) / bands || 1;
+  const band = (y: number) => Math.max(0, Math.min(bands - 1, Math.floor((y - minY) / h)));
+  const lists: number[][] = Array.from({ length: bands }, () => []);
+  for (let i = 0, j = n - 1; i < n; j = i++) {
+    const b0 = band(Math.min(poly[i].y, poly[j].y)), b1 = band(Math.max(poly[i].y, poly[j].y));
+    for (let b = b0; b <= b1; b++) lists[b].push(i);
+  }
+  return (x, y) => {
+    if (y < minY || y > maxY) return false;
+    let wn = 0;
+    for (const i of lists[band(y)]) {
+      const j = i === 0 ? n - 1 : i - 1;
+      const xi = poly[i].x, yi = poly[i].y, xj = poly[j].x, yj = poly[j].y;
+      if (yj <= y) {
+        if (yi > y && (xi - xj) * (y - yj) - (x - xj) * (yi - yj) > 0) wn++;
+      } else if (yi <= y && (xi - xj) * (y - yj) - (x - xj) * (yi - yj) < 0) wn--;
+    }
+    return wn !== 0;
+  };
+}
+
 export function pointInPolygon(x: number, y: number, poly: { x: number; y: number }[]): boolean {
   let inside = false;
   for (let i = 0, j = poly.length - 1; i < poly.length; j = i++) {

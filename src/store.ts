@@ -50,27 +50,30 @@ type Op =
 export interface ChangeInfo {
   ids: string[]; // elements whose geometry/colour changed (or were added/removed)
   added?: Element[]; // freshly appended elements (safe to paint on top incrementally)
+  /** nothing but these elements changed (no reordering of others): repainting where they
+   * were and where they are now is enough */
+  local?: boolean;
 }
 function changeInfo(op: Op): ChangeInfo {
   switch (op.type) {
     case 'add-elements':
-      return { ids: op.elements.map((e) => e.id), added: op.at ? undefined : op.elements };
+      return { ids: op.elements.map((e) => e.id), added: op.at ? undefined : op.elements, local: true };
     case 'delete-elements':
-      return { ids: op.elements.map((e) => e.id) };
+      return { ids: op.elements.map((e) => e.id), local: true };
     case 'move-elements':
     case 'move-page-content':
     case 'move-area-content':
-      return { ids: op.ids };
+      return { ids: op.ids, local: true };
     case 'update-text':
     case 'resize-text':
     case 'resize-image':
-      return { ids: [op.id] };
+      return { ids: [op.id], local: true };
     case 'recolor-elements':
     case 'retime-strokes':
     case 'pattern-angle':
     case 'fill-ink':
     case 'fill-blend':
-      return { ids: op.items.map((i) => i.id) };
+      return { ids: op.items.map((i) => i.id), local: true };
     case 'z-order':
       return { ids: op.layers?.map((l) => l.id) ?? [] };
     case 'add-area':
@@ -241,8 +244,14 @@ export class Store {
   }
 
   private async init() {
-    const current = localStorage.getItem(CURRENT_KEY) ?? this.listDocs()[0]?.id;
-    const loaded = current ? await this.loadDoc(current) : null;
+    let current = localStorage.getItem(CURRENT_KEY) ?? this.listDocs()[0]?.id;
+    let loaded = current ? await this.loadDoc(current) : null;
+    if (!loaded) {
+      // the remembered zine is gone (deleted while the app was closing): open the newest other one
+      // rather than starting an empty zine next to the library
+      const other = this.listDocs().find((m) => m.id !== current)?.id;
+      if (other && (loaded = await this.loadDoc(other))) current = other;
+    }
     if (loaded && current) {
       this.docId = current;
       this.doc = loaded.doc;

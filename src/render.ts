@@ -1,6 +1,7 @@
 // Canvas renderer: desk background, page frames, elements (with viewport
 // culling + cached outlines), live stroke, lasso/selection overlays.
 
+import { GLPencil, STAMP_FLOATS } from './glpencil';
 import { Camera, baseZoom } from './camera';
 import { AnimArea, Element, FillShape, Page, Stroke, StrokePoint, TextBox } from './types';
 import { elementBBox, bboxIntersects, LiveDenoiser, denoiseClosed, closeBlob, BBox } from './geometry';
@@ -12,7 +13,7 @@ import { FILL_TOOLS, type InputState } from './state';
 import { animClock } from './clock';
 import { Store, ChangeInfo } from './store';
 import { formatLabel } from './formats';
-import { patternTile, patternTileSize, patternCellSize, cellPath, motifPath, isPixelPattern, PIXEL_CELL } from './patterns';
+import { patternTile, patternTileSize, patternCellSize, cellPath, motifPath, motifDots, isPixelPattern, PIXEL_CELL } from './patterns';
 import { reportCrash } from './crash';
 import { nativeApp, postNative, perfToNative } from './native';
 
@@ -27,11 +28,40 @@ function frameAtTick(frames: { id: string; duration: number }[], tick: number): 
   return frames[frames.length - 1].id;
 }
 const TILE = 512; // static tile side, device px
-const TILE_POOL = 16; // spare tile bitmaps kept for reuse (iOS is slow to allocate and slow to free canvases)
+const TILE_POOL = 16;
+const PREFETCH = 2; // rings of tiles built around the screen in spare time (kept up to one more) // spare tile bitmaps kept for reuse (iOS is slow to allocate and slow to free canvases)
 const FILL_RASTER_MAX = 4_000_000; // px: bigger pattern fills are filled directly
-const FILL_RASTER_BUDGET = 8_000_000; // px across all baked pattern fills (~32 MB)
-interface Tile { i: number; j: number; back: HTMLCanvasElement; front: HTMLCanvasElement | null; stale: boolean }
+const FILL_RASTER_BUDGET = 8_000_000; // px across baked pattern fills away from the screen (~32 MB)
+/** dot tones (sand, screentone): thousands of tiny dots — redrawn as paths in every tile they
+ * touch they were the costliest thing on a page, so they're baked once per zoom too */
+const isMotif = (id: string) => /^pattern:(tone|sand)-/.test(id);
+/** WebKit records canvas drawing and replays it later in another process, so timing a draw
+ * sees only the recording; reading a pixel makes it draw now and the clock honest. Elsewhere
+ * (Chrome) a read would move the canvas off the GPU and change how it rasterises: skipped. */
+const DEFERRED_CANVAS = /AppleWebKit/.test(navigator.userAgent) && !/Chrome|Chromium|Edg|Android/.test(navigator.userAgent);
+const flushCanvas = (g: CanvasRenderingContext2D) => { if (DEFERRED_CANVAS) g.getImageData(0, 0, 1, 1); };
+const PENCIL_RASTER_BUDGET = 12_000_000; // px across all cached pencil rasters (~48 MB); oldest go first
+// `stale`: drawn with a stand-in raster, rebuild when there's time; `redo`: its content changed, rebuild now
+interface Tile { i: number; j: number; back: HTMLCanvasElement; front: HTMLCanvasElement | null; stale: boolean; redo?: boolean }
+/** a tile being built a slice per frame: its elements by layer, where it got to (element k of
+ * pass 0 = back, 1 = front; within a long pencil stroke, the next stamp) */
+interface TileJob {
+  i: number; j: number; back: HTMLCanvasElement; front: HTMLCanvasElement | null;
+  layers: [Element[], Element[]]; pass: number; k: number;
+  stamp: { next: number; state: { sinceX: number; sinceY: number; skipped: number } } | null;
+  stale: boolean;
+}
 interface TileSet { content: string; zoom: number; s: number; tiles: Map<string, Tile> }
+interface StampOpts {
+  minSpacing?: number; // world units: closer stamps merge (alpha-compensated)
+  cache?: boolean; // keep the stamp list (committed strokes)
+  until?: number; // performance.now() deadline: stop there and return where to resume
+  limit?: number; // or stop at this stamp index
+  state?: { sinceX: number; sinceY: number; skipped: number }; // the merging, carried across resumes
+  cull?: View; // world rect: stamps outside it aren't drawn (a tile takes only its own)
+}
+/** a pencil raster being stamped a slice per frame */
+interface PencilJob { el: Stroke; bucket: number; bbox: BBox; c: HTMLCanvasElement; g: CanvasRenderingContext2D; next: number; state: { sinceX: number; sinceY: number; skipped: number } }
 interface CacheEntry { solid?: boolean; zoomFree?: boolean; path: Path2D; bbox: BBox; passes?: Path2D[]; core?: Path2D; detail: number }
 
 export class Renderer {
@@ -55,6 +85,20 @@ export class Renderer {
   // re-filling a rotated pattern per tile. LRU by insertion order.
   private fillRasters = new Map<string, { c: HTMLCanvasElement; s: number; x: number; y: number }>();
   private fillRasterPx = 0;
+  private pencilRasterPx = 0;
+  private boxCache = new Map<string, BBox>(); // element bboxes (zoom-independent) before their outline exists
+  /** world rect of the screen + the prefetch ring: rasters of strokes in it are never evicted */
+  private keepRect: View | null = null;
+  /** each still element's box as last painted into the tiles: where to repaint when it changes or hides */
+  private tileBoxes = new Map<string, BBox>();
+  /** the eraser's hidden set as the tiles last saw it */
+  private tileHidden = new Set<string>();
+  /** rAF interval (ms), smoothed: 8.3 at 120 Hz (the iPad app), 16.7 at 60 Hz (Safari) */
+  private framePeriod = 16.7;
+  /** pencil stamps drawn per ms, measured with the drawing forced to finish (WebKit replays canvas
+   * drawing later in another process, so the clock alone sees only the recording) */
+  private stampRate = 20;
+  private lastFrameT = 0;
   // pencil stamp lists are zoom-independent: computed once per stroke
   private stampCache = new Map<string, { n: number; stamps: { x: number; y: number; p: number; a?: number }[] }>();
   // zoom gestures: keep drawing stale rasters (scaled) and rebuild only when the
@@ -115,6 +159,9 @@ export class Renderer {
 
   /** One tick of the render loop (rAF-driven; callable directly for tests). */
   frame(t: number) {
+    const dt = t - this.lastFrameT;
+    this.lastFrameT = t;
+    if (dt > 4 && dt < 40) this.framePeriod += (dt - this.framePeriod) * 0.1;
     // fps debug: rAF cadence — drops when the main thread struggles
     this.fpsFrames++;
     if (t - this.fpsT >= 500) {
@@ -150,6 +197,10 @@ export class Renderer {
 
   invalidate() { this.dirty = true; }
 
+  /** ms per frame for building tiles / rasters: about a third of the frame, so the
+   * frame itself (areas, the live stroke) still fits — 120 Hz frames get half of 60 Hz's */
+  private buildBudget(): number { return Math.max(2.5, Math.min(6, this.framePeriod * 0.36)); }
+
   // decoded-image cache for image elements
   private imageCache = new Map<string, HTMLImageElement>();
   private image(src: string): HTMLImageElement {
@@ -163,11 +214,14 @@ export class Renderer {
     return img;
   }
   dropFromCache(id: string) {
-    this.cache.delete(id); this.pencilCache.delete(id); this.stampCache.delete(id); this.dropFillRaster(id);
+    this.cache.delete(id); this.dropPencilRaster(id); this.dropPencilJob(id); this.stampCache.delete(id); this.dropFillRaster(id);
     this.tileGen++;
   }
   clearCache() {
-    this.cache.clear(); this.pencilCache.clear(); this.stampCache.clear();
+    this.cache.clear(); this.stampCache.clear(); this.boxCache.clear(); this.dotCache.clear();
+    for (const id of [...this.dotBakes.keys()]) this.dropDotBake(id);
+    for (const id of [...this.pencilCache.keys()]) this.dropPencilRaster(id);
+    for (const id of [...this.pencilJobs.keys()]) this.dropPencilJob(id);
     for (const id of [...this.fillRasters.keys()]) this.dropFillRaster(id);
     this.tileGen++;
   }
@@ -177,21 +231,46 @@ export class Renderer {
   docChanged(info?: ChangeInfo) {
     this.animBake.key = ''; // frozen areas may have changed
     if (!info) { this.clearCache(); this.invalidate(); return; }
-    for (const id of info.ids) { this.cache.delete(id); this.pencilCache.delete(id); this.stampCache.delete(id); this.dropFillRaster(id); }
+    // where the touched elements were painted, before their caches go
+    const before = info.ids.map((id) => this.tileBoxes.get(id));
+    for (const id of info.ids) { this.cache.delete(id); this.boxCache.delete(id); this.dotCache.delete(id); this.dropDotBake(id); this.dropPencilRaster(id); this.dropPencilJob(id); this.stampCache.delete(id); this.dropFillRaster(id); }
     const set = this.tileSet;
-    const canAppend =
-      set &&
-      info.added &&
-      info.added.length &&
-      set.content === this.contentKey() &&
-      set.zoom === this.camera.zoom &&
-      info.added.every((el) => this.isStill(el));
+    const current = !!set && set.content === this.contentKey() && set.zoom === this.camera.zoom;
+    const canAppend = current && info.added && info.added.length && info.added.every((el) => this.isStill(el));
     if (canAppend) {
+      this.dropTileJobs(info.added!.map((el) => this.elBox(el))); // unfinished tiles would miss it
       this.paintOntoTiles(info.added!);
+    } else if (current && info.local) {
+      // repaint only the tiles under the touched elements, where they were and where they are now
+      const ids = new Set(info.ids);
+      const boxes: BBox[] = [];
+      info.ids.forEach((id, k) => {
+        const b = before[k];
+        if (b && !this.tileHidden.has(id)) boxes.push(b); // erased: those tiles already left it out
+        this.tileHidden.delete(id);
+        this.tileBoxes.delete(id);
+      });
+      for (const el of this.store.doc.elements) {
+        if (ids.has(el.id) && this.isStill(el) && !this.input.hidden.has(el.id)) boxes.push(this.elBox(el));
+      }
+      this.redoTiles(boxes);
     } else {
       this.tileGen++;
     }
     this.invalidate();
+  }
+
+  /** Mark the current tiles under `boxes` for rebuilding this frame (their stand-ins would be stale too). */
+  private redoTiles(boxes: BBox[]) {
+    const set = this.tileSet;
+    if (!set || !boxes.length) return;
+    this.dropTileJobs(boxes);
+    this.dropSet(this.prevTiles);
+    this.prevTiles = null;
+    for (const t of set.tiles.values()) {
+      const view = this.tileView(t.i, t.j, set.s);
+      if (boxes.some((b) => bboxIntersects(b, view))) t.redo = true;
+    }
   }
 
   private isStill(el: Element): boolean {
@@ -400,7 +479,14 @@ export class Renderer {
   /** bbox for culling: any cached entry's (bboxes don't depend on zoom), so off-screen
    * outlines aren't rebuilt just to be culled when the detail bucket changes */
   private elBox(el: Element): BBox {
-    return el.kind === 'text' || el.kind === 'image' ? elementBBox(el) : this.cache.get(el.id)?.bbox ?? this.entry(el).bbox;
+    // (from the points, not by building the outline: the tile planner asks for every element
+    // around the screen, and building pattern fills' shapes all at once stalled a frame)
+    if (el.kind === 'text' || el.kind === 'image') return elementBBox(el);
+    const hit = this.cache.get(el.id)?.bbox ?? this.boxCache.get(el.id);
+    if (hit) return hit;
+    const b = elementBBox(el);
+    this.boxCache.set(el.id, b);
+    return b;
   }
 
   /** Paint `els` (in order) onto a tile bitmap; helpers (pattern, pencil, grain) draw through this.ctx. */
@@ -413,7 +499,10 @@ export class Renderer {
       g.setTransform(s, 0, 0, s, -i * TILE, -j * TILE);
       const view = this.tileView(i, j, s);
       const dim = this.focusAreaId() ? 0.3 : 1;
-      for (const el of els) this.paintElement(el, view, this.camera.zoom, dim);
+      for (const el of els) {
+        this.tileBoxes.set(el.id, this.elBox(el));
+        this.paintElement(el, view, this.camera.zoom, dim);
+      }
     } finally {
       g.globalAlpha = 1;
       g.setTransform(1, 0, 0, 1, 0, 0);
@@ -422,27 +511,98 @@ export class Renderer {
     }
   }
 
-  private buildTile(set: TileSet, i: number, j: number, near: { back: Element[]; front: Element[] }): Tile {
+  /** Build tile (i, j) a slice at a time, until `until`: its elements in order, a long pencil
+   * stroke stamp by stamp, straight into the tile (only the stamps that land on it — no
+   * per-stroke bitmap, whose bounding boxes added up to hundreds of MB). Returns the tile
+   * once complete; until then whatever was there (the old tile, the old zoom's, paper) shows. */
+  private tileJobs = new Map<string, TileJob>();
+  private tileJobSet: TileSet | null = null;
+  private runTileJob(set: TileSet, i: number, j: number, near: { back: Element[]; front: Element[] }, until: number): Tile | null {
+    if (this.tileJobSet !== set) { this.dropTileJobs(); this.tileJobSet = set; }
+    const key = `${i},${j}`;
+    const view = this.tileView(i, j, set.s);
+    let job = this.tileJobs.get(key);
+    if (!job) {
+      const paper = this.store.doc.paper ?? '#F7F4EC';
+      const back = this.takeCanvas();
+      const g = back.getContext('2d')!;
+      g.fillStyle = paper;
+      g.fillRect(0, 0, TILE, TILE);
+      this.paintPaperTile(g, i, j, paper);
+      const here = (el: Element) => bboxIntersects(this.elBox(el), view);
+      job = { i, j, back, front: null, layers: [near.back.filter(here), near.front.filter(here)], pass: 0, k: 0, stamp: null, stale: false };
+      this.tileJobs.set(key, job);
+    }
     const pending = this.rastersPending;
     this.rastersPending = false;
-    const paper = this.store.doc.paper ?? '#F7F4EC';
-    const back = this.takeCanvas();
-    const g = back.getContext('2d')!;
-    g.fillStyle = paper;
-    g.fillRect(0, 0, TILE, TILE);
-    this.paintPaperTile(g, i, j, paper);
-    this.paintTile(back, i, j, set.s, near.back);
-    let front: HTMLCanvasElement | null = null;
-    const view = this.tileView(i, j, set.s);
-    if (near.front.some((el) => bboxIntersects(this.elBox(el), view))) {
-      front = this.takeCanvas();
-      front.getContext('2d')!.clearRect(0, 0, TILE, TILE);
-      this.paintTile(front, i, j, set.s, near.front);
-    }
-    // a pencil stroke drawn from a wrong-zoom raster: rebuild this tile once it's ready
-    const tile = { i, j, back, front, stale: this.rastersPending };
+    const done = this.advanceTileJob(job, set, view, until);
+    job.stale ||= this.rastersPending; // a pattern fill drawn from another zoom's bake: rebuild once it's ready
     this.rastersPending ||= pending;
-    return tile;
+    if (!done) return null;
+    this.tileJobs.delete(key);
+    return { i, j, back: job.back, front: job.front, stale: job.stale };
+  }
+
+  private advanceTileJob(job: TileJob, set: TileSet, view: View, until: number): boolean {
+    const dim = this.focusAreaId() ? 0.3 : 1;
+    const z = this.camera.zoom;
+    while (job.pass < 2) {
+      const els = job.layers[job.pass];
+      if (job.pass === 1 && !job.front) {
+        if (!els.length) break;
+        job.front = this.takeCanvas();
+        job.front.getContext('2d')!.clearRect(0, 0, TILE, TILE);
+      }
+      const g = (job.pass === 0 ? job.back : job.front!).getContext('2d')!;
+      const saved = this.ctx;
+      this.ctx = g;
+      this.tileScale = set.s;
+      try {
+        g.setTransform(set.s, 0, 0, set.s, -job.i * TILE, -job.j * TILE);
+        while (job.k < els.length) {
+          const el = els[job.k];
+          this.tileBoxes.set(el.id, this.elBox(el));
+          if (el.kind === 'stroke' && el.tool === 'pencil') {
+            const st = job.stamp ??= { next: 0, state: { sinceX: NaN, sinceY: NaN, skipped: 0 } };
+            // as many stamps as the time left allows at the measured rate; then make WebKit draw
+            // them now, so the time spent is real and the rate stays honest
+            const t0 = performance.now(), from = st.next;
+            const limit = from + Math.max(32, Math.floor(this.stampRate * Math.max(0.5, until - t0)));
+            // (stamps closer than ~0.7 device px are invisible: merged, alpha-compensated)
+            st.next = this.stampStroke(g, el, el.opacity * dim, st.next, { minSpacing: 0.7 / set.s, cache: true, until, limit, state: st.state, cull: view });
+            flushCanvas(g);
+            const dt = performance.now() - t0, done = st.next - from;
+            if (done >= 32 && dt > 0.3) this.stampRate += (done / dt - this.stampRate) * 0.3;
+            if (st.next < this.stampsFor(el, true).length) return false;
+            job.stamp = null;
+          } else {
+            // a dot-tone fill bakes first, a slice at a time (the tile waits for it)
+            if (el.kind === 'fill' && el.pattern && isMotif(el.pattern) && !this.bakeDotsUntil(el, this.elBox(el), set.s, until)) return false;
+            this.paintElement(el, view, z, dim);
+          }
+          job.k++;
+          if (job.k < els.length && performance.now() > until) return false;
+        }
+      } finally {
+        g.globalAlpha = 1;
+        g.setTransform(1, 0, 0, 1, 0, 0);
+        this.ctx = saved;
+        this.tileScale = null;
+      }
+      job.pass++;
+      job.k = 0;
+    }
+    return true;
+  }
+
+  /** Forget unfinished tiles (all, or those under `boxes`): their element lists are out of date. */
+  private dropTileJobs(boxes?: BBox[]) {
+    for (const [key, job] of this.tileJobs) {
+      if (boxes && this.tileJobSet && !boxes.some((b) => bboxIntersects(b, this.tileView(job.i, job.j, this.tileJobSet!.s)))) continue;
+      this.recycle(job.back);
+      this.recycle(job.front);
+      this.tileJobs.delete(key);
+    }
   }
 
   /** The paper's dot/grid/lines marks on tile (i, j): the same world-anchored cells as drawPattern. */
@@ -505,6 +665,19 @@ export class Renderer {
       set = null;
     }
     if (!set) set = this.tileSet = { content, zoom: camera.zoom, s: camera.zoom * dpr, tiles: new Map() };
+    // the eraser hides elements as it goes: repaint just the tiles they were on (and back, if un-hidden)
+    const hidden = this.input.hidden;
+    if (set.zoom === camera.zoom && (hidden.size || this.tileHidden.size)) {
+      const changed: BBox[] = [];
+      for (const id of hidden) if (!this.tileHidden.has(id)) { const b = this.tileBoxes.get(id); if (b) changed.push(b); }
+      for (const id of this.tileHidden) {
+        if (hidden.has(id)) continue;
+        const el = this.store.doc.elements.find((e) => e.id === id);
+        if (el && this.isStill(el)) changed.push(this.elBox(el));
+      }
+      this.tileHidden = new Set(hidden);
+      this.redoTiles(changed);
+    }
     const { ox, oy } = this.worldMatrix(vw, vh, dpr);
     const W = vw * dpr, H = vh * dpr;
     const holes = new Path2D(); // screen rects still without a tile of this zoom
@@ -514,46 +687,59 @@ export class Renderer {
       const i0 = Math.floor(-ox / TILE), i1 = Math.floor((W - 1 - ox) / TILE);
       const j0 = Math.floor(-oy / TILE), j1 = Math.floor((H - 1 - oy) / TILE);
       let near: { back: Element[]; front: Element[] } | null = null; // still elements around the screen, by layer
-      const build = (i: number, j: number) => {
+      const build = (i: number, j: number, until: number): boolean => {
         if (!near) {
-          const ring = this.tileView(i0 - 1, j0 - 1, set!.s);
-          ring.w *= i1 - i0 + 3;
-          ring.h *= j1 - j0 + 3;
+          const ring = this.tileView(i0 - PREFETCH, j0 - PREFETCH, set!.s);
+          ring.w *= i1 - i0 + 1 + 2 * PREFETCH;
+          ring.h *= j1 - j0 + 1 + 2 * PREFETCH;
+          this.keepRect = ring;
           near = { back: [], front: [] };
           for (const el of this.store.doc.elements) {
-            if (!this.isStill(el) || !bboxIntersects(this.elBox(el), ring)) continue;
+            if (!this.isStill(el) || hidden.has(el.id) || !bboxIntersects(this.elBox(el), ring)) continue;
             (el.layer === 'back' ? near.back : near.front).push(el);
           }
         }
+        const tile = this.runTileJob(set!, i, j, near, until);
+        if (!tile) return false;
         const key = `${i},${j}`;
         this.dropTile(tiles.get(key));
-        tiles.set(key, this.buildTile(set!, i, j, near));
+        tiles.set(key, tile);
+        return true;
       };
       const fallback = this.prevTiles;
-      const deadline = frameStart + 6; // ms of tile building per frame, when something can stand in
+      const deadline = frameStart + this.buildBudget(); // ms of tile building per frame, when something can stand in
       let built = 0;
       let pending = false;
-      for (let j = j0; j <= j1; j++) {
-        for (let i = i0; i <= i1; i++) {
-          const t = tiles.get(`${i},${j}`);
-          if (t && !t.stale) continue;
-          // missing with nothing to stand in → build now; otherwise within the budget (at least one a frame)
-          if ((t || fallback) && built && performance.now() > deadline) { pending = true; continue; }
-          build(i, j);
-          built++;
+      // centre out, in rings (by distance from the screen's centre), so what you look at
+      // sharpens first; then the ring around the screen, prefetched in spare time
+      const cx = (W / 2 - ox) / TILE - 0.5, cy = (H / 2 - oy) / TILE - 0.5;
+      const order: [number, number, number][] = [];
+      for (let j = j0 - PREFETCH; j <= j1 + PREFETCH; j++) {
+        for (let i = i0 - PREFETCH; i <= i1 + PREFETCH; i++) {
+          const off = i < i0 || i > i1 || j < j0 || j > j1 ? 1e3 : 0; // the rings after everything on screen
+          order.push([i, j, off + Math.hypot(i - cx, j - cy)]);
         }
       }
-      // prefetch the ring around the screen in spare time, so a pan finds its tiles ready
-      for (let j = j0 - 1; j <= j1 + 1 && !pending; j++) {
-        for (let i = i0 - 1; i <= i1 + 1; i++) {
-          if (tiles.has(`${i},${j}`)) continue;
-          if (performance.now() > deadline) { pending = true; break; }
-          build(i, j);
-        }
+      order.sort((a, b) => a[2] - b[2]);
+      for (const [i, j] of order) {
+        const onScreen = i >= i0 && i <= i1 && j >= j0 && j <= j1;
+        const t = tiles.get(`${i},${j}`);
+        if (t && !t.redo && (!t.stale || !onScreen)) continue;
+        // interaction first: whatever doesn't fit this frame's budget waits for the next one
+        // (the old zoom's tiles or plain paper show meanwhile); changed content can't wait,
+        // and at least one tile a frame gets built
+        const now = performance.now();
+        if (built && now > deadline) { pending = true; if (onScreen) continue; break; }
+        built++;
+        // (the first tile of a frame always gets a couple of ms, so something always progresses)
+        if (!build(i, j, built === 1 ? Math.max(deadline, now + 2) : deadline)) pending = true;
       }
-      // forget tiles that scrolled well away
+      // forget tiles (and half-built ones) that scrolled well away
       for (const [key, t] of tiles) {
-        if (t.i < i0 - 2 || t.i > i1 + 2 || t.j < j0 - 2 || t.j > j1 + 2) { this.dropTile(t); tiles.delete(key); }
+        if (t.i < i0 - PREFETCH - 1 || t.i > i1 + PREFETCH + 1 || t.j < j0 - PREFETCH - 1 || t.j > j1 + PREFETCH + 1) { this.dropTile(t); tiles.delete(key); }
+      }
+      for (const [key, job] of this.tileJobs) {
+        if (job.i < i0 - PREFETCH - 1 || job.i > i1 + PREFETCH + 1 || job.j < j0 - PREFETCH - 1 || job.j > j1 + PREFETCH + 1) { this.recycle(job.back); this.recycle(job.front); this.tileJobs.delete(key); }
       }
       for (let j = j0; j <= j1; j++) {
         for (let i = i0; i <= i1; i++) {
@@ -644,12 +830,39 @@ export class Renderer {
       }
       return true;
     }
+    if (el.kind === 'fill' && el.pattern && isMotif(el.pattern) && this.tileScale !== null) {
+      // a dot tone that's baked at this scale: blit it (its path of dots isn't needed at all)
+      const fr = this.fillRasters.get(el.id);
+      if (fr && fr.s === this.tileScale) {
+        if (!bboxIntersects(this.elBox(el), view)) return false;
+        ctx.save();
+        ctx.globalCompositeOperation = el.blend ?? 'multiply';
+        ctx.globalAlpha = el.opacity * dim * (el.ink ?? 1);
+        const m = ctx.getTransform();
+        ctx.setTransform(1, 0, 0, 1, m.e, m.f);
+        ctx.drawImage(fr.c, fr.x, fr.y);
+        ctx.restore();
+        return true;
+      }
+    }
     const e = this.entry(el);
     if (!bboxIntersects(e.bbox, view)) return false;
     if (el.kind === 'stroke' && el.tool === 'pencil') {
+      if (this.tileScale !== null) {
+        // into a tile (appending fresh ink): its stamps straight in, only those that land here
+        this.stampStroke(ctx, el, el.opacity * dim, 0, { minSpacing: 0.7 / this.tileScale, cache: true, cull: view });
+        return true;
+      }
       const pr = this.pencilRaster(el, z);
-      ctx.globalAlpha = el.opacity * dim;
-      ctx.drawImage(pr.c, pr.bbox.minX, pr.bbox.minY, pr.c.width / pr.bucket, pr.c.height / pr.bucket);
+      if (pr) {
+        ctx.globalAlpha = el.opacity * dim;
+        ctx.drawImage(pr.c, pr.bbox.minX, pr.bbox.minY, pr.c.width / pr.bucket, pr.c.height / pr.bucket);
+      } else {
+        // its raster is still being stamped: the outline in graphite grain stands in
+        ctx.globalAlpha = el.opacity * dim * 0.6;
+        ctx.fillStyle = this.grainPattern(el.color, z);
+        ctx.fill(e.path);
+      }
     } else if (el.kind === 'stroke' && el.tool === 'sketch' && e.passes) {
       ctx.save();
       ctx.globalCompositeOperation = 'multiply';
@@ -672,7 +885,7 @@ export class Renderer {
       const ink = el.kind === 'fill' ? el.ink ?? 1 : 1;
       const blending = op !== 'source-over' || ink < 1;
       // tiles blit pattern fills from a bitmap baked at their resolution (see fillRaster)
-      const baked = patterned && !e.solid && this.tileScale ? this.fillRaster(el as FillShape, e, this.tileScale) : null;
+      const baked = patterned && (!e.solid || isMotif(el.pattern!)) && this.tileScale ? this.fillRaster(el as FillShape, e, this.tileScale) : null;
       if (blending || baked) {
         ctx.save();
         ctx.globalCompositeOperation = op;
@@ -681,7 +894,9 @@ export class Renderer {
       if (baked) {
         const m = ctx.getTransform(); // tile: scale s, whole-pixel offset
         ctx.setTransform(1, 0, 0, 1, m.e, m.f);
-        ctx.drawImage(baked.c, baked.x, baked.y);
+        const k = this.tileScale! / baked.s; // 1 unless another zoom's bake stands in
+        if (k === 1) ctx.drawImage(baked.c, baked.x, baked.y);
+        else ctx.drawImage(baked.c, baked.x * k, baked.y * k, baked.c.width * k, baked.c.height * k);
       } else {
         ctx.fill(e.path);
       }
@@ -699,26 +914,132 @@ export class Renderer {
       this.fillRasters.set(el.id, hit);
       return hit;
     }
+    if (hit) {
+      // another zoom's bake stands in (scaled) while the zoom settles or this frame's
+      // raster time is spent; the tile is rebuilt once it's ready (see runTileJob)
+      const now = performance.now();
+      if (now - this.lastZoomChangeAt < 180 || now > this.rasterBudgetUntil) {
+        this.rastersPending = true;
+        return hit;
+      }
+    }
     this.dropFillRaster(el.id);
     const x = Math.floor(e.bbox.minX * s) - 1, y = Math.floor(e.bbox.minY * s) - 1;
     const w = Math.ceil(e.bbox.maxX * s) + 1 - x, h = Math.ceil(e.bbox.maxY * s) + 1 - y;
     if (w * h > FILL_RASTER_MAX) return null;
-    for (const id of this.fillRasters.keys()) {
+    // (the budget is for fills away from the screen: evicting one in view would only bake it again)
+    for (const [id, r] of this.fillRasters) {
       if (this.fillRasterPx + w * h <= FILL_RASTER_BUDGET) break;
+      if (this.keepRect && bboxIntersects(this.cache.get(id)?.bbox ?? { minX: 0, minY: 0, maxX: 0, maxY: 0 }, this.keepRect) && r.s === s) continue;
       this.dropFillRaster(id);
     }
     const c = document.createElement('canvas');
     c.width = w;
     c.height = h;
-    const g = c.getContext('2d')!;
-    g.setTransform(s, 0, 0, s, -x, -y);
-    g.fillStyle = this.fillPattern(el.pattern!, el.color, isPixelPattern(el.pattern!) ? 0 : el.patternAngle ?? 0);
-    g.fill(e.path);
+    const g = c.getContext('2d');
+    if (!g) { c.width = c.height = 0; return null; } // out of canvas memory: fill directly
+    if (isMotif(el.pattern!)) {
+      c.width = c.height = 0; // (baked by bakeDotsUntil instead)
+      this.bakeDotsUntil(el, e.bbox, s, Infinity);
+      return this.fillRasters.get(el.id)?.s === s ? this.fillRasters.get(el.id)! : null;
+    } else {
+      g.setTransform(s, 0, 0, s, -x, -y);
+      g.fillStyle = this.fillPattern(el.pattern!, el.color, isPixelPattern(el.pattern!) ? 0 : el.patternAngle ?? 0);
+      g.fill(e.path);
+    }
     const r = { c, s, x, y };
     this.fillRasters.set(el.id, r);
     this.fillRasterPx += w * h;
     return r;
   }
+  /** Dot-tone bakes in progress: the same dots as the fill's path, drawn a chunk per slice
+   * (a big sand fill is tens of thousands of arcs — too much for one frame). */
+  private dotCache = new Map<string, { xy: Float32Array; n: number; r: number } | null>();
+  private dotBakes = new Map<string, { s: number; x: number; y: number; c: HTMLCanvasElement; g: CanvasRenderingContext2D; next: number }>();
+  private dotRate = 2000; // dots per ms, measured with the drawing forced to finish
+  /** Advance (or start) the bake of dot-tone fill `el` at scale `s` until `until`; true once it's in fillRasters. */
+  private bakeDotsUntil(el: FillShape, box: BBox, s: number, until: number): boolean {
+    const have = this.fillRasters.get(el.id);
+    if (have && have.s === s) return true;
+    // another zoom's bake stands in while a zoom gesture is in flight (fillRaster scales it)
+    if (have && performance.now() - this.lastZoomChangeAt < 180) return true;
+    let dots = this.dotCache.get(el.id);
+    if (dots === undefined) {
+      dots = motifDots(el.points, el.pattern!, el.patternAngle ?? 0);
+      if (dots) { // sorted by y: a band of the bake finds its dots by binary search
+        const idx = Array.from({ length: dots.n }, (_, k) => k).sort((a, b) => dots!.xy[a * 2 + 1] - dots!.xy[b * 2 + 1]);
+        const xy = new Float32Array(dots.n * 2);
+        idx.forEach((k, i) => { xy[i * 2] = dots!.xy[k * 2]; xy[i * 2 + 1] = dots!.xy[k * 2 + 1]; });
+        dots = { xy, n: dots.n, r: dots.r };
+      }
+      this.dotCache.set(el.id, dots);
+    }
+    if (!dots) return true; // (too many dots: drawn as a clipped pattern by fillRaster)
+    let job = this.dotBakes.get(el.id);
+    if (job && job.s !== s) { job.c.width = job.c.height = 0; this.dotBakes.delete(el.id); job = undefined; }
+    if (!job) {
+      const x = Math.floor(box.minX * s) - 1, y = Math.floor(box.minY * s) - 1;
+      const w = Math.ceil(box.maxX * s) + 1 - x, h = Math.ceil(box.maxY * s) + 1 - y;
+      if (w * h > FILL_RASTER_MAX) return true; // fillRaster declines: filled directly
+      const c = document.createElement('canvas');
+      c.width = w; c.height = h;
+      const g = c.getContext('2d');
+      if (!g) { c.width = c.height = 0; return true; }
+      g.setTransform(s, 0, 0, s, -x, -y);
+      g.fillStyle = el.color;
+      job = { s, x, y, c, g, next: 0 };
+      this.dotBakes.set(el.id, job);
+    }
+    // band by band (rows of the bake, device px): every dot touching a band goes into one path
+    // clipped to it, so each pixel gets all its dots in one fill — same coverage as the whole
+    // path in one go (separate fills would darken where dots overlap)
+    const H = job.c.height, d = dots;
+    const firstAtOrAbove = (y: number) => { let lo = 0, hi = d.n; while (lo < hi) { const m = (lo + hi) >> 1; if (d.xy[m * 2 + 1] < y) lo = m + 1; else hi = m; } return lo; };
+    const perRow = d.n / Math.max(1, H);
+    while (job.next < H) {
+      const t0 = performance.now();
+      const rows = until === Infinity ? H : Math.max(4, Math.floor((this.dotRate * Math.max(0.5, until - t0)) / Math.max(1e-3, perRow)));
+      const r0 = job.next, r1 = Math.min(H, r0 + rows);
+      const wy0 = (job.y + r0) / s, wy1 = (job.y + r1) / s; // band in world y
+      const reach = d.r + 2 / s; // a dot's antialiased edge spills a pixel or so past its radius
+      const a = firstAtOrAbove(wy0 - reach), b = firstAtOrAbove(wy1 + reach);
+      if (b > a) {
+        const path = new Path2D();
+        for (let k = a; k < b; k++) {
+          const x = d.xy[k * 2], y = d.xy[k * 2 + 1];
+          path.moveTo(x + d.r, y);
+          path.arc(x, y, d.r, 0, Math.PI * 2);
+        }
+        job.g.save();
+        job.g.beginPath();
+        job.g.rect((job.x) / s - 1, wy0, job.c.width / s + 2, wy1 - wy0);
+        job.g.clip();
+        job.g.fill(path);
+        job.g.restore();
+        flushCanvas(job.g); // make WebKit draw it now: the time (and the rate) is real
+        const dt = performance.now() - t0;
+        if (b - a >= 200 && dt > 0.3) this.dotRate += ((b - a) / dt - this.dotRate) * 0.3;
+      }
+      job.next = r1;
+      if (job.next < H && performance.now() > until) return false;
+    }
+    this.dotBakes.delete(el.id);
+    this.dropFillRaster(el.id);
+    for (const [id, r] of this.fillRasters) {
+      if (this.fillRasterPx + job.c.width * job.c.height <= FILL_RASTER_BUDGET) break;
+      if (this.keepRect && bboxIntersects(this.cache.get(id)?.bbox ?? { minX: 0, minY: 0, maxX: 0, maxY: 0 }, this.keepRect) && r.s === s) continue;
+      this.dropFillRaster(id);
+    }
+    this.fillRasters.set(el.id, { c: job.c, s, x: job.x, y: job.y });
+    this.fillRasterPx += job.c.width * job.c.height;
+    return true;
+  }
+
+  private dropDotBake(id: string) {
+    const b = this.dotBakes.get(id);
+    if (b) { b.c.width = b.c.height = 0; this.dotBakes.delete(id); }
+  }
+
   private dropFillRaster(id: string) {
     const r = this.fillRasters.get(id);
     if (!r) return;
@@ -946,9 +1267,33 @@ export class Renderer {
    * fraction of the draws; alpha is boosted to keep the same darkness. */
   private stampStroke(
     target: CanvasRenderingContext2D, el: Stroke, alphaScale = 1, fromIndex = 0,
-    opts: { minSpacing?: number; cache?: boolean } = {},
+    opts: StampOpts = {},
   ): number {
     const nib = this.nibs(el.color);
+    const cull = opts.cull;
+    const n = this.eachStamp(el, alphaScale, fromIndex, opts, (x, y, r, rot, alpha, layer) => {
+      if (cull) {
+        const m = r * 1.5; // rotated square's reach
+        if (x + m < cull.x || y + m < cull.y || x - m > cull.x + cull.w || y - m > cull.y + cull.h) return;
+      }
+      target.save();
+      target.translate(x, y);
+      target.rotate(rot);
+      target.globalAlpha = alpha;
+      target.drawImage(layer < 8 ? nib.grain[layer] : nib.dense[layer - 8], -r, -r, r * 2, r * 2);
+      target.restore();
+    });
+    target.globalAlpha = 1;
+    return n;
+  }
+
+  /** The stamp engine: every nib stamp of a stroke (from `fromIndex`) as centre, radius,
+   * rotation, alpha and nib (0–7 grain, 8–15 dense), in world units. Shared by the Canvas 2D
+   * stamper and the GPU one. Returns the stroke's stamp count. */
+  private eachStamp(
+    el: Stroke, alphaScale: number, fromIndex: number, opts: StampOpts,
+    put: (x: number, y: number, r: number, rot: number, alpha: number, layer: number) => void,
+  ): number {
     const stamps = this.stampsFor(el, opts.cache ?? false);
     const minSpacing = opts.minSpacing ?? 0;
     const wBase = el.baseWidth;
@@ -958,8 +1303,15 @@ export class Renderer {
       const x = Math.sin(i * 127.1 + salt * 311.7) * 43758.5453;
       return x - Math.floor(x);
     };
-    let sinceX = NaN, sinceY = NaN, skipped = 0;
+    // (resumable: `state` carries the merging across calls, `until` stops at a deadline;
+    // returns the index to resume from — the stamp count when done)
+    const run = opts.state ?? { sinceX: NaN, sinceY: NaN, skipped: 0 };
+    let { sinceX, sinceY, skipped } = run;
     for (let i = fromIndex; i < stamps.length; i++) {
+      if ((opts.limit !== undefined && i >= opts.limit) || (opts.until !== undefined && (i & 31) === 0 && i > fromIndex && performance.now() > opts.until)) {
+        run.sinceX = sinceX; run.sinceY = sinceY; run.skipped = skipped;
+        return i;
+      }
       const st = stamps[i];
       if (minSpacing > 0 && !Number.isNaN(sinceX) && Math.hypot(st.x - sinceX, st.y - sinceY) < minSpacing) {
         skipped++;
@@ -980,24 +1332,44 @@ export class Renderer {
       const jx = (rnd(i, 1) - 0.5) * r * 0.07;
       const jy = (rnd(i, 2) - 0.5) * r * 0.07;
       const wobble = 0.9 + rnd(i, 4) * 0.2;
-      target.save();
-      target.translate(st.x + jx, st.y + jy);
-      target.rotate(rnd(i, 5) * Math.PI * 2);
+      const rot = rnd(i, 5) * Math.PI * 2;
       // grain: present from the lightest touch, fades back as the core takes over
       const grainA = (0.16 + st.p * 0.3) * (1 - Math.max(0, st.p - 0.55) * 0.9) / Math.sqrt(tiltMul);
-      target.globalAlpha = Math.min(1, alphaScale * grainA * wobble * boost);
-      target.drawImage(nib.grain[Math.floor(rnd(i, 6) * 8)], -r, -r, r * 2, r * 2);
+      put(st.x + jx, st.y + jy, r, rot, Math.min(1, alphaScale * grainA * wobble * boost), Math.floor(rnd(i, 6) * 8));
       // dense core: kicks in past mid pressure, near-solid at full
       const core = Math.max(0, (st.p - 0.4) / 0.6);
       if (core > 0) {
         const rc = wEff * (0.62 - core * 0.2) * (0.98 + rnd(i, 3) * 0.04);
-        target.globalAlpha = Math.min(1, alphaScale * Math.pow(core, 1.3) * 0.9 * wobble * boost);
-        target.drawImage(nib.dense[Math.floor(rnd(i, 9) * 8)], -rc, -rc, rc * 2, rc * 2);
+        put(st.x + jx, st.y + jy, rc, rot, Math.min(1, alphaScale * Math.pow(core, 1.3) * 0.9 * wobble * boost), 8 + Math.floor(rnd(i, 9) * 8));
       }
-      target.restore();
     }
-    target.globalAlpha = 1;
+    run.sinceX = sinceX; run.sinceY = sinceY; run.skipped = skipped;
     return stamps.length;
+  }
+
+  /** A committed pencil stroke rasterised on the GPU (see glpencil.ts); null → stamp in 2D. */
+  // opt-in while it's being proven on the iPad (WebKit dropped the page with it on); undefined = try
+  private glPencil: GLPencil | null | undefined = (() => { try { return localStorage.getItem('izine-gpu-pencil') === '1' ? undefined : null; } catch { return null; } })();
+  private glStamps = new Float32Array(STAMP_FLOATS * 4096);
+  private gpuPencilRaster(el: Stroke, w: number, h: number, bucket: number, bbox: BBox): HTMLCanvasElement | null {
+    if (this.glPencil === undefined) this.glPencil = GLPencil.create();
+    const gp = this.glPencil;
+    if (!gp || !gp.ok) return null;
+    let n = 0;
+    const ox = bbox.minX, oy = bbox.minY;
+    this.eachStamp(el, 1, 0, { minSpacing: 0.7 / bucket, cache: true }, (x, y, r, rot, alpha, layer) => {
+      if ((n + 1) * STAMP_FLOATS > this.glStamps.length) {
+        const grown = new Float32Array(this.glStamps.length * 2);
+        grown.set(this.glStamps);
+        this.glStamps = grown;
+      }
+      const d = this.glStamps, k = n * STAMP_FLOATS;
+      d[k] = (x - ox) * bucket; d[k + 1] = (y - oy) * bucket; d[k + 2] = r * bucket; d[k + 3] = rot;
+      d[k + 4] = alpha; d[k + 5] = layer;
+      n++;
+    });
+    const nib = this.nibs(el.color);
+    return gp.render(w, h, el.color, [...nib.grain, ...nib.dense], this.glStamps, n);
   }
 
   // incremental live-pencil raster: only NEW stamps are drawn each frame, so
@@ -1042,6 +1414,29 @@ export class Renderer {
     ctx.restore();
   }
 
+  /** Spare time in a frame: build the outlines / pencil rasters of the in-view areas' frames
+   * that aren't showing yet. Each frame is otherwise built the first time it shows (and again
+   * after every zoom), so the first loop stutters and drops frames before it settles. */
+  private warmed = '';
+  private warmAreas(view: View, z: number, until: number) {
+    const areas = this.store.doc.areas.filter((a) => this.areaInView(a, view));
+    if (!areas.length) return;
+    const key = [this.detail(), Math.round(Math.log2(Math.max(1 / 64, Math.min(8, z)))), this.store.doc.elements.length, ...areas.map((a) => a.id)].join('|');
+    if (key === this.warmed) return; // everything here is built for this zoom already
+    const frames = new Set<string>(), ids = new Set<string>();
+    for (const a of areas) { ids.add(a.id); for (const l of a.layers) for (const f of l.frames) frames.add(f.id); }
+    for (const el of this.store.doc.elements) {
+      if (el.kind !== 'stroke' && el.kind !== 'fill') continue;
+      if (!(el.frame && frames.has(el.frame))) continue; // (timed live ink is built per frame anyway)
+      if (performance.now() > until) { this.dirty = true; return; }
+      this.entry(el);
+      if (el.kind === 'stroke' && el.tool === 'pencil') {
+        if (!this.pencilRaster(el, z)) { this.dirty = true; return; } // still stamping: next frame
+      }
+    }
+    this.warmed = key;
+  }
+
   /** iPad app: tell the native ink overlay how the live stroke looks and what has been painted,
    * so it draws only the newest piece (see ios/InfiniZine/InkOverlay.swift). */
   private inkReported = '';
@@ -1058,41 +1453,110 @@ export class Renderer {
   }
 
   private pencilCache = new Map<string, { c: HTMLCanvasElement; bucket: number; bbox: BBox }>();
-  private pencilRaster(el: Stroke, z: number) {
+  /** A committed pencil stroke as a bitmap at the current zoom bucket. Stamping one can take
+   * hundreds of ms on an iPad, so it's a job stamped a slice per frame (see advancePencilJob);
+   * until it's done this returns the previous zoom's raster (drawn scaled) or null (the
+   * caller draws a quick vector stand-in), and the tiles under it are refreshed when it lands. */
+  private pencilJobs = new Map<string, PencilJob>();
+  private pencilRaster(el: Stroke, z: number): { c: HTMLCanvasElement; bucket: number; bbox: BBox } | null {
     // raster resolution = zoom bucket × device pixel ratio, so a cached pencil
     // stroke is as sharp on a retina screen as the live one being drawn
     const dpr = window.devicePixelRatio || 1;
-    let bucket = Math.pow(2, Math.round(Math.log2(Math.max(0.25, Math.min(8, z))))) * dpr;
+    // (down to 1/64: zoomed far out the whole zine is on screen, and every stroke's raster
+    // at a coarser floor would be many times the pixels shown — iOS kills the page for it)
+    let bucket = Math.pow(2, Math.round(Math.log2(Math.max(1 / 64, Math.min(8, z))))) * dpr;
     const hit = this.pencilCache.get(el.id);
-    if (hit && hit.bucket === bucket) return hit;
-    if (hit) {
-      // wrong bucket but usable: while a zoom gesture is in flight, or once this
-      // frame's raster budget is spent, draw it scaled and rebuild later
-      const now = performance.now();
-      if (now - this.lastZoomChangeAt < 180 || now > this.rasterBudgetUntil) {
-        this.rastersPending = true;
-        return hit;
-      }
+    if (hit && hit.bucket === bucket) {
+      this.pencilCache.delete(el.id); // most recently used goes last
+      this.pencilCache.set(el.id, hit);
+      return hit;
     }
+    const exporting = this.detailOverride !== null; // exports and thumbnails: always the real thing, now
+    // mid-zoom: keep drawing the old one scaled; rebuild once the zoom settles
+    if (hit && !exporting && performance.now() - this.lastZoomChangeAt < 180) { this.rastersPending = true; return hit; }
     const bbox = elementBBox(el);
     let w = Math.max(1, Math.ceil((bbox.maxX - bbox.minX) * bucket));
     let h = Math.max(1, Math.ceil((bbox.maxY - bbox.minY) * bucket));
-    while ((w > 4096 || h > 4096) && bucket > 0.25) {
+    while ((w > 4096 || h > 4096) && bucket > 1 / 64) {
       bucket /= 2;
       w = Math.max(1, Math.ceil((bbox.maxX - bbox.minX) * bucket));
       h = Math.max(1, Math.ceil((bbox.maxY - bbox.minY) * bucket));
     }
-    const c = document.createElement('canvas');
-    c.width = w;
-    c.height = h;
-    const cc = c.getContext('2d')!;
-    cc.scale(bucket, bucket);
-    cc.translate(-bbox.minX, -bbox.minY);
+    if (hit && hit.bucket === bucket) return hit;
+    let job = this.pencilJobs.get(el.id);
+    if (job && job.bucket !== bucket) { this.dropPencilJob(el.id); job = undefined; }
+    if (!job) {
+      // the cap is for strokes away from the screen: evicting one in view would only have it
+      // stamped again (and evict another…)
+      for (const [id, r] of this.pencilCache) {
+        if (this.pencilRasterPx + w * h <= PENCIL_RASTER_BUDGET) break;
+        if (id === el.id || (this.keepRect && bboxIntersects(r.bbox, this.keepRect))) continue;
+        this.dropPencilRaster(id);
+      }
+      const gpu = this.gpuPencilRaster(el, w, h, bucket, bbox); // (opt-in, see glPencil)
+      if (gpu) return this.installPencilRaster(el.id, gpu, bucket, bbox);
+      const c = document.createElement('canvas');
+      c.width = w;
+      c.height = h;
+      const g = c.getContext('2d');
+      if (!g) {
+        // out of canvas memory: free what we can and draw a stand-in this time
+        c.width = c.height = 0;
+        for (const id of [...this.pencilCache.keys()]) this.dropPencilRaster(id);
+        return null;
+      }
+      job = { el, bucket, bbox, c, g, next: 0, state: { sinceX: NaN, sinceY: NaN, skipped: 0 } };
+      this.pencilJobs.set(el.id, job);
+    }
+    if (this.advancePencilJob(job, exporting ? Infinity : this.rasterBudgetUntil)) return this.pencilCache.get(el.id)!;
+    return hit ?? null;
+  }
+
+  /** Stamp a pencil job until `until`; true once it's done and in the cache. */
+  private advancePencilJob(job: PencilJob, until: number): boolean {
+    const { el, g, bucket, bbox } = job;
+    g.setTransform(bucket, 0, 0, bucket, -bbox.minX * bucket, -bbox.minY * bucket);
     // stamps closer than ~0.7 device px are invisible: skip them (alpha-compensated)
-    this.stampStroke(cc, el, 1, 0, { minSpacing: 0.7 / bucket, cache: true });
+    job.next = this.stampStroke(g, el, 1, job.next, { minSpacing: 0.7 / bucket, cache: true, until, state: job.state });
+    if (job.next < this.stampsFor(el, true).length) return false;
+    this.pencilJobs.delete(el.id);
+    this.installPencilRaster(el.id, job.c, bucket, bbox);
+    this.dirty = true;
+    return true;
+  }
+
+  private installPencilRaster(id: string, c: HTMLCanvasElement, bucket: number, bbox: BBox) {
+    this.dropPencilRaster(id);
     const entry = { c, bucket, bbox };
-    this.pencilCache.set(el.id, entry);
+    this.pencilCache.set(id, entry);
+    this.pencilRasterPx += c.width * c.height;
     return entry;
+  }
+
+  /** Spare time in a frame (at least `min` ms): carry on with the pencil jobs, oldest first
+   * (they were started centre-out with the tiles). */
+  private advancePencilJobs(min: number) {
+    const until = Math.max(this.rasterBudgetUntil, performance.now() + min);
+    for (const job of [...this.pencilJobs.values()]) {
+      if (performance.now() > until) break;
+      this.advancePencilJob(job, until);
+    }
+    if (this.pencilJobs.size) this.dirty = true;
+  }
+
+  private dropPencilJob(id: string) {
+    const job = this.pencilJobs.get(id);
+    if (!job) return;
+    job.c.width = job.c.height = 0;
+    this.pencilJobs.delete(id);
+  }
+
+  private dropPencilRaster(id: string) {
+    const r = this.pencilCache.get(id);
+    if (!r) return;
+    this.pencilRasterPx -= r.c.width * r.c.height;
+    r.c.width = r.c.height = 0; // frees the backing store now
+    this.pencilCache.delete(id);
   }
 
   private draw() {
@@ -1104,7 +1568,7 @@ export class Renderer {
     if (!vw || !vh) return; // hidden (e.g. the playground's scratch canvas while closed)
     const frameStart = performance.now();
     if (camera.zoom !== this.lastZoom) { this.lastZoom = camera.zoom; this.lastZoomChangeAt = frameStart; }
-    this.rasterBudgetUntil = frameStart + 6; // ms of pencil raster (re)building per frame
+    this.rasterBudgetUntil = frameStart + this.buildBudget(); // ms of raster (re)building per frame
     this.rastersPending = false;
     if (canvas.width !== vw * dpr || canvas.height !== vh * dpr) {
       canvas.width = vw * dpr;
@@ -1117,9 +1581,9 @@ export class Renderer {
     const live = this.input.live;
 
     // Static layers for the committed, non-animated content. Skipped while
-    // presenting (page clip) and while the eraser hides elements. The back
-    // bitmap goes down now; the front one after a paint-behind live stroke.
-    const useStatic = !presenting && this.input.hidden.size === 0;
+    // presenting (page clip); elements the eraser hides are left out of their tiles.
+    // The back bitmap goes down now; the front one after a paint-behind live stroke.
+    const useStatic = !presenting;
     let blitFront: () => void = () => {};
     if (useStatic) {
       blitFront = this.drawStatic(vw, vh, dpr, frameStart);
@@ -1509,6 +1973,8 @@ export class Renderer {
     if (live && live.layer !== 'back') drawLiveTimed();
     if (nativeApp && !presenting) this.reportInk(live);
     ctx.globalAlpha = 1;
+    if (!animClock.paused) this.warmAreas(view, z, frameStart + this.buildBudget());
+    if (this.pencilJobs.size) this.advancePencilJobs(1);
 
     // Page borders sit on top of everything
     if (!presenting) {

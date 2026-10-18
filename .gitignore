@@ -4,3 +4,4 @@ dist/
 ios/InfiniZine/web/
 ios/InfiniZine.xcodeproj/
 ios/build/
+ios/build-device/

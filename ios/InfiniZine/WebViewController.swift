@@ -25,6 +25,8 @@ final class WebViewController: UIViewController, WKScriptMessageHandler, WKNavig
         return args[i + 1]
     }()
     static let flag = { (name: String) in ProcessInfo.processInfo.arguments.contains(name) }
+    private static var launchImported = false
+    private static var launchDeleted = false
 
     override func loadView() {
         let config = WKWebViewConfiguration()
@@ -136,8 +138,13 @@ final class WebViewController: UIViewController, WKScriptMessageHandler, WKNavig
     /// open zine through the normal download path (→ Documents); `-izineSummary` logs the library's open zine.
     private func runLaunchActions() {
         let args = ProcessInfo.processInfo.arguments
-        if let i = args.firstIndex(of: "-izineImport"), i + 1 < args.count {
-            importZine(at: URL(fileURLWithPath: args[i + 1]))
+        // (once per launch: this runs again whenever the page reloads)
+        if !Self.launchImported, let i = args.firstIndex(of: "-izineImport"), i + 1 < args.count {
+            Self.launchImported = true
+            // a bare name is looked up in Documents (where `devicectl device copy to` puts files)
+            let path = args[i + 1]
+            let docs = FileManager.default.urls(for: .documentDirectory, in: .userDomainMask)[0]
+            importZine(at: path.hasPrefix("/") ? URL(fileURLWithPath: path) : docs.appendingPathComponent(path))
         }
         DispatchQueue.main.asyncAfter(deadline: .now() + 2) { [weak self] in
             guard let self else { return }
@@ -145,6 +152,14 @@ final class WebViewController: UIViewController, WKScriptMessageHandler, WKNavig
                 self.webView.evaluateJavaScript("JSON.stringify(__izineDebug.summary())") { r, _ in NSLog("[izine] summary \(r ?? "-")") }
             }
             if Self.flag("-izineExport") { self.webView.evaluateJavaScript("__izineDebug.exportZine();0", completionHandler: nil) }
+            if Self.flag("-izineListDocs") {
+                self.webView.evaluateJavaScript("JSON.stringify(__izineDebug.listDocs())") { r, _ in NSLog("[izine] docs \(r ?? "-")") }
+            }
+            if let i = args.firstIndex(of: "-izineDeleteDocs"), i + 1 < args.count, !Self.launchDeleted {
+                Self.launchDeleted = true
+                let ids = args[i + 1].split(separator: ",").map { "\"\($0)\"" }.joined(separator: ",")
+                self.webView.evaluateJavaScript("__izineDebug.deleteDocs([\(ids)])") { r, _ in NSLog("[izine] deleted, \(r ?? "-") zines left") }
+            }
         }
     }
 
@@ -231,6 +246,7 @@ final class WebViewController: UIViewController, WKScriptMessageHandler, WKNavig
     }
 
     func webViewWebContentProcessDidTerminate(_ webView: WKWebView) {
+        NSLog("[izine] web content process terminated — reloading")
         webView.reload() // memory pressure killed the page: bring it back (the library is in IndexedDB)
     }
 }

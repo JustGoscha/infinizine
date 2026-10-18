@@ -2,7 +2,7 @@
 // (Bayer, scanlines). A pattern is a "colour" like `pattern:tone-3`; only the
 // fill tool paints it — strokes and text using a pattern swatch just get ink.
 
-import { pointInPolygonNZ as pointInPolygon } from './geometry';
+import { polygonTesterNZ } from './geometry';
 
 export const PATTERN_INK = '#1a1a1a';
 export const isPattern = (c: string) => c.startsWith('pattern:');
@@ -190,12 +190,13 @@ export function cellPath(points: { x: number; y: number }[], id: string, m = 1):
   const r0 = Math.floor(minY / cell), r1 = Math.ceil(maxY / cell);
   if ((c1 - c0) * (r1 - r0) > 600_000) return null;
   const path = new Path2D();
+  const inPoly = polygonTesterNZ(points);
   const eps = cell * 0.02; // hairline overlap between runs so rows never show antialias seams
   for (let r = r0; r < r1; r++) {
     const cy = (r + 0.5) * cell;
     let run: number | null = null; // start column of the current run (columns may be negative)
     for (let c = c0; c <= c1; c++) {
-      const inside = c < c1 && rule(r, c) && pointInPolygon((c + 0.5) * cell, cy, points);
+      const inside = c < c1 && rule(r, c) && inPoly((c + 0.5) * cell, cy);
       if (inside && run === null) run = c;
       if (!inside && run !== null) {
         path.rect(run * cell - eps, r * cell - eps, (c - run) * cell + 2 * eps, cell + 2 * eps);
@@ -217,11 +218,12 @@ export function snapPolygonToCells(points: { x: number; y: number }[], cell: num
   const r0 = Math.floor(minY / cell), r1 = Math.ceil(maxY / cell);
   if ((c1 - c0) * (r1 - r0) > 600_000) return null; // absurdly large: fall back to the smooth outline
   const path = new Path2D();
+  const inPoly = polygonTesterNZ(points);
   for (let r = r0; r < r1; r++) {
     const cy = (r + 0.5) * cell;
     let run: number | null = null;
     for (let c = c0; c <= c1; c++) {
-      const inside = c < c1 && pointInPolygon((c + 0.5) * cell, cy, points);
+      const inside = c < c1 && inPoly((c + 0.5) * cell, cy);
       if (inside && run === null) run = c;
       if (!inside && run !== null) { path.rect(run * cell, r * cell, (c - run) * cell, cell); run = null; }
     }
@@ -234,6 +236,19 @@ export function snapPolygonToCells(points: { x: number; y: number }[], cell: num
  * dots. Returns null for line-like families (those clip the pattern instead).
  * `m` scales the tile (zoom-stepped tones). */
 export function motifPath(points: { x: number; y: number }[], id: string, angleDeg: number, m = 1): Path2D | null {
+  const d = motifDots(points, id, angleDeg, m);
+  if (!d) return null;
+  const path = new Path2D();
+  for (let k = 0; k < d.n; k++) {
+    const x = d.xy[k * 2], y = d.xy[k * 2 + 1];
+    path.moveTo(x + d.r, y);
+    path.arc(x, y, d.r, 0, Math.PI * 2);
+  }
+  return path;
+}
+
+/** The whole dots of a dot-family fill (see motifPath): centres (world) and radius. */
+export function motifDots(points: { x: number; y: number }[], id: string, angleDeg: number, m = 1): { xy: Float32Array; n: number; r: number } | null {
   const p = parse(id);
   if (!p || (p.fam !== 'tone' && p.fam !== 'sand') || points.length < 3) return null;
   const T = patternTileSize(id) * m;
@@ -253,18 +268,19 @@ export function motifPath(points: { x: number; y: number }[], id: string, angleD
     : Array.from({ length: Math.round(lv('sand', p.k) * (T * T) / 16 / (m * m)) }, (_, i) => [rnd(i, 1) * T, rnd(i, 2) * T] as [number, number]);
   const r = p.fam === 'tone' ? Math.sqrt((lv('tone', p.k) * T * T) / 2 / Math.PI) : 0.13 * m;
   if ((i1 - i0) * (j1 - j0) * motifs.length > 400_000) return null; // too many dots: clip the pattern instead
-  const path = new Path2D();
+  const inPoly = polygonTesterNZ(points);
+  let xy = new Float32Array(1024), n = 0;
   for (let i = i0; i < i1; i++) for (let j = j0; j < j1; j++) {
     for (const [mu, mv] of motifs) {
       const u = i * T + mu, v = j * T + mv;
       const x = u * ca - v * sa, y = u * sa + v * ca; // pattern → world
       if (x < minX - r || x > maxX + r || y < minY - r || y > maxY + r) continue;
-      if (!pointInPolygon(x, y, points)) continue;
-      path.moveTo(x + r, y);
-      path.arc(x, y, r, 0, Math.PI * 2);
+      if (!inPoly(x, y)) continue;
+      if (n * 2 + 2 > xy.length) { const g = new Float32Array(xy.length * 2); g.set(xy); xy = g; }
+      xy[n * 2] = x; xy[n * 2 + 1] = y; n++;
     }
   }
-  return path;
+  return { xy, n, r };
 }
 
 // deterministic per-tile randomness so a tile is identical every time it's built

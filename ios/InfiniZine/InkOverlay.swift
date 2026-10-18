@@ -5,15 +5,20 @@ import UIKit
 /// straight from UIKit's touches, draws only the newest piece the page hasn't painted
 /// yet, plus UIKit's prediction, in the same colour and width — so the ink stays
 /// under the Pencil tip. The page reports what it has painted ("painted") and the
-/// overlay drops everything older. Opaque strokes only (pen, fineliner): an overlap
-/// with translucent ink would show.
+/// overlay drops everything older — once that frame can be on screen: the page reports
+/// while drawing, and its canvas reaches the display a frame or two later (more when its
+/// frames are heavy, e.g. animated areas), so dropping right away left a gap at the tip
+/// that filled in again. Opaque strokes only (pen, fineliner): an overlap with
+/// translucent ink would show.
 final class InkOverlay: UIView {
     private let shape = CAShapeLayer()
     private var active = false
     private var widths: [CGFloat] = [] // screen width by pressure 0, 0.1, … 1
     private var samples: [PenSample] = []
     private var predicted: [PenSample] = []
-    private var painted: TimeInterval = 0
+    private var painted: TimeInterval = 0 // painted and surely on screen by now
+    private var reports: [(at: CFTimeInterval, t: TimeInterval)] = [] // "painted" as reported, newest last
+    private var reportInterval: CFTimeInterval = 1.0 / 60 // the page's frame time, smoothed
     private var ended = false
     private var clearTimer: Timer?
     /// for the benchmark: the newest sample shown and when
@@ -49,6 +54,7 @@ final class InkOverlay: UIView {
             clearTimer?.invalidate()
             samples = []
             painted = 0
+            reports = []
             ended = false
         }
         samples += s
@@ -64,9 +70,23 @@ final class InkOverlay: UIView {
     }
 
     func paintedUpTo(_ t: TimeInterval) {
-        painted = max(painted, t)
+        let now = CACurrentMediaTime()
+        if let last = reports.last { reportInterval += (min(0.1, now - last.at) - reportInterval) * 0.2 }
+        reports.append((now, t))
+        settle(now)
         redraw()
         if ended && (samples.last.map { $0.t <= painted } ?? true) { clear() }
+    }
+
+    /// Take in the reports old enough that their frame is on screen: two of the page's frames
+    /// (at least two display refreshes) after the report.
+    private func settle(_ now: CFTimeInterval) {
+        let refresh = 1.0 / Double(max(60, window?.screen.maximumFramesPerSecond ?? 60))
+        let lag = max(2 * refresh, 2 * reportInterval)
+        while let r = reports.first, now - r.at >= lag {
+            painted = max(painted, r.t)
+            reports.removeFirst()
+        }
     }
 
     private func clear() {
@@ -88,6 +108,7 @@ final class InkOverlay: UIView {
 
     private func redraw() {
         guard active else { return }
+        settle(CACurrentMediaTime())
         // keep one already-painted sample so the overlay joins the page's stroke without a gap
         var from = samples.count - 1
         while from > 0 && samples[from - 1].t > painted { from -= 1 }

@@ -34,13 +34,21 @@ const uiHooks = buildUI(ui, state, store, camera, () => renderer.invalidate(), {
 
 if (nativeApp) {
   // iPad app: a .zine opened from Files / the share sheet
-  (window as unknown as { __izineImport: (text: string) => boolean }).__izineImport = (text) => store.importJSON(text);
+  // (after the library has loaded: an import during startup was overridden by the zine that was open last)
+  (window as unknown as { __izineImport: (text: string) => Promise<boolean> }).__izineImport = (text) => store.ready.then(() => store.importJSON(text));
   // debug builds launched with -izineTest: the scripted Pencil benchmark
-  if (nativeApp.test) void import('./pentest').then((m) => m.installPenTest(store, camera, state, canvas, nativeApp!.test!));
+  if (nativeApp.test === 'pan') {
+    // every zine that exists before the import: the bench never touches (or deletes) these
+    const existing = new Set(store.listDocs().map((m) => m.id));
+    void import('./pentest').then((m) => m.runPanBench(store, camera, renderer, existing));
+  }
+  else if (nativeApp.test) void import('./pentest').then((m) => m.installPenTest(store, camera, state, canvas, nativeApp!.test!));
   // automation hooks (cross-play checks, simulator runs)
   (window as unknown as { __izineDebug: unknown }).__izineDebug = {
     exportZine: () => exportZine(store, renderer, { scope: 'all', format: 'zine', dpi: 150, paperPattern: false } as unknown as Parameters<typeof exportZine>[2]),
     summary: () => ({ name: store.doc.name, elements: store.doc.elements.length, pages: store.doc.pages.length, app: store.doc.app }),
+    listDocs: () => store.listDocs().map((m) => `${m.id} "${m.name}" ${new Date(m.updated).toISOString()}`),
+    deleteDocs: (ids: string[]) => { for (const id of ids) store.deleteDoc(id); return store.listDocs().length; },
   };
 }
 
