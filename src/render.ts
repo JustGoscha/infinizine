@@ -76,9 +76,16 @@ export interface RenderOpts {
   /** draw the screen straight from vectors instead of tiles when only cheap ink is in view and it
    * fits the frame on this device ('auto'), never, or always */
   vector: 'auto' | 'never' | 'always';
+  /** where sharp tiles meet ones not ready yet, blend over a soft band instead of a hard square
+   * edge (off: each tile fades in as a square) */
+  feather: boolean;
 }
-export const RENDER_DEFAULTS: RenderOpts = { schedule: 'adaptive', levels: true, fade: true, motion: true, prefetchDir: true, draft: true, grid: true, gridMode: 'canvas', vector: 'auto' };
+export const RENDER_DEFAULTS: RenderOpts = { schedule: 'adaptive', levels: true, fade: true, motion: true, prefetchDir: true, draft: true, grid: true, gridMode: 'canvas', vector: 'auto', feather: true };
 const FADE_MS = 300;
+/** coverage-mask px per tile (feathering): the soft edge is two of them, a quarter tile */
+const FEATHER_N = 8;
+/** each screen tile's coverage (row-major from the top-left screen tile at x, y; T px per tile) and the band to feather */
+interface Coverage { v: Float32Array; cols: number; rows: number; x: number; y: number; T: number; rect: { x: number; y: number; w: number; h: number } }
 /** a new tile's opacity `age` ms after it was built: eased in and out, so detail arrives softly */
 const fadeAlpha = (age: number) => { const u = Math.max(0, Math.min(1, age / FADE_MS)); return u * u * (3 - 2 * u); };
 /** a tile being built a slice per frame: its elements by layer, where it got to (element k of
@@ -1019,8 +1026,81 @@ export class Renderer {
     return m;
   }
 
+  /** The coverage mask: FEATHER_N px per screen tile, its alpha the tile's coverage (0 none, 1
+   * sharp and settled, between: fading in), eased down over the two px along each edge that meets
+   * a less finished tile — drawn scaled up with smoothing, that's a soft ramp a quarter tile wide
+   * inside the finished tile instead of a hard edge. Off-screen neighbours count as finished (a
+   * tile at the screen's edge doesn't soften towards what isn't shown). */
+  private coverMask(cv: Coverage) {
+    const N = FEATHER_N, { cols, rows, v } = cv;
+    const w = cols * N, h = rows * N;
+    const m = (this.coverCanvas ??= document.createElement('canvas'));
+    const u = (this.uncoverCanvas ??= document.createElement('canvas'));
+    for (const c of [m, u]) if (c.width !== w || c.height !== h) { c.width = w; c.height = h; }
+    const img = new ImageData(w, h), d = img.data;
+    const inv = new ImageData(w, h), di = inv.data;
+    const at = (i: number, j: number) => (i < 0 || j < 0 || i >= cols || j >= rows ? 1 : v[j * cols + i]);
+    // weight of the tile's own value N px in from an edge: 0 at the edge px, ½ next, then 1
+    const wt = (l: number) => (l === 0 || l === N - 1 ? 0 : l === 1 || l === N - 2 ? 0.5 : 1);
+    for (let py = 0; py < h; py++) {
+      const j = (py / N) | 0, ly = py - j * N;
+      const dy = ly < N / 2 ? -1 : 1, wy = wt(ly);
+      for (let px = 0; px < w; px++) {
+        const i = (px / N) | 0, lx = px - i * N;
+        const dx = lx < N / 2 ? -1 : 1, wx = wt(lx);
+        const a = at(i, j);
+        let o = a;
+        if (wx < 1) { const n = at(i + dx, j); if (n < a) o = Math.min(o, n + (a - n) * wx); }
+        if (wy < 1) { const n = at(i, j + dy); if (n < a) o = Math.min(o, n + (a - n) * wy); }
+        if (wx < 1 && wy < 1) { const n = at(i + dx, j + dy); if (n < a) o = Math.min(o, n + (a - n) * Math.max(wx, wy)); }
+        const q = Math.round(o * 255);
+        d[(py * w + px) * 4 + 3] = q;
+        di[(py * w + px) * 4 + 3] = 255 - q;
+      }
+    }
+    m.getContext('2d')!.putImageData(img, 0, 0);
+    u.getContext('2d')!.putImageData(inv, 0, 0);
+  }
+  private coverCanvas: HTMLCanvasElement | null = null; // coverage
+  private uncoverCanvas: HTMLCanvasElement | null = null; // 1 − coverage
+  private coverFor: Coverage | null = null;
+  private featherCanvases = new Map<string, HTMLCanvasElement>();
+
+  /** Draw the band `cv.rect`: the stand-ins (`under`) masked to 1 − coverage, then the sharp tiles
+   * (`sharp`) masked to coverage, each composed in a scratch canvas and laid on the screen.
+   * Each layer and pass has its own scratch canvas: one canvas cleared and redrawn after it was
+   * drawn onto the screen, within the frame, made WebKit copy it whole each time (~270 ms a frame
+   * on the iPad simulator). The stand-ins are soft anyway: they're composed at half resolution. */
+  private featherBlit(cv: Coverage, layer: 'back' | 'front', under: (w: number, h: number, dx: number, dy: number) => void, sharp: (w: number, h: number, dx: number, dy: number) => void) {
+    const main = this.ctx, R = cv.rect;
+    if (this.coverFor !== cv) { this.coverMask(cv); this.coverFor = cv; } // (once a frame, for both layers)
+    const scale = cv.T / FEATHER_N;
+    const mx = cv.x - R.x, my = cv.y - R.y;
+    for (const pass of [under, sharp]) {
+      const half = pass === under ? 0.5 : 1;
+      const key = `${layer}${half}`;
+      let sc = this.featherCanvases.get(key);
+      if (!sc) this.featherCanvases.set(key, (sc = document.createElement('canvas')));
+      const w = Math.ceil(R.w * half), h = Math.ceil(R.h * half);
+      if (sc.width < w || sc.height < h) { sc.width = Math.max(sc.width, w); sc.height = Math.max(sc.height, h); }
+      const g = sc.getContext('2d')!;
+      g.setTransform(1, 0, 0, 1, 0, 0);
+      g.globalCompositeOperation = 'source-over';
+      g.globalAlpha = 1;
+      g.clearRect(0, 0, w, h);
+      g.setTransform(half, 0, 0, half, 0, 0);
+      this.ctx = g;
+      try { pass(R.w, R.h, -R.x, -R.y); } finally { this.ctx = main; }
+      // (erasing with the opposite mask: WebKit draws destination-in through a whole-canvas buffer)
+      g.globalCompositeOperation = 'destination-out';
+      g.imageSmoothingEnabled = true;
+      g.drawImage(pass === under ? this.coverCanvas! : this.uncoverCanvas!, mx, my, this.coverCanvas!.width * scale, this.coverCanvas!.height * scale);
+      main.drawImage(sc, 0, 0, w, h, R.x, R.y, R.w, R.h);
+    }
+  }
+
   /** Blit a tile set's back or front bitmaps (device-px space; scaled when the set is from another zoom). */
-  private blitTiles(set: TileSet, layer: 'back' | 'front', W: number, H: number, ox: number, oy: number, now = -1) {
+  private blitTiles(set: TileSet, layer: 'back' | 'front', W: number, H: number, ox: number, oy: number, now = -1, skip?: { x: number; y: number; w: number; h: number }) {
     const ctx = this.ctx;
     const k = (this.camera.zoom * (window.devicePixelRatio || 1)) / set.s;
     const base = ctx.globalAlpha;
@@ -1031,6 +1111,7 @@ export class Renderer {
       const x0 = Math.round(t.i * TILE * k) + ox, x1 = Math.round((t.i + 1) * TILE * k) + ox;
       const y0 = Math.round(t.j * TILE * k) + oy, y1 = Math.round((t.j + 1) * TILE * k) + oy;
       if (x1 <= 0 || y1 <= 0 || x0 >= W || y0 >= H) continue;
+      if (skip && Math.max(x0, 0) >= skip.x && Math.max(y0, 0) >= skip.y && Math.min(x1, W) <= skip.x + skip.w && Math.min(y1, H) <= skip.y + skip.h) continue;
       const age = now >= 0 && t.born !== undefined ? now - t.born : FADE_MS;
       ctx.globalAlpha = age < FADE_MS ? base * fadeAlpha(age) : base;
       if (k === 1) ctx.drawImage(c, x0, y0);
@@ -1109,6 +1190,7 @@ export class Renderer {
     let holed = false;
     let anyMissing = false;
     let fading = false;
+    let cover: Coverage | null = null; // (feathering) how far each screen tile is along, and where
     if (settled) {
       const tiles = fine.tiles;
       const i0 = Math.floor(-ox / T), i1 = Math.floor((W - 1 - ox) / T);
@@ -1212,10 +1294,18 @@ export class Renderer {
         for (const [key, job] of ts.jobs) if (far(ts, job.i, job.j)) { this.recycle(job.back); this.recycle(job.front); ts.jobs.delete(key); }
       }
       const nowMs = performance.now();
+      const cols = i1 - i0 + 1, rows = j1 - j0 + 1;
+      const v = opts.feather ? new Float32Array(cols * rows) : null;
+      let ci0 = Infinity, ci1 = -Infinity, cj0 = Infinity, cj1 = -Infinity;
       for (let j = j0; j <= j1; j++) {
         for (let i = i0; i <= i1; i++) {
           const t = tiles.get(`${i},${j}`);
           const fadingIn = !!t && t.born !== undefined && nowMs - t.born < FADE_MS;
+          if (v) {
+            const a = !t ? 0 : fadingIn ? fadeAlpha(nowMs - t.born!) : 1;
+            v[(j - j0) * cols + (i - i0)] = a;
+            if (a < 1) { ci0 = Math.min(ci0, i); ci1 = Math.max(ci1, i); cj0 = Math.min(cj0, j); cj1 = Math.max(cj1, j); }
+          }
           if (!t || fadingIn) {
             const x0 = Math.round(i * T) + ox, y0 = Math.round(j * T) + oy;
             const w = Math.round((i + 1) * T) + ox - x0, h = Math.round((j + 1) * T) + oy - y0;
@@ -1225,6 +1315,12 @@ export class Renderer {
             else { fadingRects.push([x0, y0, w, h, fadeAlpha(nowMs - t.born!)]); fading = true; }
           }
         }
+      }
+      if (v && ci0 <= ci1) {
+        // the band: the unfinished tiles and the ring of tiles around them (their edges soften)
+        const x0 = Math.max(0, Math.round((ci0 - 1) * T) + ox), x1 = Math.min(W, Math.round((ci1 + 2) * T) + ox);
+        const y0 = Math.max(0, Math.round((cj0 - 1) * T) + oy), y1 = Math.min(H, Math.round((cj1 + 2) * T) + oy);
+        if (x1 > x0 && y1 > y0) cover = { v, cols, rows, x: i0 * T + ox, y: j0 * T + oy, T, rect: { x: x0, y: y0, w: x1 - x0, h: y1 - y0 } };
       }
       if (pending || fading) this.dirty = true;
     } else {
@@ -1255,12 +1351,21 @@ export class Renderer {
         }
       }
       if (dimmed) ctx.globalAlpha = 0.3;
-      const under = () => {
-        if (coarse?.tiles.size) this.blitTiles(coarse, layer, W, H, ox, oy);
-        for (const l of others) this.blitTiles(l, layer, W, H, ox, oy);
+      const under = (w = W, h = H, x = ox, y = oy) => {
+        if (coarse?.tiles.size) this.blitTiles(coarse, layer, w, h, x, y);
+        for (const l of others) this.blitTiles(l, layer, w, h, x, y);
       };
       if (!settled) {
         under(); // mid-zoom across levels: what we have, scaled
+      } else if (cover) {
+        // feathered: in the band, sharp × coverage over the stand-ins × (1 − coverage), the
+        // coverage a soft mask (one value per tile, eased across edges); elsewhere the sharp tiles
+        // (the passes draw shifted by the band's offset: dx, dy)
+        this.featherBlit(cover, layer, (w, h, dx, dy) => under(w, h, ox + dx, oy + dy), (w, h, dx, dy) => this.blitTiles(fine, layer, w, h, ox + dx, oy + dy));
+        // (skipping the band's tiles, not clipping around it: WebKit masks every draw under a clip with a hole)
+        this.blitTiles(fine, layer, W, H, ox, oy, -1, cover.rect);
+        ctx.restore();
+        return;
       } else if (holed) {
         // under the gaps: the draft, then other levels' tiles, sharper on top. Under tiles fading
         // in: the same, fading out as they fade in (the back layer is opaque, so there it's covered
