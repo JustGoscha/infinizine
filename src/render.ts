@@ -2,6 +2,7 @@
 // culling + cached outlines), live stroke, lasso/selection overlays.
 
 import { GLPencil, STAMP_FLOATS } from './glpencil';
+import { SpatialGrid } from './spatial';
 import { Camera, baseZoom } from './camera';
 import { AnimArea, Element, FillShape, Page, Stroke, StrokePoint, TextBox } from './types';
 import { elementBBox, bboxIntersects, LiveDenoiser, denoiseClosed, closeBlob, BBox } from './geometry';
@@ -66,8 +67,13 @@ export interface RenderOpts {
   prefetchDir: boolean;
   /** the whole-zine overview under everything (what shows where no tile is ready) */
   draft: boolean;
+  /** the paper's dot grid drawn live each frame (off: no grid) */
+  grid: boolean;
+  /** how: 'layer' a background layer behind the canvas moved by a compositor transform ·
+   * 'position' the same layer moved by its background position · 'canvas' painted into the canvas */
+  gridMode: 'layer' | 'position' | 'canvas';
 }
-export const RENDER_DEFAULTS: RenderOpts = { schedule: 'adaptive', levels: true, fade: true, motion: true, prefetchDir: true, draft: true };
+export const RENDER_DEFAULTS: RenderOpts = { schedule: 'adaptive', levels: true, fade: true, motion: true, prefetchDir: true, draft: true, grid: true, gridMode: 'canvas' };
 const FADE_MS = 300;
 /** a new tile's opacity `age` ms after it was built: eased in and out, so detail arrives softly */
 const fadeAlpha = (age: number) => { const u = Math.max(0, Math.min(1, age / FADE_MS)); return u * u * (3 - 2 * u); };
@@ -106,6 +112,81 @@ export class Renderer {
   /** other zoom levels' tiles (most recent first): kept so zooming back finds them, and drawn
    * (scaled) into the gaps while the current level's tiles build */
   private levels: TileSet[] = [];
+  /** The element index (kept up to date on changes, never rebuilt per frame): the still ink in a
+   * spatial grid, each element's drawing order, lookups by id, and the animated ink by keyframe
+   * and by area — so a frame touches only what it draws, however big the zine. */
+  private ix = {
+    doc: null as Element[] | null, // the elements array it was built from (a zine switch replaces it)
+    stale: true,
+    still: new SpatialGrid<Element>(),
+    order: new Map<string, number>(), // drawing order (kept for deleted ids: an undo puts them back in place)
+    next: 0,
+    byId: new Map<string, Element>(),
+    byFrame: new Map<string, Element[]>(),
+    byArea: new Map<string, Element[]>(), // timed live-ink strokes, by area
+  };
+  private index() {
+    const ix = this.ix, els = this.store.doc.elements;
+    if (!ix.stale && ix.doc === els) return ix;
+    ix.doc = els; ix.stale = false;
+    ix.still.clear(); ix.order.clear(); ix.byId.clear(); ix.byFrame.clear(); ix.byArea.clear();
+    els.forEach((el, k) => {
+      ix.order.set(el.id, k);
+      ix.byId.set(el.id, el);
+      this.indexEl(el);
+    });
+    ix.next = els.length;
+    return ix;
+  }
+  private indexEl(el: Element) {
+    const ix = this.ix;
+    if (el.frame) { let l = ix.byFrame.get(el.frame); if (!l) ix.byFrame.set(el.frame, (l = [])); l.push(el); }
+    else if (el.kind === 'stroke' && el.area) { let l = ix.byArea.get(el.area); if (!l) ix.byArea.set(el.area, (l = [])); l.push(el); }
+    else ix.still.insert(el, this.elBox(el));
+  }
+  /** After a local change: re-index just the touched elements (`present`: the doc's current
+   * elements with those ids). Animated ones rebuild their (small) lists in order. */
+  private reindex(ids: string[], present: Map<string, Element>) {
+    const ix = this.ix;
+    if (ix.stale || ix.doc !== this.store.doc.elements) { ix.stale = true; return; }
+    let animated = false;
+    for (const id of ids) {
+      const old = ix.byId.get(id);
+      if (old) {
+        if (old.frame || (old.kind === 'stroke' && old.area)) animated = true;
+        else ix.still.remove(old);
+        ix.byId.delete(id);
+      }
+      const el = present.get(id);
+      if (!el) continue;
+      if (!ix.order.has(id)) ix.order.set(id, ix.next++); // (appended: drawn on top)
+      ix.byId.set(id, el);
+      if (el.frame || (el.kind === 'stroke' && el.area)) animated = true;
+      else ix.still.insert(el, this.elBox(el));
+    }
+    if (animated) {
+      ix.byFrame.clear(); ix.byArea.clear();
+      for (const el of this.store.doc.elements) if (el.frame || (el.kind === 'stroke' && el.area)) this.indexEl(el);
+    }
+  }
+  /** The still ink intersecting `r`, in drawing order (hidden and dragged ones left out). */
+  private stillIn(r: View, skipHidden = true): Element[] {
+    const ix = this.index();
+    const out: Element[] = [];
+    const hidden = this.input.hidden;
+    ix.still.query({ minX: r.x, minY: r.y, maxX: r.x + r.w, maxY: r.y + r.h }, (el) => {
+      if (skipHidden && hidden.has(el.id)) return;
+      const f = this.floating.get(el.id);
+      if (f && !f.landing) return;
+      out.push(el);
+    });
+    const order = ix.order;
+    out.sort((a, b) => (order.get(a.id) ?? 0) - (order.get(b.id) ?? 0));
+    return out;
+  }
+  /** elements being dragged: out of the tiles, drawn as a bitmap rendered once at the drag's start
+   * and moved with them; `landing` once dropped, until the tiles under them have them again */
+  private floating = new Map<string, { snap: HTMLCanvasElement | null; x: number; y: number; s: number; ax: number; ay: number; w: number; h: number; touched: number; landing: boolean }>();
   opts: RenderOpts = (() => {
     try { return { ...RENDER_DEFAULTS, ...JSON.parse(localStorage.getItem('izine-render-opts') ?? '{}') }; } catch { return { ...RENDER_DEFAULTS }; }
   })();
@@ -284,9 +365,106 @@ export class Renderer {
     }
     return img;
   }
+  /** An element is being moved / resized in place (drags): it floats — see `floating`. ('*': everything changed.) */
   dropFromCache(id: string) {
-    this.cache.delete(id); this.dropPencilRaster(id); this.dropPencilJob(id); this.stampCache.delete(id); this.dropFillRaster(id);
-    this.tileGen++;
+    if (id === '*') { this.clearCache(); this.invalidate(); return; }
+    const el = this.index().byId.get(id);
+    if (!el) return;
+    const f = this.floating.get(id);
+    if (f && !f.landing) {
+      f.touched = performance.now();
+      // resized (text box / image handles), not just moved: render it again — those are cheap
+      if (el.kind === 'text' || el.kind === 'image') {
+        const b = elementBBox(el);
+        if (Math.abs(b.maxX - b.minX - f.w) > 0.01 || Math.abs(b.maxY - b.minY - f.h) > 0.01) {
+          if (f.snap) f.snap.width = f.snap.height = 0;
+          const a = anchorOf(el);
+          Object.assign(f, this.snapshot(el), { ax: a.x, ay: a.y, w: b.maxX - b.minX, h: b.maxY - b.minY });
+        }
+      }
+      this.invalidate();
+      return;
+    }
+    // drag starts (or picks up again mid-landing): render it once, take it out of the tiles
+    const old = this.tileBoxes.get(id);
+    this.dropElementCaches(id);
+    const snap = this.snapshot(el);
+    const a = anchorOf(el), bb = elementBBox(el);
+    this.floating.set(id, { ...snap, ax: a.x, ay: a.y, w: bb.maxX - bb.minX, h: bb.maxY - bb.minY, touched: performance.now(), landing: false });
+    this.redoTiles([old ?? this.elBox(el)]);
+    this.invalidate();
+  }
+
+  private dropElementCaches(id: string) {
+    this.cache.delete(id); this.boxCache.delete(id); this.dotCache.delete(id); this.dropDotBake(id); this.dropCellImage(id);
+    this.dropPencilRaster(id); this.dropPencilJob(id); this.stampCache.delete(id); this.dropFillRaster(id);
+  }
+
+  /** One element rendered alone into a bitmap at screen resolution (capped), for moving it around. */
+  private snapshot(el: Element): { snap: HTMLCanvasElement | null; x: number; y: number; s: number } {
+    const b = elementBBox(el);
+    const pad = 4;
+    const x = b.minX - pad, y = b.minY - pad, w = b.maxX - b.minX + 2 * pad, h = b.maxY - b.minY + 2 * pad;
+    let sc = this.camera.zoom * (window.devicePixelRatio || 1);
+    while ((w * sc > 4096 || h * sc > 4096) && sc > 1 / 64) sc /= 2;
+    const c = document.createElement('canvas');
+    c.width = Math.max(1, Math.ceil(w * sc));
+    c.height = Math.max(1, Math.ceil(h * sc));
+    const g = c.getContext('2d');
+    if (!g) return { snap: null, x, y, s: sc };
+    const saved = this.ctx;
+    this.ctx = g;
+    this.tileScale = sc;
+    try {
+      g.setTransform(sc, 0, 0, sc, -x * sc, -y * sc);
+      this.paintElement(el, { x, y, w, h }, this.camera.zoom, 1);
+    } finally {
+      this.ctx = saved;
+      this.tileScale = null;
+    }
+    return { snap: c, x, y, s: sc };
+  }
+
+  /** The floating elements, each its bitmap moved by how far it's been dragged (main ctx, world transform). */
+  private drawFloating() {
+    const ctx = this.ctx;
+    for (const [id, f] of this.floating) {
+      const el = this.index().byId.get(id);
+      if (!el || !f.snap) continue;
+      const a = anchorOf(el);
+      ctx.save();
+      ctx.globalAlpha = 1;
+      // (a fill overprints like it does in the tiles)
+      ctx.globalCompositeOperation = el.kind === 'fill' ? el.blend ?? (el.pattern ? 'multiply' : 'source-over') : 'source-over';
+      ctx.drawImage(f.snap, f.x + a.x - f.ax, f.y + a.y - f.ay, f.snap.width / f.s, f.snap.height / f.s);
+      ctx.restore();
+    }
+  }
+
+  /** Dragging stopped (dropped, or no move for a while): back into the tiles; the bitmap stays up
+   * until the tiles under it are rebuilt, then goes. */
+  private updateFloating(now: number) {
+    if (!this.floating.size) return;
+    const set = this.tileSet;
+    for (const [id, f] of this.floating) {
+      const el = this.index().byId.get(id);
+      if (!el) { this.floating.delete(id); continue; }
+      if (!f.landing && now - f.touched > 300) {
+        f.landing = true;
+        const a = anchorOf(el);
+        if (a.x !== f.ax || a.y !== f.ay) this.dropElementCaches(id); // (moved: its outlines are stale)
+        if (this.isStill(el)) this.ix.still.insert(el, this.elBox(el)); // (re-filed where it is now)
+        this.redoTiles([this.elBox(el)]);
+      }
+      if (f.landing && set) {
+        const b = this.elBox(el);
+        let ready = true;
+        for (const t of set.tiles.values()) if (t.redo && bboxIntersects(b, this.tileView(t.i, t.j, set.s))) { ready = false; break; }
+        if (ready) for (const j of set.jobs.values()) if (bboxIntersects(b, this.tileView(j.i, j.j, set.s))) { ready = false; break; }
+        if (ready) { if (f.snap) f.snap.width = f.snap.height = 0; this.floating.delete(id); }
+      }
+    }
+    this.dirty = true;
   }
   clearCache() {
     this.cache.clear(); this.stampCache.clear(); this.boxCache.clear(); this.dotCache.clear();
@@ -302,10 +480,19 @@ export class Renderer {
    * tiles when the change is a fresh append we can paint on top of. */
   docChanged(info?: ChangeInfo) {
     this.animBake.key = ''; // frozen areas may have changed
-    if (!info) { this.clearCache(); this.invalidate(); return; }
+    if (!info) { this.ix.stale = true; this.clearCache(); this.invalidate(); return; }
     // where the touched elements were painted, before their caches go
     const before = info.ids.map((id) => this.tileBoxes.get(id));
+    for (const id of info.ids) { const f = this.floating.get(id); if (f) f.landing = true; } // (dropped: back into the tiles)
     for (const id of info.ids) { this.cache.delete(id); this.boxCache.delete(id); this.dotCache.delete(id); this.dropDotBake(id); this.dropCellImage(id); this.dropPencilRaster(id); this.dropPencilJob(id); this.stampCache.delete(id); this.dropFillRaster(id); }
+    // the index, from the fresh geometry (full rebuild for changes that reorder)
+    if (!info.local) this.ix.stale = true;
+    else {
+      const present = new Map<string, Element>();
+      if (info.added) for (const el of info.added) present.set(el.id, el);
+      else if (info.ids.length) { const want = new Set(info.ids); for (const el of this.store.doc.elements) if (want.has(el.id)) present.set(el.id, el); }
+      this.reindex(info.ids, present);
+    }
     const set = this.tileSet;
     const current = !!set && set.content === this.contentKey() && set.s === this.levelFor(this.camera.zoom);
     const canAppend = current && info.added && info.added.length && info.added.every((el) => this.isStill(el));
@@ -324,8 +511,9 @@ export class Renderer {
         this.tileHidden.delete(id);
         this.tileBoxes.delete(id);
       });
-      for (const el of this.store.doc.elements) {
-        if (ids.has(el.id) && this.isStill(el) && !this.input.hidden.has(el.id)) boxes.push(this.elBox(el));
+      for (const id of ids) {
+        const el = this.ix.byId.get(id);
+        if (el && this.isStill(el) && !this.input.hidden.has(el.id)) boxes.push(this.elBox(el));
       }
       this.redoTiles(boxes);
     } else {
@@ -623,7 +811,7 @@ export class Renderer {
    * stroke stamp by stamp, straight into the tile (only the stamps that land on it — no
    * per-stroke bitmap, whose bounding boxes added up to hundreds of MB). Returns the tile
    * once complete; until then whatever was there (the old tile, the old zoom's, paper) shows. */
-  private runTileJob(set: TileSet, i: number, j: number, near: { back: Element[]; front: Element[] }, until: number): Tile | null {
+  private runTileJob(set: TileSet, i: number, j: number, until: number): Tile | null {
     const key = `${i},${j}`;
     const view = this.tileView(i, j, set.s);
     let job = set.jobs.get(key);
@@ -631,12 +819,13 @@ export class Renderer {
       const paper = this.store.doc.paper ?? '#F7F4EC';
       const back = this.takeCanvas();
       const g = back.getContext('2d')!;
-      g.fillStyle = paper;
-      g.fillRect(0, 0, TILE, TILE);
+      g.clearRect(0, 0, TILE, TILE); // (transparent: the paper is the page behind the canvas)
       // (no paper marks: the grid is drawn live over the back layer every frame — baked into tiles it
       // jumped between levels, the overview and scaled stand-ins)
-      const here = (el: Element) => bboxIntersects(this.elBox(el), view);
-      job = { i, j, back, front: null, spent: 0, layers: [near.back.filter(here), near.front.filter(here)], pass: 0, k: 0, stamp: null, stale: false };
+      // its elements, straight from the index (only this tile's area: cheap at any zine size)
+      const back_: Element[] = [], front_: Element[] = [];
+      for (const el of this.stillIn(view)) (el.layer === 'back' ? back_ : front_).push(el);
+      job = { i, j, back, front: null, spent: 0, layers: [back_, front_], pass: 0, k: 0, stamp: null, stale: false };
       set.jobs.set(key, job);
     }
     const pending = this.rastersPending;
@@ -823,7 +1012,7 @@ export class Renderer {
       for (const id of hidden) if (!this.tileHidden.has(id)) { const b = this.tileBoxes.get(id); if (b) changed.push(b); }
       for (const id of this.tileHidden) {
         if (hidden.has(id)) continue;
-        const el = this.store.doc.elements.find((e) => e.id === id);
+        const el = this.index().byId.get(id);
         if (el && this.isStill(el)) changed.push(this.elBox(el));
       }
       this.tileHidden = new Set(hidden);
@@ -843,36 +1032,17 @@ export class Renderer {
       const i0 = Math.floor(-ox / T), i1 = Math.floor((W - 1 - ox) / T);
       const j0 = Math.floor(-oy / T), j1 = Math.floor((H - 1 - oy) / T);
       const view = camera.viewport(vw, vh);
-      const nearOf = (rect: View) => {
-        const near = { back: [] as Element[], front: [] as Element[] };
-        for (const el of this.store.doc.elements) {
-          if (!this.isStill(el) || hidden.has(el.id) || !bboxIntersects(this.elBox(el), rect)) continue;
-          (el.layer === 'back' ? near.back : near.front).push(el);
-        }
-        return near;
-      };
-      type Near = { back: Element[]; front: Element[] };
-      let nearFine: Near | null = null, nearDraft: Near | null = null;
       const eb = ext.box;
       // (one more ring on the side the view is heading)
       const lead = opts.prefetchDir && moving ? { x: Math.sign(Math.round(this.vel.x * 4)), y: Math.sign(Math.round(this.vel.y * 4)) } : { x: 0, y: 0 };
       const ri0 = i0 - PREFETCH - (lead.x < 0 ? 1 : 0), ri1 = i1 + PREFETCH + (lead.x > 0 ? 1 : 0);
       const rj0 = j0 - PREFETCH - (lead.y < 0 ? 1 : 0), rj1 = j1 + PREFETCH + (lead.y > 0 ? 1 : 0);
+      { // the screen + prefetch rings: bakes of what's in here aren't evicted
+        const a = this.tileView(ri0, rj0, fine.s), b = this.tileView(ri1, rj1, fine.s);
+        this.keepRect = { x: a.x, y: a.y, w: b.x + b.w - a.x, h: b.y + b.h - a.y };
+      }
       const build = (ts: TileSet, i: number, j: number, until: number): boolean => {
-        let near: Near;
-        if (ts === fine) {
-          if (!nearFine) {
-            const a = this.tileView(ri0, rj0, fine.s), b = this.tileView(ri1, rj1, fine.s);
-            const ring = { x: a.x, y: a.y, w: b.x + b.w - a.x, h: b.y + b.h - a.y };
-            this.keepRect = ring;
-            nearFine = nearOf(ring);
-          }
-          near = nearFine;
-        } else {
-          if (!nearDraft) nearDraft = nearOf(eb ? { x: eb.minX, y: eb.minY, w: eb.maxX - eb.minX, h: eb.maxY - eb.minY } : view);
-          near = nearDraft;
-        }
-        const tile = this.runTileJob(ts, i, j, near, until);
+        const tile = this.runTileJob(ts, i, j, until);
         if (!tile) return false;
         const key = `${i},${j}`;
         const old = ts.tiles.get(key);
@@ -939,9 +1109,12 @@ export class Renderer {
       for (const [ts, i, j, , onScreen] of order) {
         const t = ts.tiles.get(`${i},${j}`);
         if (t && !t.redo && (!t.stale || !onScreen || ts === coarse)) continue;
+        // while the view moves, only what's on screen (and the first prefetch ring): background
+        // work — the far overview, outer rings — waits until it rests
+        if (moving && !onScreen && (ts === coarse || Math.max(i0 - i, i - i1, j0 - j, j - j1) > 1)) { pending = true; continue; }
         const sync = syncNow && ts === fine && onScreen;
         const now = performance.now();
-        if (!sync && built && now > deadline) { pending = true; if (onScreen) continue; break; }
+        if (!sync && now > deadline && (built || !onScreen)) { pending = true; if (onScreen) continue; break; }
         built++;
         if (sync) this.syncBuilt++;
         // (the first tile of a frame always gets a couple of ms, so something always progresses)
@@ -982,9 +1155,18 @@ export class Renderer {
       ctx.setTransform(1, 0, 0, 1, 0, 0);
       ctx.globalAlpha = 1;
       ctx.globalCompositeOperation = 'source-over';
-      if (layer === 'back' && (holed || dimmed || !settled)) {
-        ctx.fillStyle = this.store.doc.paper ?? '#F7F4EC';
-        ctx.fillRect(0, 0, W, H);
+      if (layer === 'back') {
+        // the main canvas is transparent (the paper layer shows through); scratch canvases paint their own
+        if (this.canvas.id === 'canvas') ctx.clearRect(0, 0, W, H);
+        else { ctx.fillStyle = this.store.doc.paper ?? '#F7F4EC'; ctx.fillRect(0, 0, W, H); }
+        if (this.opts.grid && this.opts.gridMode === 'canvas') {
+          // the paper marks first, the ink over them (no blending needed — measured: the multiply
+          // over the ink was what cost WebKit a third of its frame rate)
+          ctx.save();
+          ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
+          this.drawPaperGrid(vw, vh, this.store.doc.paper ?? '#F7F4EC', 'source-over');
+          ctx.restore();
+        }
       }
       if (dimmed) ctx.globalAlpha = 0.3;
       const under = () => {
@@ -998,11 +1180,13 @@ export class Renderer {
         // in: the same, fading out as they fade in (the back layer is opaque, so there it's covered
         // anyway; the front layer would otherwise show its ink twice, darker, mid-fade)
         const dim0 = ctx.globalAlpha;
-        ctx.save();
-        ctx.clip(layer === 'back' ? holes : missingHoles);
-        if (layer === 'back' || anyMissing) under();
-        ctx.restore();
-        if (layer === 'front') {
+        if (anyMissing) {
+          ctx.save();
+          ctx.clip(missingHoles);
+          under();
+          ctx.restore();
+        }
+        {
           for (const [x, y, w, h, a] of fadingRects) {
             ctx.save();
             ctx.beginPath();
@@ -1361,11 +1545,12 @@ export class Renderer {
       return;
     }
     if (selected) {
-      const e = this.entry(el);
       ctx.globalAlpha = 0.9;
       ctx.strokeStyle = '#E8590C';
       ctx.lineWidth = 1.5 / z;
-      ctx.stroke(e.core ?? e.path);
+      // (a fill's outline is the shape drawn — its pattern path would outline every cell / dot)
+      if (el.kind === 'fill') ctx.stroke(polygonPath(el.points));
+      else { const e = this.entry(el); ctx.stroke(e.core ?? e.path); }
     }
   }
 
@@ -1933,9 +2118,10 @@ export class Renderer {
     const useStatic = !presenting;
     let blitFront: () => void = () => {};
     if (useStatic) {
+      this.updatePaper(vw, vh, paper, true);
       blitFront = this.drawStatic(vw, vh, dpr, frameStart);
-      this.drawPaperGrid(vw, vh, paper);
     } else {
+      this.updatePaper(vw, vh, paper, false);
       // Desk (chosen paper color)
       ctx.fillStyle = paper;
       ctx.fillRect(0, 0, vw, vh);
@@ -2065,9 +2251,10 @@ export class Renderer {
       // the area pipeline spans its longest keyframe track AND every non-looping
       // live line's end (start + drawing + decay); self-looping lines don't extend it
       let areaTotal = Math.max(1, ...area.layers.map((l) => l.frames.reduce((a, f) => a + f.duration, 0)));
+      const areaStrokes = this.index().byArea.get(area.id) ?? [];
       for (const l of area.layers) {
         if (l.kind !== 'live' || l.loop !== false) continue;
-        for (const el of this.store.doc.elements) {
+        for (const el of areaStrokes) {
           if (el.kind !== 'stroke' || el.alayer !== l.id) continue;
           const drawn = (el.points[el.points.length - 1]?.t ?? 0) * area.fps;
           areaTotal = Math.max(
@@ -2135,8 +2322,10 @@ export class Renderer {
       }
     }
 
-    const visible = this.store.doc.elements.filter((el) => !this.input.hidden.has(el.id));
-    const still = visible.filter((el) => !el.frame && !(el.kind === 'stroke' && el.area));
+    // (no per-frame pass over the whole zine: the index hands out what each part draws)
+    const ixNow = this.index();
+    const hiddenNow = this.input.hidden;
+    const frameEls = (fid: string) => (ixNow.byFrame.get(fid) ?? []).filter((el) => !hiddenNow.has(el.id));
 
     // Timed live-ink strokes. Each point lives `animLife` ticks after the moment
     // it was drawn. `ageOf` maps a point's draw-time to its current age in ticks:
@@ -2200,15 +2389,23 @@ export class Renderer {
     if (live?.layer === 'back') drawLiveTimed(); // live back-ink previews behind existing front ink
     if (useStatic) {
       blitFront(); // the front layer covers the live back-stroke, as committed ink would
-      // bodies are in the static tiles; only handles/selection outlines here
-      for (const el of still) {
-        const ui = selected.has(el.id) || this.input.hoverText === el.id || this.input.hoverImage === el.id || this.input.rolling.has(el.id);
-        if (ui && bboxIntersects(elementBBox(el), view)) this.paintElementUi(el, z);
+      this.updateFloating(frameStart);
+      this.drawFloating();
+      // bodies are in the static tiles; only handles/selection outlines here — for just the
+      // elements that have them
+      const uiIds = new Set<string>(selected);
+      if (this.input.hoverText) uiIds.add(this.input.hoverText);
+      if (this.input.hoverImage) uiIds.add(this.input.hoverImage);
+      for (const id of this.input.rolling.keys()) uiIds.add(id);
+      for (const id of uiIds) {
+        const el = ixNow.byId.get(id);
+        if (el && this.isStill(el) && !hiddenNow.has(id) && bboxIntersects(elementBBox(el), view)) this.paintElementUi(el, z);
       }
     } else {
       dimFactor = focusAreaId ? 0.3 : 1;
-      for (const el of still) if (el.layer === 'back') drawEl(el);
-      for (const el of still) if (el.layer !== 'back') drawEl(el);
+      const inView = this.stillIn(view);
+      for (const el of inView) if (el.layer === 'back') drawEl(el);
+      for (const el of inView) if (el.layer !== 'back') drawEl(el);
       dimFactor = 1;
     }
 
@@ -2232,17 +2429,13 @@ export class Renderer {
             ctx.save();
             ctx.globalAlpha = onion.alpha;
             ctx.fillStyle = onion.color;
-            for (const el of visible) {
-              if (el.frame === fid) {
-                const cached = el.kind === 'text' || el.kind === 'image' ? null : this.entry(el);
-                if (cached) ctx.fill(cached.path);
-              }
+            for (const el of frameEls(fid)) {
+              const cached = el.kind === 'text' || el.kind === 'image' ? null : this.entry(el);
+              if (cached) ctx.fill(cached.path);
             }
             ctx.restore();
           }
-          for (const el of visible) {
-            if (el.frame && fids.has(el.frame) && frameVis.get(el.frame) === true) drawEl(el);
-          }
+          for (const f of layer.frames) if (frameVis.get(f.id) === true) for (const el of frameEls(f.id)) drawEl(el);
           // live ink is motion — hidden while editing unless explicitly shown;
           // the ACTIVE live layer shows its strokes in full so you can identify them
           const editingArea =
@@ -2264,9 +2457,10 @@ export class Renderer {
           }
           if (activeLive || tk) {
             const looping = layer.loop !== false;
-            for (const el of visible) {
+            for (const el of ixNow.byArea.get(area.id) ?? []) {
+              if (hiddenNow.has(el.id)) continue;
               if (
-                el.kind === 'stroke' && el.area === area.id &&
+                el.kind === 'stroke' &&
                 (el.alayer === layer.id || (!el.alayer && layer === area.layers[0]))
               ) {
                 if (activeLive) drawEl(el);
@@ -2676,11 +2870,64 @@ export class Renderer {
     if (this.input.stylePasteFor(el)) draw(pasteStyleHandleRect(el.x, el.y, el.w, z), Renderer.ICON_ROLLER, true);
   }
 
+  /** The paper behind the canvas: its colour, and its dots / grid / lines as a CSS background moved
+   * and scaled by a compositor transform — every pan and zoom costs nothing; the background is only
+   * re-drawn when the cell size steps (doubling / halving in mm steps). */
+  private paperEl: HTMLElement | null | undefined;
+  private paperState = '';
+  private updatePaper(vw: number, vh: number, paper: string, on: boolean) {
+    if (this.paperEl === undefined) this.paperEl = document.getElementById('paper');
+    const el = this.paperEl;
+    if (!el || this.canvas.id !== 'canvas') return; // (scratch renderers have no paper layer)
+    const mode = this.opts.gridMode;
+    const pattern = on && this.opts.grid && mode !== 'canvas' ? this.store.doc.pattern ?? 'dots' : 'blank';
+    const { camera } = this;
+    let sp = 10 * camera.zoom; // 5 mm cells, CSS px
+    let base = sp;
+    while (base < 8) base *= 2;
+    while (base > 120) base /= 2;
+    // the background's cell is a power-of-two step; the transform covers the rest (×1 … ×2)
+    const B = Math.pow(2, Math.floor(Math.log2(base)));
+    const k = base / B;
+    sp = base;
+    const o = camera.worldToScreen(0, 0, vw, vh);
+    const tx = (((o.x % sp) + sp) % sp) - sp, ty = (((o.y % sp) + sp) % sp) - sp;
+    const dark = darkPaper(paper);
+    const grid = el.firstElementChild as HTMLElement;
+    const look = `${paper}|${pattern}|${B}|${dark}|${vw}|${vh}`;
+    if (look !== this.paperState) {
+      this.paperState = look;
+      el.style.background = paper;
+      if (pattern === 'blank') { grid.style.backgroundImage = 'none'; }
+      else {
+        const c = dark ? 'rgba(255,255,255,0.14)' : 'rgba(120,105,80,0.18)';
+        const l = dark ? 'rgba(255,255,255,0.07)' : 'rgba(120,105,80,0.1)';
+        const svg = pattern === 'dots'
+          ? `<rect x='0' y='0' width='1' height='1' fill='${c}'/><rect x='${B - 1}' y='0' width='1' height='1' fill='${c}'/><rect x='0' y='${B - 1}' width='1' height='1' fill='${c}'/><rect x='${B - 1}' y='${B - 1}' width='1' height='1' fill='${c}'/>`
+          : `<rect x='0' y='0' width='${B}' height='1' fill='${l}'/>` + (pattern === 'grid' ? `<rect x='0' y='0' width='1' height='${B}' fill='${l}'/>` : '');
+        grid.style.backgroundImage = `url("data:image/svg+xml;utf8,${encodeURIComponent(`<svg xmlns='http://www.w3.org/2000/svg' width='${B}' height='${B}'>${svg}</svg>`)}")`;
+        grid.style.backgroundSize = `${B}px ${B}px`;
+      }
+      grid.style.width = `${Math.ceil(vw / 1 + 3 * B)}px`;
+      grid.style.height = `${Math.ceil(vh / 1 + 3 * B)}px`;
+    }
+    if (mode === 'position') {
+      grid.style.transform = '';
+      grid.style.backgroundSize = `${sp}px ${sp}px`;
+      grid.style.backgroundPosition = `${(tx + sp).toFixed(2)}px ${(ty + sp).toFixed(2)}px`;
+      grid.style.width = `${vw}px`; grid.style.height = `${vh}px`;
+    } else {
+      grid.style.backgroundPosition = '0 0';
+      grid.style.backgroundSize = `${B}px ${B}px`;
+      grid.style.transform = `translate3d(${tx.toFixed(2)}px, ${ty.toFixed(2)}px, 0) scale(${k.toFixed(4)})`;
+    }
+  }
+
   /** The paper's dots / grid / lines, live, over the back layer: one fill with a repeating
    * one-cell pattern (scaled exactly with the zoom), blended so it marks the paper like before
    * and vanishes into dark ink (multiply on light paper, screen on dark). */
   private gridTile: { key: string; pat: CanvasPattern } | null = null;
-  private drawPaperGrid(vw: number, vh: number, paper: string) {
+  private drawPaperGrid(vw: number, vh: number, paper: string, op?: GlobalCompositeOperation) {
     const pattern = this.store.doc.pattern ?? 'dots';
     if (pattern === 'blank') return;
     const { camera, ctx } = this;
@@ -2713,7 +2960,7 @@ export class Renderer {
     const pat = this.gridTile.pat;
     pat.setTransform(new DOMMatrix().translate(o.x, o.y).scale(sp / N));
     ctx.save();
-    ctx.globalCompositeOperation = dark ? 'screen' : 'multiply';
+    ctx.globalCompositeOperation = op ?? (dark ? 'screen' : 'multiply');
     ctx.globalAlpha = 1;
     ctx.fillStyle = pat;
     ctx.fillRect(0, 0, vw, vh);
@@ -2768,6 +3015,13 @@ export class Renderer {
 }
 
 /** light marks on dark paper, dark marks on light paper */
+/** Where an element is (to tell how far it's moved since a bitmap of it was made). */
+function anchorOf(el: Element): { x: number; y: number } {
+  if (el.kind === 'text' || el.kind === 'image') return { x: el.x, y: el.y };
+  const p = el.points[0];
+  return p ? { x: p.x, y: p.y } : { x: 0, y: 0 };
+}
+
 function darkPaper(paper: string): boolean {
   const n = parseInt(paper.slice(1), 16);
   return ((n >> 16) & 255) * 0.299 + ((n >> 8) & 255) * 0.587 + (n & 255) * 0.114 < 128;

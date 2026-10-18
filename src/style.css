@@ -30,6 +30,23 @@ html, body {
   -webkit-tap-highlight-color: transparent;
 }
 
+/* the paper and its dot / grid / line marks, behind the (transparent) canvas: moved and scaled with
+   compositor transforms, so the marks follow every pan and zoom for free (see Renderer.updatePaper) */
+#paper {
+  position: fixed;
+  inset: 0;
+  overflow: hidden;
+  pointer-events: none;
+  background: var(--paper);
+}
+#paper > i {
+  position: absolute;
+  left: 0;
+  top: 0;
+  transform-origin: 0 0;
+  will-change: transform;
+}
+
 #canvas {
   position: fixed;
   inset: 0;
