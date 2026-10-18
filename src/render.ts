@@ -13,7 +13,7 @@ import { FILL_TOOLS, type InputState } from './state';
 import { animClock } from './clock';
 import { Store, ChangeInfo } from './store';
 import { formatLabel } from './formats';
-import { patternTile, patternTileSize, patternCellSize, cellPath, cellMask, motifPath, motifDots, motifCoverage, isPixelPattern, PIXEL_CELL } from './patterns';
+import { patternTile, patternTileSize, patternCellSize, cellPath, cellMask, motifPath, motifDots, motifCoverage, motifRadius, isPixelPattern, PIXEL_CELL } from './patterns';
 import { reportCrash } from './crash';
 import { nativeApp, postNative, perfToNative } from './native';
 
@@ -30,7 +30,9 @@ function frameAtTick(frames: { id: string; duration: number }[], tick: number): 
 const TILE = 512; // static tile side, device px
 const TILE_POOL = 16;
 const DRAFT_PX = 8_000_000; // the draft (whole-zine overview) at most this many px (~32 MB)
-const PREFETCH = 2; // rings of tiles built around the screen in spare time (kept up to one more) // spare tile bitmaps kept for reuse (iOS is slow to allocate and slow to free canvases)
+const PREFETCH = 2; // rings of tiles built around the screen in spare time while the view moves
+const PREFETCH_IDLE = 4; // … and once it rests (about a page around, at typical zooms)
+const TILE_BUDGET = 160; // sharp tiles kept across levels (~1–2 MB each): beyond it, the farthest go // spare tile bitmaps kept for reuse (iOS is slow to allocate and slow to free canvases)
 const FILL_RASTER_MAX = 4_000_000; // px: bigger pattern fills are filled directly
 const FILL_RASTER_BUDGET = 8_000_000; // px across baked pattern fills away from the screen (~32 MB)
 /** dot tones (sand, screentone): thousands of tiny dots — redrawn as paths in every tile they
@@ -66,7 +68,9 @@ export interface RenderOpts {
   draft: boolean;
 }
 export const RENDER_DEFAULTS: RenderOpts = { schedule: 'adaptive', levels: true, fade: true, motion: true, prefetchDir: true, draft: true };
-const FADE_MS = 150;
+const FADE_MS = 300;
+/** a new tile's opacity `age` ms after it was built: eased in and out, so detail arrives softly */
+const fadeAlpha = (age: number) => { const u = Math.max(0, Math.min(1, age / FADE_MS)); return u * u * (3 - 2 * u); };
 /** a tile being built a slice per frame: its elements by layer, where it got to (element k of
  * pass 0 = back, 1 = front; within a long pencil stroke, the next stamp) */
 interface TileJob {
@@ -107,6 +111,7 @@ export class Renderer {
   })();
   /** ms a sharp tile takes to build here (smoothed): what 'adaptive' scheduling goes by */
   private tileCost = 16;
+  private tileCostS = 4; // the tile scale it was measured at (a tile further out holds (s₀/s)² as much)
   private syncBuilt = 0; // sharp tiles built all at once last frame (their real cost shows in the next frame's interval)
   private camPrev = { x: 0, y: 0, zoom: 0, t: 0 };
   private movingUntil = 0;
@@ -628,7 +633,8 @@ export class Renderer {
       const g = back.getContext('2d')!;
       g.fillStyle = paper;
       g.fillRect(0, 0, TILE, TILE);
-      if (!set.draft) this.paintPaperTile(g, i, j, paper, set.s); // (the draft is zoom-free: no zoom-stepped paper marks)
+      // (no paper marks: the grid is drawn live over the back layer every frame — baked into tiles it
+      // jumped between levels, the overview and scaled stand-ins)
       const here = (el: Element) => bboxIntersects(this.elBox(el), view);
       job = { i, j, back, front: null, spent: 0, layers: [near.back.filter(here), near.front.filter(here)], pass: 0, k: 0, stamp: null, stale: false };
       set.jobs.set(key, job);
@@ -644,7 +650,7 @@ export class Renderer {
     set.jobs.delete(key);
     // what a tile costs on this device — only where the clock sees the drawing (WebKit, flushed);
     // elsewhere it's learnt from late frames (see frame)
-    if (!set.draft && DEFERRED_CANVAS) this.tileCost += (job.spent - this.tileCost) * 0.2;
+    if (!set.draft && DEFERRED_CANVAS) { this.tileCost += (job.spent - this.tileCost) * 0.2; this.tileCostS += (set.s - this.tileCostS) * 0.2; }
     return { i, j, back: job.back, front: job.front, stale: job.stale };
   }
 
@@ -669,14 +675,7 @@ export class Renderer {
           const el = els[job.k];
           this.lastTileEl = el; this.lastTileDraft = !!set.draft; // (the pan benchmark's profiler reads these)
           this.tileBoxes.set(el.id, this.elBox(el));
-          if (el.kind === 'stroke' && el.tool === 'pencil' && set.draft) {
-            // draft: the stroke's outline in an averaged graphite tone — no stamps at all
-            g.save();
-            g.globalAlpha = el.opacity * dim * 0.28; // (soft graphite reads lighter than its outline)
-            g.fillStyle = el.color;
-            g.fill(this.entry(el).path);
-            g.restore();
-          } else if (el.kind === 'stroke' && el.tool === 'pencil' && !job.stamp && this.gpuStampTile(g, el, el.opacity * dim, set, view, job.i, job.j)) {
+          if (el.kind === 'stroke' && el.tool === 'pencil' && !job.stamp && this.gpuStampTile(g, el, el.opacity * dim, set, view, job.i, job.j)) {
             // the whole stroke's stamps on this tile in one GPU draw
           } else if (el.kind === 'stroke' && el.tool === 'pencil') {
             const st = job.stamp ??= { next: 0, state: { sinceX: NaN, sinceY: NaN, skipped: 0 } };
@@ -686,8 +685,8 @@ export class Renderer {
             const rate = set.draft ? this.draftStampRate : this.stampRate;
             const limit = from + Math.max(32, Math.floor(rate * Math.max(0.5, until - t0)));
             // (stamps closer than ~0.7 device px are invisible: merged, alpha-compensated;
-            // the draft merges far more — half the nib apart)
-            const minSpacing = set.draft ? Math.max(0.7 / set.s, el.baseWidth * 0.5) : 0.7 / set.s;
+            // the overview merges a little more — a third of the nib apart)
+            const minSpacing = set.draft ? Math.max(0.7 / set.s, el.baseWidth * 0.33) : 0.7 / set.s;
             st.next = this.stampStroke(g, el, el.opacity * dim, st.next, { minSpacing, cache: true, until, limit, state: st.state, cull: view });
             flushCanvas(g);
             const dt = performance.now() - t0, done = st.next - from;
@@ -698,7 +697,8 @@ export class Renderer {
             if (st.next < this.stampsFor(el, true).length) return false;
             job.stamp = null;
           } else {
-            if (el.kind === 'fill' && el.pattern && isMotif(el.pattern) && set.draft) {
+            if (el.kind === 'fill' && el.pattern && isMotif(el.pattern) && (set.draft || motifRadius(el.pattern) * set.s < 0.35)) {
+              // (dots under ~⅓ px can't be seen one by one: their tint is what the eye gets)
               // draft: a dot tone as its tint (same ink coverage, no dots)
               g.save();
               g.globalCompositeOperation = el.blend ?? 'multiply';
@@ -751,35 +751,6 @@ export class Renderer {
     }
   }
 
-  /** The paper's dot/grid/lines marks on tile (i, j): the same world-anchored cells as drawPattern. */
-  private paintPaperTile(g: CanvasRenderingContext2D, i: number, j: number, paper: string, s: number) {
-    const pattern = this.store.doc.pattern ?? 'dots';
-    if (pattern === 'blank') return;
-    const dpr = window.devicePixelRatio || 1;
-    const dark = darkPaper(paper);
-    // 5 mm cells (10 world units) at the tile's scale, doubled/halved like drawPattern
-    let d = 10 * s;
-    while (d < 8 * dpr) d *= 2;
-    while (d > 120 * dpr) d /= 2;
-    const x0 = i * TILE, y0 = j * TILE;
-    const k0 = Math.floor(x0 / d), k1 = Math.ceil((x0 + TILE) / d);
-    const l0 = Math.floor(y0 / d), l1 = Math.ceil((y0 + TILE) / d);
-    if (pattern === 'dots') {
-      g.fillStyle = dark ? 'rgba(255,255,255,0.14)' : 'rgba(120,105,80,0.18)';
-      // one shape, not a fillRect per dot (a draft tile has thousands; WebKit replays each one)
-      const dots = new Path2D();
-      for (let k = k0; k <= k1; k++) for (let l = l0; l <= l1; l++) dots.rect(k * d - x0 - dpr, l * d - y0 - dpr, 2 * dpr, 2 * dpr);
-      g.fill(dots);
-      return;
-    }
-    g.strokeStyle = dark ? 'rgba(255,255,255,0.07)' : 'rgba(120,105,80,0.1)';
-    g.lineWidth = dpr;
-    g.beginPath();
-    if (pattern === 'grid') for (let k = k0; k <= k1; k++) { g.moveTo(k * d - x0, 0); g.lineTo(k * d - x0, TILE); }
-    for (let l = l0; l <= l1; l++) { g.moveTo(0, l * d - y0); g.lineTo(TILE, l * d - y0); }
-    g.stroke();
-  }
-
   /** Blit a tile set's back or front bitmaps (device-px space; scaled when the set is from another zoom). */
   private blitTiles(set: TileSet, layer: 'back' | 'front', W: number, H: number, ox: number, oy: number, now = -1) {
     const ctx = this.ctx;
@@ -793,7 +764,7 @@ export class Renderer {
       const y0 = Math.round(t.j * TILE * k) + oy, y1 = Math.round((t.j + 1) * TILE * k) + oy;
       if (x1 <= 0 || y1 <= 0 || x0 >= W || y0 >= H) continue;
       const age = now >= 0 && t.born !== undefined ? now - t.born : FADE_MS;
-      ctx.globalAlpha = age < FADE_MS ? base * Math.max(0, age / FADE_MS) : base;
+      ctx.globalAlpha = age < FADE_MS ? base * fadeAlpha(age) : base;
       if (k === 1) ctx.drawImage(c, x0, y0);
       else ctx.drawImage(c, x0, y0, x1 - x0, y1 - y0);
     }
@@ -834,7 +805,7 @@ export class Renderer {
       this.levels.unshift(set);
       const hit = this.levels.findIndex((l) => l.s === level);
       set = hit >= 0 ? this.levels.splice(hit, 1)[0] : null;
-      while (this.levels.length > 2) this.dropSet(this.levels.pop()!);
+      while (this.levels.length > 3) this.dropSet(this.levels.pop()!); // three other zoom levels kept
     }
     if (!set) set = { content, zoom: camera.zoom, s: level, tiles: new Map(), jobs: new Map() };
     this.tileSet = set;
@@ -862,7 +833,10 @@ export class Renderer {
     const W = vw * dpr, H = vh * dpr;
     const k = (camera.zoom * dpr) / fine.s, T = TILE * k; // a sharp tile on screen, device px
     const holes = new Path2D(); // screen rects without a settled sharp tile (missing or still fading in)
+    const missingHoles = new Path2D(); // … of those, the ones with no tile at all
+    const fadingRects: [number, number, number, number, number][] = []; // x, y, w, h, the tile's opacity now
     let holed = false;
+    let anyMissing = false;
     let fading = false;
     if (settled) {
       const tiles = fine.tiles;
@@ -925,7 +899,8 @@ export class Renderer {
       // else a budget per frame — most of the frame while gaps show and the view is still, a third
       // of it while it moves (smoothness first) or for prefetching
       // (adaptive: only small gaps — the edge a slow pan reveals — and only when they fit a frame here)
-      const syncNow = opts.schedule === 'sync' || (opts.schedule === 'adaptive' && missing > 0 && missing <= 4 && missing * this.tileCost <= this.framePeriod);
+      const expected = this.tileCost * Math.max(1, (this.tileCostS / fine.s) ** 2); // per tile at this level
+      const syncNow = opts.schedule === 'sync' || (opts.schedule === 'adaptive' && missing > 0 && missing <= 4 && missing * expected <= this.framePeriod);
       const slice = this.buildBudget();
       const deadline = frameStart + (missing && !(opts.motion && moving) ? Math.max(slice, this.framePeriod * 0.75) : slice);
       let built = 0;
@@ -987,9 +962,11 @@ export class Renderer {
           const fadingIn = !!t && t.born !== undefined && nowMs - t.born < FADE_MS;
           if (!t || fadingIn) {
             const x0 = Math.round(i * T) + ox, y0 = Math.round(j * T) + oy;
-            holes.rect(x0, y0, Math.round((i + 1) * T) + ox - x0, Math.round((j + 1) * T) + oy - y0);
+            const w = Math.round((i + 1) * T) + ox - x0, h = Math.round((j + 1) * T) + oy - y0;
+            holes.rect(x0, y0, w, h);
             holed = true;
-            fading ||= fadingIn;
+            if (!t) { missingHoles.rect(x0, y0, w, h); anyMissing = true; }
+            else { fadingRects.push([x0, y0, w, h, fadeAlpha(nowMs - t.born!)]); fading = true; }
           }
         }
       }
@@ -1010,13 +987,32 @@ export class Renderer {
         ctx.fillRect(0, 0, W, H);
       }
       if (dimmed) ctx.globalAlpha = 0.3;
-      if (!settled || holed) {
-        // under the gaps (and under tiles fading in): the draft, then other levels' tiles, sharper on top
-        ctx.save();
-        if (settled) ctx.clip(holes);
+      const under = () => {
         if (coarse?.tiles.size) this.blitTiles(coarse, layer, W, H, ox, oy);
         for (const l of others) this.blitTiles(l, layer, W, H, ox, oy);
+      };
+      if (!settled) {
+        under(); // mid-zoom across levels: what we have, scaled
+      } else if (holed) {
+        // under the gaps: the draft, then other levels' tiles, sharper on top. Under tiles fading
+        // in: the same, fading out as they fade in (the back layer is opaque, so there it's covered
+        // anyway; the front layer would otherwise show its ink twice, darker, mid-fade)
+        const dim0 = ctx.globalAlpha;
+        ctx.save();
+        ctx.clip(layer === 'back' ? holes : missingHoles);
+        if (layer === 'back' || anyMissing) under();
         ctx.restore();
+        if (layer === 'front') {
+          for (const [x, y, w, h, a] of fadingRects) {
+            ctx.save();
+            ctx.beginPath();
+            ctx.rect(x, y, w, h);
+            ctx.clip();
+            ctx.globalAlpha = dim0 * (1 - a);
+            under();
+            ctx.restore();
+          }
+        }
       }
       this.blitTiles(fine, layer, W, H, ox, oy, performance.now());
       ctx.restore();
@@ -1089,7 +1085,10 @@ export class Renderer {
         ctx.save();
         ctx.globalCompositeOperation = el.blend ?? 'multiply';
         ctx.globalAlpha = el.opacity * dim * (el.ink ?? 1);
-        ctx.imageSmoothingEnabled = false;
+        // sharp pixels — unless the cells are under ~1.5 px on screen, where averaging them reads truer than aliasing
+        const sc = this.tileScale ?? this.camera.zoom * (window.devicePixelRatio || 1);
+        ctx.imageSmoothingEnabled = img.cell * sc < 1.5;
+        ctx.imageSmoothingQuality = 'high';
         ctx.drawImage(img.c, img.c0 * img.cell, img.r0 * img.cell, img.cols * img.cell, img.rows * img.cell);
         ctx.restore();
         return true;
@@ -1380,10 +1379,14 @@ export class Renderer {
     return Math.min(16, Math.max(0.25, 2 ** Math.round(Math.log2(rel))));
   }
 
+  /** per-frame painting (animated areas) may use an outline from another zoom's detail while
+   * warmAreas rebuilds it in the background — rebuilding every frame's outlines in the frame the
+   * zoom changes froze it */
+  private staleOk = false;
   private entry(el: Stroke | FillShape): CacheEntry {
     const detail = this.detail();
     let e = this.cache.get(el.id);
-    if (!e || (e.detail !== detail && !e.zoomFree)) {
+    if (!e || (e.detail !== detail && !e.zoomFree && !this.staleOk)) {
       let path: Path2D, core: Path2D | undefined;
       if (el.kind === 'stroke' && el.tool === 'marker') {
         const mp = markerPaths(el.points, el.baseWidth, detail);
@@ -1630,12 +1633,14 @@ export class Renderer {
       const rot = rnd(i, 5) * Math.PI * 2;
       // grain: present from the lightest touch, fades back as the core takes over
       const grainA = (0.16 + st.p * 0.3) * (1 - Math.max(0, st.p - 0.55) * 0.9) / Math.sqrt(tiltMul);
-      put(st.x + jx, st.y + jy, r, rot, Math.min(1, alphaScale * grainA * wobble * boost), Math.floor(rnd(i, 6) * 8));
+      // (n merged stamps of alpha a lay down 1 − (1 − a)ⁿ, not n·a — linear made far zooms darker)
+      const merge = (a: number) => (boost === 1 ? Math.min(1, a) : 1 - Math.pow(1 - Math.min(1, a), boost));
+      put(st.x + jx, st.y + jy, r, rot, merge(alphaScale * grainA * wobble), Math.floor(rnd(i, 6) * 8));
       // dense core: kicks in past mid pressure, near-solid at full
       const core = Math.max(0, (st.p - 0.4) / 0.6);
       if (core > 0) {
         const rc = wEff * (0.62 - core * 0.2) * (0.98 + rnd(i, 3) * 0.04);
-        put(st.x + jx, st.y + jy, rc, rot, Math.min(1, alphaScale * Math.pow(core, 1.3) * 0.9 * wobble * boost), 8 + Math.floor(rnd(i, 9) * 8));
+        put(st.x + jx, st.y + jy, rc, rot, merge(alphaScale * Math.pow(core, 1.3) * 0.9 * wobble), 8 + Math.floor(rnd(i, 9) * 8));
       }
     }
     run.sinceX = sinceX; run.sinceY = sinceY; run.skipped = skipped;
@@ -1929,6 +1934,7 @@ export class Renderer {
     let blitFront: () => void = () => {};
     if (useStatic) {
       blitFront = this.drawStatic(vw, vh, dpr, frameStart);
+      this.drawPaperGrid(vw, vh, paper);
     } else {
       // Desk (chosen paper color)
       ctx.fillStyle = paper;
@@ -2299,7 +2305,8 @@ export class Renderer {
         g.save();
         g.setTransform(wm.s, 0, 0, wm.s, wm.ox, wm.oy);
         ctx = g; this.ctx = g;
-        try { paintAreas((a) => !isEditing(a)); } finally { ctx = mainCtx; this.ctx = mainCtx; }
+        this.staleOk = true;
+        try { paintAreas((a) => !isEditing(a)); } finally { ctx = mainCtx; this.ctx = mainCtx; this.staleOk = false; }
         g.restore();
         bake.key = key;
       }
@@ -2308,9 +2315,11 @@ export class Renderer {
       ctx.setTransform(1, 0, 0, 1, 0, 0);
       ctx.drawImage(bake.canvas, 0, 0);
       ctx.restore();
-      paintAreas(isEditing);
+      this.staleOk = true;
+      try { paintAreas(isEditing); } finally { this.staleOk = false; }
     } else {
-      paintAreas(() => true);
+      this.staleOk = true;
+      try { paintAreas(() => true); } finally { this.staleOk = false; }
     }
     if (live && live.layer !== 'back') drawLiveTimed();
     if (nativeApp && !presenting) this.reportInk(live);
@@ -2665,6 +2674,50 @@ export class Renderer {
     };
     draw(copyStyleHandleRect(el.x, el.y, el.w, z), Renderer.ICON_PIPETTE, false);
     if (this.input.stylePasteFor(el)) draw(pasteStyleHandleRect(el.x, el.y, el.w, z), Renderer.ICON_ROLLER, true);
+  }
+
+  /** The paper's dots / grid / lines, live, over the back layer: one fill with a repeating
+   * one-cell pattern (scaled exactly with the zoom), blended so it marks the paper like before
+   * and vanishes into dark ink (multiply on light paper, screen on dark). */
+  private gridTile: { key: string; pat: CanvasPattern } | null = null;
+  private drawPaperGrid(vw: number, vh: number, paper: string) {
+    const pattern = this.store.doc.pattern ?? 'dots';
+    if (pattern === 'blank') return;
+    const { camera, ctx } = this;
+    const dark = darkPaper(paper);
+    let sp = 10 * camera.zoom; // 5 mm cells, CSS px; doubled / halved in mm steps like drawPattern
+    while (sp < 8) sp *= 2;
+    while (sp > 120) sp /= 2;
+    const N = 64; // tile px for one cell, scaled to the real cell size by the pattern transform
+    const key = `${pattern}|${dark}|${Math.round((2 / sp) * N * 4)}`;
+    if (this.gridTile?.key !== key) {
+      const c = document.createElement('canvas');
+      c.width = c.height = N;
+      const g = c.getContext('2d')!;
+      const mark = (2 / sp) * N; // 2 CSS px marks
+      if (pattern === 'dots') {
+        g.fillStyle = dark ? 'rgba(255,255,255,0.14)' : 'rgba(120,105,80,0.18)';
+        g.fillRect(0, 0, mark / 2, mark / 2); g.fillRect(N - mark / 2, 0, mark / 2, mark / 2);
+        g.fillRect(0, N - mark / 2, mark / 2, mark / 2); g.fillRect(N - mark / 2, N - mark / 2, mark / 2, mark / 2);
+      } else {
+        g.fillStyle = dark ? 'rgba(255,255,255,0.07)' : 'rgba(120,105,80,0.1)';
+        const lw = (1 / sp) * N;
+        g.fillRect(0, 0, N, lw / 2); g.fillRect(0, N - lw / 2, N, lw / 2);
+        if (pattern === 'grid') { g.fillRect(0, 0, lw / 2, N); g.fillRect(N - lw / 2, 0, lw / 2, N); }
+      }
+      const pat = ctx.createPattern(c, 'repeat');
+      if (!pat) return;
+      this.gridTile = { key, pat };
+    }
+    const o = camera.worldToScreen(0, 0, vw, vh); // cells anchored to the world origin
+    const pat = this.gridTile.pat;
+    pat.setTransform(new DOMMatrix().translate(o.x, o.y).scale(sp / N));
+    ctx.save();
+    ctx.globalCompositeOperation = dark ? 'screen' : 'multiply';
+    ctx.globalAlpha = 1;
+    ctx.fillStyle = pat;
+    ctx.fillRect(0, 0, vw, vh);
+    ctx.restore();
   }
 
   private drawPattern(vw: number, vh: number, paper: string) {

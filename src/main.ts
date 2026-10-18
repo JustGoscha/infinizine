@@ -42,8 +42,11 @@ if (!nativeApp && new URLSearchParams(location.search).has('bench')) {
     pre.textContent = `render bench — ${navigator.userAgent}\n${screen.width}×${screen.height} @${devicePixelRatio} · ${store.doc.elements.length} elements\n`;
     document.body.appendChild(pre);
     const cam = { x: camera.x, y: camera.y, zoom: camera.zoom };
-    const { runRenderBench } = await import('./pentest');
-    await runRenderBench(store, camera, renderer, (m) => { pre.textContent += m + '\n'; });
+    const { runRenderBench, runVectorBench } = await import('./pentest');
+    const which = new URLSearchParams(location.search).get('bench') || 'all';
+    const out = (m: string) => { pre.textContent += m + '\n'; };
+    if (which === 'vector' || which === 'all') await runVectorBench(store, camera, renderer, out);
+    if (which === 'pan' || which === 'all' || which === '') await runRenderBench(store, camera, renderer, out);
     Object.assign(camera, cam);
     renderer.invalidate();
     pre.textContent += 'done — select and copy this text';
@@ -55,10 +58,10 @@ if (nativeApp) {
   // (after the library has loaded: an import during startup was overridden by the zine that was open last)
   (window as unknown as { __izineImport: (text: string) => Promise<boolean> }).__izineImport = (text) => store.ready.then(() => store.importJSON(text));
   // debug builds launched with -izineTest: the scripted Pencil benchmark
-  if (nativeApp.test === 'pan') {
+  if (nativeApp.test === 'pan' || nativeApp.test === 'vector' || nativeApp.test === 'all') {
     // every zine that exists before the import: the bench never touches (or deletes) these
     const existing = new Set(store.listDocs().map((m) => m.id));
-    void import('./pentest').then((m) => m.runPanBench(store, camera, renderer, existing));
+    void import('./pentest').then((m) => m.runPanBench(store, camera, renderer, existing, nativeApp!.test!));
   }
   else if (nativeApp.test) void import('./pentest').then((m) => m.installPenTest(store, camera, state, canvas, nativeApp!.test!));
   // automation hooks (cross-play checks, simulator runs)

@@ -269,6 +269,15 @@ export function motifPath(points: { x: number; y: number }[], id: string, angleD
   return path;
 }
 
+/** A dot-family fill's dot radius (world units), or 0 for other patterns. */
+export function motifRadius(id: string): number {
+  const p = parse(id);
+  if (!p) return 0;
+  if (p.fam === 'sand') return 0.13;
+  if (p.fam === 'tone') { const T = patternTileSize(id); return Math.sqrt((lv('tone', p.k) * T * T) / 2 / Math.PI); }
+  return 0;
+}
+
 /** How much of the area a dot-family fill inks (0–1): its look as an even tint, for previews. */
 export function motifCoverage(id: string): number {
   const p = parse(id);
