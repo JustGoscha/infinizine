@@ -10,6 +10,7 @@ const BASE = 64; // world units: the finest cells
 const FACTOR = 8;
 const LEVELS = 8; // 64 … 64·8⁷ ≈ 134M world units
 const OFF = 1 << 20; // cell coordinates are offset to stay positive in the key
+const STOP = {}; // (thrown to end a query early)
 
 interface Entry { level: number; keys: number[]; b: BBox }
 
@@ -67,6 +68,18 @@ export class SpatialGrid<T> {
     for (const c of this.cells) c.clear();
     this.counts.fill(0);
     this.where.clear();
+  }
+
+  /** How many items intersect `r`, counting no further than `limit` (so a crowded far-out view
+   * answers "at least `limit`" without walking all of it). */
+  count(r: BBox, limit: number): number {
+    let n = 0;
+    try {
+      this.query(r, () => { if (++n >= limit) throw STOP; });
+    } catch (e) {
+      if (e !== STOP) throw e;
+    }
+    return n;
   }
 
   /** Every item whose box intersects `r` (each once, in no particular order). */

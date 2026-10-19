@@ -262,3 +262,24 @@ export function segWidth(family: string, line: RichLine, seg: Seg): number {
   mctx.font = fontFor(segFamily(seg, family), line.size, seg.b, seg.i, seg.w);
   return mctx.measureText(seg.t).width;
 }
+
+/** Paint a text box's lines (its colour, top-left at el.x/el.y) through `ctx` in world units —
+ * shared by the 2D renderer and the GPU one's text textures. */
+export function paintTextBox(ctx: CanvasRenderingContext2D, el: { x: number; y: number; w: number; text: string; color: string; fontSize: number; font?: string; face?: string; auto?: boolean; wrapW?: number }) {
+  ctx.fillStyle = el.color;
+  ctx.textAlign = 'left';
+  ctx.textBaseline = 'top';
+  const family = boxFamily(el);
+  let ty = el.y;
+  for (const line of layoutText(el.text, family, el.fontSize, wrapWidth(el))) {
+    let tx = el.x;
+    for (const seg of line.segs) {
+      ctx.font = fontFor(segFamily(seg, family), line.size, seg.b, seg.i, seg.w);
+      ctx.fillText(seg.t, tx, ty);
+      const sw = segWidth(family, line, seg);
+      if (seg.u) ctx.fillRect(tx, ty + line.size * 1.02, sw, Math.max(0.5, line.size * 0.06));
+      tx += sw;
+    }
+    ty += line.size * LINE_HEIGHT;
+  }
+}

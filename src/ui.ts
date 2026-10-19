@@ -109,6 +109,8 @@ export function buildUI(
         <div class="seg" id="set-lock"><button data-v="1">Locked</button><button data-v="0">Free</button></div></div>
       <div class="set-row"><span>Two-finger tap</span>
         <div class="seg" id="set-fundo"><button data-v="1">Undo · redo</button><button data-v="0">Off</button></div></div>
+      <div class="set-row"><span>Renderer</span>
+        <div class="seg" id="set-engine"><button data-v="canvas">Canvas</button><button data-v="webgpu">GPU</button></div></div>
       <div class="set-row"><span>Performance readout</span>
         <div class="seg" id="set-perf"><button data-v="1">On</button><button data-v="0">Off</button></div></div>
 
@@ -1693,7 +1695,20 @@ export function buildUI(
     settingsPop.querySelectorAll<HTMLElement>('#set-lock button').forEach((b) => b.classList.toggle('active', b.dataset.v === (state.zoomLocked ? '1' : '0')));
     settingsPop.querySelectorAll<HTMLElement>('#set-fundo button').forEach((b) => b.classList.toggle('active', b.dataset.v === (state.fingerUndo ? '1' : '0')));
     settingsPop.querySelectorAll<HTMLElement>('#set-perf button').forEach((b) => b.classList.toggle('active', b.dataset.v === (state.perfHud ? '1' : '0')));
+    settingsPop.querySelectorAll<HTMLElement>('#set-engine button').forEach((b) => b.classList.toggle('active', b.dataset.v === engineChoice()));
   };
+  // the renderer reads its options from here at start; a change is announced to it right away
+  const engineChoice = () => { try { return JSON.parse(localStorage.getItem('izine-render-opts') ?? '{}').engine ?? 'canvas'; } catch { return 'canvas'; } };
+  settingsPop.querySelector('#set-engine')!.addEventListener('click', (e) => {
+    const v = (e.target as HTMLElement).closest('button')?.dataset.v;
+    if (!v) return;
+    try {
+      const o = JSON.parse(localStorage.getItem('izine-render-opts') ?? '{}');
+      localStorage.setItem('izine-render-opts', JSON.stringify({ ...o, engine: v }));
+    } catch { /* ignore */ }
+    window.dispatchEvent(new CustomEvent('izine-engine', { detail: v }));
+    syncSettings();
+  });
 
   // performance readout: a legible pill under the top bar (the canvas badge is too small and sits under the toolbar)
   const perfHud = document.createElement('div');

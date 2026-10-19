@@ -229,6 +229,15 @@ export function cellMask(points: { x: number; y: number }[], id: string): { mask
   return { mask, c0, r0, cols, rows, cell };
 }
 
+/** How much of the area a pixel pattern inks (0–1): its look as an even tint, far out. */
+export function pixelCoverage(id: string): number {
+  const rule = cellRule(id);
+  if (!rule) return 0.5;
+  let on = 0;
+  for (let i = 0; i < PIXEL_TILE_CELLS; i++) for (let j = 0; j < PIXEL_TILE_CELLS; j++) if (rule(i, j)) on++;
+  return on / (PIXEL_TILE_CELLS * PIXEL_TILE_CELLS);
+}
+
 /** A polygon snapped to a cell grid anchored at the world origin: every cell
  * whose centre lies inside is included whole — the fill's edge becomes pixel
  * steps, never a cell cut in half. Rows are emitted as horizontal runs. */

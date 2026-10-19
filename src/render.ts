@@ -2,13 +2,15 @@
 // culling + cached outlines), live stroke, lasso/selection overlays.
 
 import { GLPencil, STAMP_FLOATS } from './glpencil';
+import { WebGPURenderer } from './webgpu';
+import type { SceneSource } from './gpuscene';
 import { SpatialGrid } from './spatial';
 import { Camera, baseZoom } from './camera';
 import { AnimArea, Element, FillShape, Page, Stroke, StrokePoint, TextBox } from './types';
 import { elementBBox, bboxIntersects, LiveDenoiser, denoiseClosed, closeBlob, BBox } from './geometry';
 import { strokeOutline, pencilOutlines, markerPaths, outlineToPath, densify, filterPressure, LiveOutliner, hasPressure, widthAt } from './outline';
 import { easeP, easeTilt, pressure } from './pressure';
-import { layoutText, fontFor, segWidth, LINE_HEIGHT, boxFamily, segFamily, wrapWidth } from './text';
+import { paintTextBox } from './text';
 import { moveHandleRect, moveAllHandleRect, deleteHandleRect, eyeHandleRect, diceHandleRect, copyHandleRect, copyStyleHandleRect, pasteStyleHandleRect } from './handles';
 import { FILL_TOOLS, type InputState } from './state';
 import { animClock } from './clock';
@@ -79,9 +81,16 @@ export interface RenderOpts {
   /** where sharp tiles meet ones not ready yet, blend over a soft band instead of a hard square
    * edge (off: each tile fades in as a square) */
   feather: boolean;
+  /** what draws the still ink: 'canvas' the 2D renderer (tiles / vectors, all of the above) ·
+   * 'webgpu' everything on the GPU every frame (see webgpu.ts), where the browser has WebGPU */
+  engine: 'canvas' | 'webgpu';
 }
-export const RENDER_DEFAULTS: RenderOpts = { schedule: 'adaptive', levels: true, fade: true, motion: true, prefetchDir: true, draft: true, grid: true, gridMode: 'canvas', vector: 'auto', feather: true };
+export const RENDER_DEFAULTS: RenderOpts = { schedule: 'adaptive', levels: true, fade: true, motion: true, prefetchDir: true, draft: true, grid: true, gridMode: 'canvas', vector: 'auto', feather: true, engine: 'canvas' };
 const FADE_MS = 300;
+/** elements in view past which the view counts as crowded: the 2D renderer stops listing them per
+ * frame (it can't draw that many straight from vectors anyway), the GPU one draws its far tiles */
+const CANVAS_CROWD = 3000;
+const GPU_CROWD = 5000;
 /** coverage-mask px per tile (feathering): the soft edge is two of them, a quarter tile */
 const FEATHER_N = 8;
 /** each screen tile's coverage (row-major from the top-left screen tile at x, y; T px per tile) and the band to feather */
@@ -209,6 +218,48 @@ export class Renderer {
   /** elements being dragged: out of the tiles, drawn as a bitmap rendered once at the drag's start
    * and moved with them; `landing` once dropped, until the tiles under them have them again */
   private floating = new Map<string, { snap: HTMLCanvasElement | null; x: number; y: number; s: number; ax: number; ay: number; w: number; h: number; touched: number; landing: boolean }>();
+  // ---- the GPU engine (opts.engine 'webgpu') ----
+  private gpu: WebGPURenderer | null = null;
+  private gpuState: 'off' | 'starting' | 'on' | 'failed' = 'off';
+  private gpuCanvas: HTMLCanvasElement | null = null;
+  private gpuShown = false;
+  private gpuHidden = new Set<string>();
+  /** what the GPU compiler borrows from this renderer: the Pencil engine, pixel cells, images */
+  private sceneSource: SceneSource & { nibs(): HTMLCanvasElement[] } = {
+    stamps: (el, put) => { this.eachStamp(el, el.opacity, 0, { cache: true }, put); },
+    cellImage: (el) => this.cellImage(el),
+    image: (src) => this.image(src),
+    nibs: () => { const n = this.nibs('#000000'); return [...n.grain, ...n.dense]; },
+  };
+  /** True when the GPU draws the still ink this frame (starting it the first time it's asked for). */
+  private gpuActive(): boolean {
+    const want = this.opts.engine === 'webgpu' && this.canvas.id === 'canvas';
+    if (want && this.gpuState === 'off') {
+      this.gpuState = 'starting';
+      const c = document.createElement('canvas');
+      c.id = 'gpu';
+      c.style.cssText = 'position:fixed;inset:0;width:100%;height:100%;pointer-events:none;display:none';
+      this.canvas.parentElement!.insertBefore(c, this.canvas);
+      this.gpuCanvas = c;
+      void WebGPURenderer.create(c, this.sceneSource).then((r) => {
+        this.gpu = r;
+        this.gpuState = r ? 'on' : 'failed';
+        this.invalidate();
+      });
+    }
+    const on = want && this.gpuState === 'on' && !!this.gpu?.ok;
+    if (on !== this.gpuShown && this.gpuCanvas) {
+      this.gpuShown = on;
+      this.gpuCanvas.style.display = on ? 'block' : 'none';
+      if (!on) this.gpu?.drop(); // (the 2D renderer takes over: free the GPU copies)
+    }
+    return on;
+  }
+  /** The GPU engine's memory and draw counts (benchmark). */
+  gpuMemory(): string { return this.gpu?.memory() ?? 'no gpu'; }
+  /** Which engine is drawing now (for the benchmark and the settings readout). */
+  engineNow(): string { return this.gpuShown ? 'webgpu' : 'canvas'; }
+
   opts: RenderOpts = (() => {
     try { return { ...RENDER_DEFAULTS, ...JSON.parse(localStorage.getItem('izine-render-opts') ?? '{}') }; } catch { return { ...RENDER_DEFAULTS }; }
   })();
@@ -321,6 +372,8 @@ export class Renderer {
     private input: InputState,
   ) {
     this.ctx = canvas.getContext('2d')!;
+    // the settings' renderer switch
+    if (canvas.id === 'canvas') window.addEventListener('izine-engine', (e) => { this.opts.engine = (e as CustomEvent).detail; this.invalidate(); });
     const loop = () => {
       this.frame(performance.now());
       requestAnimationFrame(loop);
@@ -396,6 +449,13 @@ export class Renderer {
     if (id === '*') { this.clearCache(); this.invalidate(); return; }
     const el = this.index().byId.get(id);
     if (!el) return;
+    if (this.gpuShown && this.gpu) {
+      // the GPU draws it where it is now: a move just shifts its geometry, a reshape compiles it again
+      this.gpu.touch(el);
+      this.dropElementCaches(id);
+      this.invalidate();
+      return;
+    }
     const f = this.floating.get(id);
     if (f && !f.landing) {
       f.touched = performance.now();
@@ -512,6 +572,7 @@ export class Renderer {
     for (const id of [...this.pencilCache.keys()]) this.dropPencilRaster(id);
     for (const id of [...this.pencilJobs.keys()]) this.dropPencilJob(id);
     for (const id of [...this.fillRasters.keys()]) this.dropFillRaster(id);
+    this.gpu?.drop();
     this.tileGen++;
   }
 
@@ -531,6 +592,16 @@ export class Renderer {
       if (info.added) for (const el of info.added) present.set(el.id, el);
       else if (info.ids.length) { const want = new Set(info.ids); for (const el of this.store.doc.elements) if (want.has(el.id)) present.set(el.id, el); }
       this.reindex(info.ids, present);
+    }
+    if (this.gpu) {
+      // (a pure move keeps its GPU geometry; a pattern fill re-anchors its pattern to the world)
+      const ix = this.index();
+      for (const id of info.ids) {
+        const el = ix.byId.get(id);
+        if (el) { this.gpu.touch(el, true); this.gpu.staleRects([this.elBox(el)]); } else this.gpu.drop([id]);
+      }
+      // (re-ordering needs nothing: the order is the index's; new faces need new text bitmaps)
+      if (!info.local) this.gpu.drop(this.store.doc.elements.filter((e) => e.kind === 'text').map((e) => e.id));
     }
     const set = this.tileSet;
     const current = !!set && set.content === this.contentKey() && set.s === this.levelFor(this.camera.zoom);
@@ -813,6 +884,7 @@ export class Renderer {
 
   /** Benchmarks: how much of the screen has a sharp tile, and how much has anything (sharp, another level, the draft). */
   screenCoverage(): { sharp: number; any: number } {
+    if (this.gpuShown && this.gpu) { const done = this.gpu.pending ? 0 : 1; return { sharp: done, any: done }; } // (all of it, every frame, once compiled)
     if (this.vectorMode) return { sharp: 1, any: 1 }; // (drawn straight from vectors: all of it, every frame)
     const set = this.tileSet, d = this.draft;
     const dpr = window.devicePixelRatio || 1, z = this.camera.zoom;
@@ -966,8 +1038,10 @@ export class Renderer {
           }
           job.k++;
           // WebKit draws what's recorded later: every few elements make it draw now, so the
-          // deadline sees real cost (recording 50 strokes takes no time; drawing them can take 100 ms)
-          if (DEFERRED_CANVAS && ++sinceFlush >= 6) { flushCanvas(g); sinceFlush = 0; }
+          // deadline sees real cost (recording 50 strokes takes no time; drawing them can take 100 ms).
+          // (Chrome too, less often: far out over a crowded zine a tile holds thousands of elements,
+          // and unflushed a frame paid over a second for them at once)
+          if (++sinceFlush >= (DEFERRED_CANVAS ? 6 : 48)) { g.getImageData(0, 0, 1, 1); sinceFlush = 0; }
           if (job.k < els.length && performance.now() > until) return false;
         }
       } finally {
@@ -1121,19 +1195,9 @@ export class Renderer {
     ctx.globalAlpha = base;
   }
 
-  /** Static ink for this frame: build the tiles that scrolled into view (and, with
-   * time to spare, a ring around them), blit the back bitmaps, and return the
-   * front blit, which runs after a paint-behind live stroke. */
-  /** `show` false (vector mode): keep the tiles and the overview building in the background, at a
-   * low budget, without drawing them — so they're ready the moment the view needs tiles. */
-  private drawStatic(vw: number, vh: number, dpr: number, frameStart: number, show = true): () => void {
+  /** The view's motion (for motion-aware budgets and prefetching ahead), once a frame. */
+  private trackMotion(frameStart: number, dpr: number) {
     const { camera } = this;
-    const ctx = this.ctx;
-    const opts = this.opts;
-    const content = this.contentKey();
-    const level = this.levelFor(camera.zoom);
-    const zooming = frameStart - this.lastZoomChangeAt < 180;
-    // the view's motion (for motion-aware budgets and prefetching ahead)
     const pc = this.camPrev;
     if (camera.x !== pc.x || camera.y !== pc.y || camera.zoom !== pc.zoom) {
       const dt = Math.max(1, frameStart - pc.t), z = camera.zoom * dpr;
@@ -1146,6 +1210,20 @@ export class Renderer {
       this.vel.x = this.vel.y = 0;
     }
     this.camPrev = { x: camera.x, y: camera.y, zoom: camera.zoom, t: frameStart };
+  }
+
+  /** Static ink for this frame: build the tiles that scrolled into view (and, with
+   * time to spare, a ring around them), blit the back bitmaps, and return the
+   * front blit, which runs after a paint-behind live stroke. */
+  /** `show` false (vector mode): keep the tiles and the overview building in the background, at a
+   * low budget, without drawing them — so they're ready the moment the view needs tiles. */
+  private drawStatic(vw: number, vh: number, dpr: number, frameStart: number, show = true): () => void {
+    const { camera } = this;
+    const ctx = this.ctx;
+    const opts = this.opts;
+    const content = this.contentKey();
+    const level = this.levelFor(camera.zoom);
+    const zooming = frameStart - this.lastZoomChangeAt < 180;
     const moving = frameStart < this.movingUntil;
 
     this.levels = this.levels.filter((l) => { if (l.content === content) return true; this.dropSet(l); return false; });
@@ -1424,22 +1502,7 @@ export class Renderer {
       const b = elementBBox(el);
       if (!bboxIntersects(b, view)) return false;
       ctx.globalAlpha = dim;
-      ctx.fillStyle = el.color;
-      ctx.textAlign = 'left';
-      ctx.textBaseline = 'top';
-      const family = boxFamily(el);
-      let ty = el.y;
-      for (const line of layoutText(el.text, family, el.fontSize, wrapWidth(el))) {
-        let tx = el.x;
-        for (const seg of line.segs) {
-          ctx.font = fontFor(segFamily(seg, family), line.size, seg.b, seg.i, seg.w);
-          ctx.fillText(seg.t, tx, ty);
-          const sw = segWidth(family, line, seg);
-          if (seg.u) ctx.fillRect(tx, ty + line.size * 1.02, sw, Math.max(0.5, line.size * 0.06));
-          tx += sw;
-        }
-        ty += line.size * LINE_HEIGHT;
-      }
+      paintTextBox(ctx, el);
       return true;
     }
     if (el.kind === 'image') {
@@ -1843,6 +1906,10 @@ export class Renderer {
     let set = this.nibCache.get(color);
     if (!set) {
       set = { grain: [], dense: [] };
+      // seeded: the same grain in every colour, every session and every engine (the GPU ones
+      // stamp one colourless copy of these)
+      let seed = 0x2f6b1d;
+      const random = () => { seed = (Math.imul(seed, 1664525) + 1013904223) >>> 0; return seed / 4294967296; };
       for (let v = 0; v < 8; v++) {
         const n = document.createElement('canvas');
         n.width = n.height = 64;
@@ -1850,10 +1917,10 @@ export class Renderer {
         c.fillStyle = color;
         for (let i = 0; i < 1500; i++) {
           // radial falloff × speckle = soft toothy dot
-          const r = Math.sqrt(Math.random()) * 31;
-          const ang = Math.random() * Math.PI * 2;
+          const r = Math.sqrt(random()) * 31;
+          const ang = random() * Math.PI * 2;
           const fall = Math.pow(1 - r / 32, 1.4);
-          c.globalAlpha = fall * (0.25 + Math.random() * 0.75);
+          c.globalAlpha = fall * (0.25 + random() * 0.75);
           c.fillRect(32 + Math.cos(ang) * r, 32 + Math.sin(ang) * r, 1.3, 1.3);
         }
         set.grain.push(n);
@@ -1867,15 +1934,15 @@ export class Renderer {
           const rr = 30 * (1 - k / 14);
           dc.globalAlpha = 0.16;
           dc.beginPath();
-          dc.arc(32 + (Math.random() - 0.5) * 1.2, 32 + (Math.random() - 0.5) * 1.2, rr, 0, Math.PI * 2);
+          dc.arc(32 + (random() - 0.5) * 1.2, 32 + (random() - 0.5) * 1.2, rr, 0, Math.PI * 2);
           dc.fill();
         }
         // a little tooth so it still reads as graphite, not marker
         dc.globalCompositeOperation = 'destination-out';
         for (let i = 0; i < 260; i++) {
-          const r = Math.sqrt(Math.random()) * 30;
-          const ang = Math.random() * Math.PI * 2;
-          dc.globalAlpha = 0.25 + Math.random() * 0.5;
+          const r = Math.sqrt(random()) * 30;
+          const ang = random() * Math.PI * 2;
+          dc.globalAlpha = 0.25 + random() * 0.5;
           dc.fillRect(32 + Math.cos(ang) * r, 32 + Math.sin(ang) * r, 1.2, 1.2);
         }
         set.dense.push(d);
@@ -2312,11 +2379,46 @@ export class Renderer {
     // presenting (page clip); elements the eraser hides are left out of their tiles.
     // The back bitmap goes down now; the front one after a paint-behind live stroke.
     const viewNow = camera.viewport(vw, vh);
-    const inViewNow = presenting ? [] : this.stillIn(viewNow);
-    const vector = !presenting && this.decideVector(inViewNow);
+    this.trackMotion(frameStart, dpr);
+    const gpuOn = this.gpuActive() && !presenting;
+    // a crowded view (far out over a big zine) isn't listed element by element each frame: the
+    // 2D renderer can't draw it straight from vectors anyway, the GPU one switches to its tiles
+    const crowd = gpuOn ? GPU_CROWD : this.opts.vector === 'always' ? Infinity : CANVAS_CROWD;
+    const crowded = !presenting && crowd !== Infinity && this.index().still.count({ minX: viewNow.x, minY: viewNow.y, maxX: viewNow.x + viewNow.w, maxY: viewNow.y + viewNow.h }, crowd) >= crowd;
+    const inViewNow = presenting || crowded ? [] : this.stillIn(viewNow);
+    const vector = !presenting && !gpuOn && !crowded && this.decideVector(inViewNow);
+    if (crowded && !gpuOn) this.vectorMode = false;
     const useStatic = !presenting && !vector;
     let blitFront: () => void = () => {};
-    if (useStatic) {
+    if (gpuOn) {
+      // the GPU draws the paper, its grid and all the still ink underneath; this canvas only what moves
+      // (what the eraser hides or brings back: its far tiles there are rendered again)
+      const hid = this.input.hidden;
+      if (hid.size || this.gpuHidden.size) {
+        const boxes: BBox[] = [];
+        for (const id of hid) if (!this.gpuHidden.has(id)) { const el = this.ix.byId.get(id); if (el) boxes.push(this.elBox(el)); }
+        for (const id of this.gpuHidden) if (!hid.has(id)) { const el = this.ix.byId.get(id); if (el) boxes.push(this.elBox(el)); }
+        if (boxes.length) { this.gpu!.staleRects(boxes); this.gpuHidden = new Set(hid); }
+      }
+      this.updatePaper(vw, vh, paper, false);
+      ctx.clearRect(0, 0, vw, vh);
+      const wm0 = this.worldMatrix(vw, vh, dpr);
+      const pat = this.store.doc.pattern ?? 'dots';
+      let sp = 10 * camera.zoom;
+      while (sp < 8) sp *= 2;
+      while (sp > 120) sp /= 2;
+      const o = camera.worldToScreen(0, 0, vw, vh);
+      const els = inViewNow.filter((el) => el.layer === 'back').concat(inViewNow.filter((el) => el.layer !== 'back'));
+      const gpu = this.gpu!;
+      gpu.render({
+        W: vw * dpr, H: vh * dpr, dpr, s: wm0.s, ox: wm0.ox, oy: wm0.oy,
+        dim: this.focusAreaId() ? 0.3 : 1, paper,
+        grid: this.opts.grid && pat !== 'blank' ? { kind: pat === 'dots' ? 1 : pat === 'lines' ? 2 : 3, sp, x: o.x, y: o.y, dark: darkPaper(paper) } : null,
+        els, far: crowded ? (r) => { const l = this.stillIn(r); return l.filter((el) => el.layer === 'back').concat(l.filter((el) => el.layer !== 'back')); } : undefined,
+        moving: frameStart < this.movingUntil, detail: this.detail(), budget: Math.max(4, this.buildBudget()),
+      });
+      if (gpu.pending || gpu.farPending) this.dirty = true;
+    } else if (useStatic) {
       this.updatePaper(vw, vh, paper, true);
       blitFront = this.drawStatic(vw, vh, dpr, frameStart);
     } else if (vector) {
@@ -2595,8 +2697,10 @@ export class Renderer {
     if (live?.layer === 'back') drawLiveTimed(); // live back-ink previews behind existing front ink
     if (useStatic) {
       blitFront(); // the front layer covers the live back-stroke, as committed ink would
-      this.updateFloating(frameStart);
-      this.drawFloating();
+      if (!gpuOn) {
+        this.updateFloating(frameStart);
+        this.drawFloating();
+      }
       // bodies are in the static tiles; only handles/selection outlines here — for just the
       // elements that have them
       const uiIds = new Set<string>(selected);

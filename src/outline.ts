@@ -401,6 +401,22 @@ export function strokeOutline(stroke: Stroke, detail = 1, live = false): number[
  * changes give hard cuts (mitre wedges), never round fans. Fill = union of
  * consistently-oriented quads; hull = selection outline. */
 export function markerPaths(points: StrokePoint[], baseWidth: number, detail: number): { fill: Path2D; hull: Path2D } {
+  const { polys, hull: h } = markerPolys(points, baseWidth, detail);
+  const fill = new Path2D();
+  for (const o of polys) {
+    fill.moveTo(o[0][0], o[0][1]);
+    for (let i = 1; i < o.length; i++) fill.lineTo(o[i][0], o[i][1]);
+    fill.closePath();
+  }
+  const hull = new Path2D();
+  hull.moveTo(h[0][0], h[0][1]);
+  for (let i = 1; i < h.length; i++) hull.lineTo(h[i][0], h[i][1]);
+  hull.closePath();
+  return { fill, hull };
+}
+
+/** The marker's geometry as plain polygons (all wound the same way, filled non-zero) and its hull. */
+export function markerPolys(points: StrokePoint[], baseWidth: number, detail: number): { polys: number[][][]; hull: number[][] } {
   const w = widthAt('marker', baseWidth, 0.5);
   const half = w / 2;
   const k = pressure.marker;
@@ -428,15 +444,12 @@ export function markerPaths(points: StrokePoint[], baseWidth: number, detail: nu
       : Math.atan2(ty[i], tx[i]) + Math.PI / 2 + offset; // across the travel direction
     nxs[i] = Math.cos(ang) * half; nys[i] = Math.sin(ang) * half;
   }
-  const fill = new Path2D();
+  const polys: number[][][] = [];
   const poly = (q: number[][]) => {
     // orient every polygon the same way so overlaps add up instead of cancelling
     let area = 0;
     for (let i = 0; i < q.length; i++) { const a = q[i], b = q[(i + 1) % q.length]; area += a[0] * b[1] - b[0] * a[1]; }
-    const o = area >= 0 ? q : [...q].reverse();
-    fill.moveTo(o[0][0], o[0][1]);
-    for (let i = 1; i < o.length; i++) fill.lineTo(o[i][0], o[i][1]);
-    fill.closePath();
+    polys.push(area >= 0 ? q : [...q].reverse());
   };
   const foot = (i: number) => {
     // the nib itself: a thin rotated bar (dots, hairlines, flat ends)
@@ -458,12 +471,10 @@ export function markerPaths(points: StrokePoint[], baseWidth: number, detail: nu
     }
   }
   foot(n - 1);
-  const hull = new Path2D();
-  hull.moveTo(pts[0].x + nxs[0], pts[0].y + nys[0]);
-  for (let i = 1; i < n; i++) hull.lineTo(pts[i].x + nxs[i], pts[i].y + nys[i]);
-  for (let i = n - 1; i >= 0; i--) hull.lineTo(pts[i].x - nxs[i], pts[i].y - nys[i]);
-  hull.closePath();
-  return { fill, hull };
+  const hull: number[][] = [];
+  for (let i = 0; i < n; i++) hull.push([pts[i].x + nxs[i], pts[i].y + nys[i]]);
+  for (let i = n - 1; i >= 0; i--) hull.push([pts[i].x - nxs[i], pts[i].y - nys[i]]);
+  return { polys, hull };
 }
 
 export function outlineToPath(outline: number[][]): Path2D {
