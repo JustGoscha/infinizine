@@ -71,6 +71,7 @@ export class MetalBridge implements GpuBackend {
   private stamps = 0;
   ok = true;
   draws = 0;
+  wantsFrame = false;
   private bytesLast = 0;
 
   constructor(private src: SceneSource & { nibs(): HTMLCanvasElement[] }) {
@@ -161,7 +162,7 @@ export class MetalBridge implements GpuBackend {
     } else return;
     if (p.texKey === key) return;
     const made = make();
-    if (!made) return;
+    if (!made) { this.wantsFrame = true; return; }
     const old = p.tex;
     p.tex = made.id; p.texKey = key;
     this.w.record(R.TexSet, () => {
@@ -243,6 +244,7 @@ export class MetalBridge implements GpuBackend {
         if (e.parts.some((p) => p.item.k === 'stamps')) this.nibs();
       }
     };
+    this.wantsFrame = false;
     if (cmd.els) ready(cmd.els, cmd.s);
     for (const b of cmd.build) ready(b.els, b.L);
     let draws = 0;

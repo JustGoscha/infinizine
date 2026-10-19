@@ -21,7 +21,7 @@ export interface FanItem { k: 'fan'; tri: Float32Array; color: RGB; alpha: numbe
 /** The same, filled with a repeating pattern tile (its alpha) in the colour, anchored to the world origin. */
 export interface PatItem { k: 'pat'; tri: Float32Array; color: RGB; alpha: number; blend: GBlend; bbox: BBox; pattern: string; angle: number; T: number }
 /** Pencil: nib stamps, STAMP_F floats each (x, y, radius, rotation, alpha, nib 0–15). */
-export interface StampItem { k: 'stamps'; data: Float32Array; n: number; color: RGB; alpha: number; bbox: BBox }
+export interface StampItem { k: 'stamps'; data: Float32Array; n: number; color: RGB; alpha: number; bbox: BBox; area: number /* Σ stamp areas, world units² (what drawing it costs, ×scale²) */ }
 /** Dot tones: whole dots (centres x, y) of one radius, their union filled; far out the tint stands in. */
 export interface DotItem { k: 'dots'; xy: Float32Array; n: number; r: number; color: RGB; alpha: number; blend: GBlend; bbox: BBox; tint: FanItem }
 /** A bitmap over a world rect: an image, a text box (rasterised per zoom), a pixel fill's cells (one px per cell). */
@@ -111,8 +111,9 @@ export function compile(el: Element, detail: number, src: SceneSource): Compiled
     const color = rgbOf(el.color);
     if (el.tool === 'pencil') {
       let data = new Float32Array(STAMP_F * 1024), n = 0;
-      let minX = Infinity, minY = Infinity, maxX = -Infinity, maxY = -Infinity;
+      let minX = Infinity, minY = Infinity, maxX = -Infinity, maxY = -Infinity, area = 0;
       src.stamps(el, (x, y, r, rot, a, nib) => {
+        area += 4 * r * r; // (the quad)
         if ((n + 1) * STAMP_F > data.length) { const g = new Float32Array(data.length * 2); g.set(data); data = g; }
         const k = n * STAMP_F;
         data[k] = x; data[k + 1] = y; data[k + 2] = r; data[k + 3] = rot; data[k + 4] = a; data[k + 5] = nib;
@@ -120,7 +121,7 @@ export function compile(el: Element, detail: number, src: SceneSource): Compiled
         const m = r * 1.5;
         if (x - m < minX) minX = x - m; if (x + m > maxX) maxX = x + m; if (y - m < minY) minY = y - m; if (y + m > maxY) maxY = y + m;
       });
-      if (n) items.push({ k: 'stamps', data: data.subarray(0, n * STAMP_F), n, color, alpha: 1, bbox: { minX, minY, maxX, maxY } });
+      if (n) items.push({ k: 'stamps', data: data.subarray(0, n * STAMP_F), n, color, alpha: 1, bbox: { minX, minY, maxX, maxY }, area });
     } else if (el.tool === 'sketch') {
       zoomFree = false;
       for (const pass of pencilOutlines(el, detail)) {

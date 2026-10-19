@@ -16,9 +16,11 @@ export interface GpuFrame {
   dim: number; // focus dimming (1 = none)
   paper: string;
   grid: GridParams | null;
-  els: Element[]; // in drawing order
-  /** crowded far-out view: tiles instead of elements — the still ink in a world rect, in drawing order */
-  far?: (r: { x: number; y: number; w: number; h: number }) => Element[];
+  els: Element[]; // in drawing order (empty when crowded)
+  /** the still ink in a world rect, in drawing order (for tiles) */
+  query: (r: { x: number; y: number; w: number; h: number }) => Element[];
+  /** a crowded view (far out over a big zine): tiles, not elements */
+  crowded: boolean;
   moving: boolean;
   detail: number;
   budget: number; // ms of compiling this frame
@@ -52,12 +54,14 @@ export interface GpuBackend {
   usage(): { fill: number; stamps: number };
   describe(): string;
   draws: number;
+  /** something it holds is still on its way (an image decoding): draw again even if nothing changed */
+  readonly wantsFrame: boolean;
 }
 
 const FILL_BUDGET = 8_000_000; // fill vertices kept (~64 MB); past it the least recently used elements go
 const STAMP_BUDGET = 3_000_000; // Pencil stamps kept (~84 MB)
 
-interface El { h: number; c: Compiled; off: [number, number]; used: number }
+interface El { h: number; c: Compiled; off: [number, number]; used: number; stampArea: number }
 interface Tile extends TileRef { stale: boolean; used: number }
 
 export class GpuEngine {
@@ -94,6 +98,7 @@ export class GpuEngine {
   private dropEl(id: string, stale = true) {
     const e = this.els.get(id);
     if (!e) return;
+    this.changed = true;
     if (stale && this.tiles.size) this.staleRects([this.boxNow(e)]);
     this.backend.remove(e.h);
     this.els.delete(id);
@@ -112,7 +117,7 @@ export class GpuEngine {
     if (movable && e.c.sig === shapeSig(el)) {
       const a = anchorOf(el);
       const dx = a.x - e.c.anchor.x, dy = a.y - e.c.anchor.y;
-      if (dx !== e.off[0] || dy !== e.off[1]) { e.off = [dx, dy]; this.backend.move(e.h, dx, dy); }
+      if (dx !== e.off[0] || dy !== e.off[1]) { e.off = [dx, dy]; this.backend.move(e.h, dx, dy); this.changed = true; }
       return;
     }
     this.dropEl(el.id);
@@ -120,6 +125,7 @@ export class GpuEngine {
 
   /** Tiles under these world boxes are rendered again (the old picture shows until then). */
   staleRects(boxes: BBox[]) {
+    this.changed = true;
     for (const t of this.tiles.values()) {
       const x0 = (t.i * GPU_TILE) / t.L, y0 = (t.j * GPU_TILE) / t.L, x1 = ((t.i + 1) * GPU_TILE) / t.L, y1 = ((t.j + 1) * GPU_TILE) / t.L;
       if (boxes.some((b) => b.minX < x1 && b.maxX > x0 && b.minY < y1 && b.maxY > y0)) t.stale = true;
@@ -130,11 +136,14 @@ export class GpuEngine {
     const t0 = performance.now();
     const c = compile(el, detail, this.src);
     const h = this.nextH++;
+    this.changed = true;
     this.backend.add(h, c);
     const k = el.kind === 'stroke' ? el.tool : el.kind === 'fill' ? (el.pattern ? el.pattern.replace(/-\d+$/, '') : 'fill') : el.kind;
     this.stats.compileMs[k] = (this.stats.compileMs[k] ?? 0) + performance.now() - t0;
     this.stats.compiled[k] = (this.stats.compiled[k] ?? 0) + 1;
-    return { h, c, off: [0, 0], used: this.frameNo };
+    let stampArea = 0;
+    for (const it of c.items) if (it.k === 'stamps') stampArea += it.area;
+    return { h, c, off: [0, 0], used: this.frameNo, stampArea };
   }
 
   /** The elements' handles, compiling what's missing while the budget lasts. */
@@ -180,6 +189,12 @@ export class GpuEngine {
   /** The tile level for a scale: √2 steps at or above it, so a tile is drawn at most √2 smaller. */
   static level(s: number): number { return Math.pow(2, Math.ceil(Math.log2(s) * 2 - 1e-9) / 2); }
 
+  /** what the last frame drew (a frame that would draw the same is skipped: the picture stays) */
+  private lastSig = '';
+  private changed = true;
+  /** in tiles because the view's Pencil is heavy (kept until it's clearly lighter: no flip-flopping) */
+  private heavy = false;
+
   render(f: GpuFrame) {
     if (!this.backend.ok) return;
     this.frameNo++;
@@ -188,12 +203,32 @@ export class GpuEngine {
       W: f.W, H: f.H, dpr: f.dpr, s: f.s, ox: f.ox, oy: f.oy, dim: f.dim, paper: hexRGB(f.paper), grid: f.grid,
       els: null, build: [], show: [],
     };
-    if (f.far) this.planFar(f, cmd, b);
-    else {
-      cmd.els = this.gather(f.els, f, b);
-      this.farPending = 0;
-    }
+    let tiles = f.crowded;
+    let hs: number[] = [];
+    if (!tiles) {
+      hs = this.gather(f.els, f, b);
+      // up close over a lot of Pencil, restamping it all every frame is ~10 layers of nib over most
+      // of the screen: tiles instead (rendered once, then a blit each frame)
+      let px = 0;
+      for (const el of f.els) { const e = this.els.get(el.id); if (e) px += e.stampArea; }
+      px *= f.s * f.s;
+      const screen = f.W * f.H;
+      this.heavy = px > (this.heavy ? 2 : 3) * screen;
+      tiles = this.heavy;
+    } else this.heavy = false;
+    if (tiles) this.planFar(f, cmd, b);
+    else { cmd.els = hs; this.farPending = 0; }
     this.pending = b.pending;
+    // the same frame as last time (nothing of ours moved or changed — e.g. while a live stroke is drawn
+    // on the page above): skip it, the GPU's picture stays up
+    let sig = `${f.W}|${f.H}|${f.s}|${f.ox}|${f.oy}|${f.dim}|${f.paper}|${f.grid ? `${f.grid.kind}|${f.grid.sp}|${f.grid.x}|${f.grid.y}` : ''}|${cmd.build.length}|${cmd.show.length}|${hs.length}`;
+    let k = 0;
+    for (const h of hs) k = (k * 31 + h) | 0;
+    for (const t of cmd.show) k = (k * 31 + t.i * 7 + t.j) | 0;
+    sig += `|${k}`;
+    if (!this.changed && !cmd.build.length && sig === this.lastSig && !this.backend.wantsFrame) { this.evict(); return; }
+    this.lastSig = sig;
+    this.changed = false;
     this.backend.frame(cmd);
     this.evict();
   }
@@ -217,7 +252,7 @@ export class GpuEngine {
       if (t && !t.stale) { t.used = this.frameNo; continue; }
       missing++;
       if (partsLeft <= 0 || b.spent >= f.budget) continue;
-      const els = f.far!({ x: (i * T0) / L, y: (j * T0) / L, w: T0 / L, h: T0 / L });
+      const els = f.query({ x: (i * T0) / L, y: (j * T0) / L, w: T0 / L, h: T0 / L });
       const before = b.pending;
       const hs = this.gather(els, f, b);
       if (b.pending > before) continue; // (not all compiled yet: next frame)

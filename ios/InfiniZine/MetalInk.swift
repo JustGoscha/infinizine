@@ -73,7 +73,7 @@ final class MetalInk: NSObject, MTKViewDelegate {
         view.sampleCount = 4
         view.isPaused = true
         view.enableSetNeedsDisplay = false
-        view.framebufferOnly = true
+        view.framebufferOnly = !ProcessInfo.processInfo.arguments.contains("-izineMetalShot")
         view.isUserInteractionEnabled = false
         view.isHidden = true
         items = Arena(device, unit: 64, cap: 4096)
@@ -111,7 +111,9 @@ final class MetalInk: NSObject, MTKViewDelegate {
     // MARK: packets
 
     /// One packet from the page: apply its records, then draw its frame.
+    private var packets = 0
     func receive(_ data: Data) {
+        packets += 1
         guard active else { return }
         let t0 = CACurrentMediaTime()
         var gotFrame = false
@@ -150,8 +152,8 @@ final class MetalInk: NSObject, MTKViewDelegate {
 
     private func newItem(_ color: SIMD4<Float>, _ box: SIMD4<Float>, _ p: SIMD4<Float> = .zero) -> Int {
         let slot = items.alloc(1)
-        var v = [color, box, p, SIMD4<Float>.zero]
-        items.write(at: slot, UnsafeRawBufferPointer(start: &v, count: 64))
+        let v = [color, box, p, SIMD4<Float>.zero]
+        v.withUnsafeBytes { items.write(at: slot, $0) }
         return slot
     }
 
@@ -230,8 +232,8 @@ final class MetalInk: NSObject, MTKViewDelegate {
         guard var e = els[h] else { return }
         e.off = SIMD2(dx, dy)
         els[h] = e
-        var off = SIMD4<Float>(dx, dy, 0, 0)
-        func put(_ p: Part) { items.write(at: p.slot, UnsafeRawBufferPointer(start: &off, count: 16), byteOffset: 48); p.tint.forEach(put) }
+        let off = SIMD4<Float>(dx, dy, 0, 0)
+        func put(_ p: Part) { withUnsafeBytes(of: off) { items.write(at: p.slot, $0, byteOffset: 48) }; p.tint.forEach(put) }
         e.parts.forEach(put)
     }
 
@@ -263,9 +265,9 @@ final class MetalInk: NSObject, MTKViewDelegate {
         if hasRect { rect = SIMD4(r.f32(), r.f32(), r.f32(), r.f32()) }
         guard var e = els[h], k < e.parts.count else { return }
         e.parts[k].tex = id
-        if var b = rect {
+        if let b = rect {
             e.parts[k].box = b
-            items.write(at: e.parts[k].slot, UnsafeRawBufferPointer(start: &b, count: 16), byteOffset: 16)
+            withUnsafeBytes(of: b) { items.write(at: e.parts[k].slot, $0, byteOffset: 16) }
         }
         els[h] = e
     }
@@ -382,6 +384,24 @@ final class MetalInk: NSObject, MTKViewDelegate {
         }
         enc.endEncoding()
         if let cbuf = coverBuf { cover.withUnsafeBytes { memcpy(cbuf.contents(), $0.baseAddress!, $0.count) } }
+        if packets <= 3 { cb.addCompletedHandler { b in if let e = b.error { NSLog("[izine] metal: command buffer failed: \(e)") } } }
+        if packets == 240, ProcessInfo.processInfo.arguments.contains("-izineMetalShot") {
+            // debug: what Metal drew, saved to Documents (fetched with devicectl)
+            let tex = drawable.texture
+            cb.addCompletedHandler { _ in
+                let w = tex.width, h = tex.height
+                var bytes = [UInt8](repeating: 0, count: w * h * 4)
+                tex.getBytes(&bytes, bytesPerRow: w * 4, from: MTLRegionMake2D(0, 0, w, h), mipmapLevel: 0)
+                let cs = CGColorSpaceCreateDeviceRGB()
+                let info = CGBitmapInfo(rawValue: CGImageAlphaInfo.premultipliedFirst.rawValue | CGBitmapInfo.byteOrder32Little.rawValue)
+                if let ctx = CGContext(data: &bytes, width: w, height: h, bitsPerComponent: 8, bytesPerRow: w * 4, space: cs, bitmapInfo: info.rawValue), let img = ctx.makeImage(),
+                   let png = UIImage(cgImage: img).pngData() {
+                    let url = FileManager.default.urls(for: .documentDirectory, in: .userDomainMask)[0].appendingPathComponent("metal-shot.png")
+                    try? png.write(to: url)
+                    NSLog("[izine] metal shot saved")
+                }
+            }
+        }
         cb.present(drawable)
         cb.commit()
         lastDrawMs = (CACurrentMediaTime() - t0) * 1000

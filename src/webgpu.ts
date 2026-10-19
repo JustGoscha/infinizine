@@ -246,6 +246,8 @@ export class WebGPUBackend implements GpuBackend {
   private tileStencil: GPUTexture | null = null;
   private tileBuffers: GPUBuffer[] = [];
   lost = false;
+  /** a bitmap couldn't be made yet (an image still decoding) */
+  wantsFrame = false;
   /** draw calls last frame */
   draws = 0;
   /** ms encoding the last frame */
@@ -582,6 +584,7 @@ export class WebGPUBackend implements GpuBackend {
       this.coverBuf = d.createBuffer({ size: this.coverCap * 4, usage: GPUBufferUsage.VERTEX | GPUBufferUsage.COPY_DST });
     }
     this.coverN = 0;
+    this.wantsFrame = false;
     const enc = d.createCommandEncoder();
     // (far tiles first: a pass can't open inside another)
     for (const b of builds) this.encodeTile(enc, b.t, b.list, cmd);
@@ -717,7 +720,7 @@ export class WebGPUBackend implements GpuBackend {
           pass.setStencilReference(0);
           draws += 2;
         } else {
-          if (!this.readyTex(r, s)) continue;
+          if (!this.readyTex(r, s)) { this.wantsFrame = true; continue; }
           use(this.p[`tex-${it.blend}`]);
           // pixel cells: sharp while a cell is a pixel and a half or more, averaged below that
           pass.setBindGroup(1, it.cell && it.cell * s >= 1.5 && r.nearest ? r.nearest : r.group!);

@@ -52,7 +52,7 @@ const PENCIL_RASTER_BUDGET = 12_000_000; // px across all cached pencil rasters 
 // `stale`: drawn with a stand-in raster, rebuild when there's time; `redo`: its content changed, rebuild now
 // `born`: when it was first completed (fades in from then)
 // `mips`: pre-shrunk copies (by size, per layer), made the first time it's drawn that small
-interface Tile { i: number; j: number; back: HTMLCanvasElement; front: HTMLCanvasElement | null; stale: boolean; redo?: boolean; born?: number; mips?: Map<string, HTMLCanvasElement> }
+interface Tile { i: number; j: number; back: HTMLCanvasElement; front: HTMLCanvasElement | null; stale: boolean; redo?: boolean; born?: number; fade?: number; mips?: Map<string, HTMLCanvasElement> }
 
 /** How the static ink gets onto the screen — alternatives to compare per device (hardware differs:
  * a desktop can draw a whole screen of tiles in a frame, an iPad can't). */
@@ -91,7 +91,8 @@ export interface RenderOpts {
   frames: boolean;
 }
 export const RENDER_DEFAULTS: RenderOpts = { schedule: 'adaptive', levels: true, fade: true, motion: true, prefetchDir: true, draft: true, grid: true, gridMode: 'canvas', vector: 'auto', feather: true, engine: 'canvas', frames: true };
-const FADE_MS = 300;
+const FADE_MS = 300; // a tile coming into a gap (nothing there yet): a soft fade-in
+const QUICK_FADE_MS = 70; // a tile replacing a blurry stand-in (another level, the overview): a few frames — the blur isn't worth holding
 const FRAME_BITMAP_BUDGET = 16_000_000; // px of keyframe bitmaps kept (~64 MB)
 /** elements in view past which the view counts as crowded: the 2D renderer stops listing them per
  * frame (it can't draw that many straight from vectors anyway), the GPU one draws its far tiles */
@@ -102,7 +103,7 @@ const FEATHER_N = 8;
 /** each screen tile's coverage (row-major from the top-left screen tile at x, y; T px per tile) and the band to feather */
 interface Coverage { v: Float32Array; cols: number; rows: number; x: number; y: number; T: number; rect: { x: number; y: number; w: number; h: number } }
 /** a new tile's opacity `age` ms after it was built: eased in and out, so detail arrives softly */
-const fadeAlpha = (age: number) => { const u = Math.max(0, Math.min(1, age / FADE_MS)); return u * u * (3 - 2 * u); };
+const fadeAlpha = (age: number, ms = FADE_MS) => { const u = Math.max(0, Math.min(1, age / ms)); return u * u * (3 - 2 * u); };
 /** a tile being built a slice per frame: its elements by layer, where it got to (element k of
  * pass 0 = back, 1 = front; within a long pencil stroke, the next stamp) */
 interface TileJob {
@@ -1215,6 +1216,48 @@ export class Renderer {
     }
   }
 
+  /** Blit tile sets, best first, each only where no set before it has a tile: every spot shows one
+   * picture of the ink. (The parts of a tile left over are drawn as rectangles cut from it — no clip
+   * paths, which WebKit applies as a mask to every draw.) */
+  private blitCover(sets: TileSet[], layer: 'back' | 'front', W: number, H: number, ox: number, oy: number) {
+    const ctx = this.ctx;
+    const dpr = window.devicePixelRatio || 1;
+    const covered: [number, number, number, number][] = [];
+    const cut = (p: [number, number, number, number], c: [number, number, number, number]): [number, number, number, number][] => {
+      if (c[0] >= p[2] || c[2] <= p[0] || c[1] >= p[3] || c[3] <= p[1]) return [p];
+      const out: [number, number, number, number][] = [];
+      if (c[1] > p[1]) out.push([p[0], p[1], p[2], c[1]]);
+      if (c[3] < p[3]) out.push([p[0], c[3], p[2], p[3]]);
+      const y0 = Math.max(p[1], c[1]), y1 = Math.min(p[3], c[3]);
+      if (c[0] > p[0]) out.push([p[0], y0, c[0], y1]);
+      if (c[2] < p[2]) out.push([c[2], y0, p[2], y1]);
+      return out;
+    };
+    for (const set of sets) {
+      const k = (this.camera.zoom * dpr) / set.s;
+      const added: [number, number, number, number][] = [];
+      for (const t of set.tiles.values()) {
+        const x0 = Math.round(t.i * TILE * k) + ox, x1 = Math.round((t.i + 1) * TILE * k) + ox;
+        const y0 = Math.round(t.j * TILE * k) + oy, y1 = Math.round((t.j + 1) * TILE * k) + oy;
+        if (x1 <= 0 || y1 <= 0 || x0 >= W || y0 >= H) continue;
+        const r: [number, number, number, number] = [Math.max(0, x0), Math.max(0, y0), Math.min(W, x1), Math.min(H, y1)];
+        let pieces = [r];
+        for (const c of covered) {
+          if (c[0] >= r[2] || c[2] <= r[0] || c[1] >= r[3] || c[3] <= r[1]) continue;
+          pieces = pieces.flatMap((p) => cut(p, c));
+          if (!pieces.length) break;
+        }
+        added.push(r); // (this set's picture of the spot, ink or none)
+        const c = layer === 'back' ? t.back : t.front;
+        if (!c || !pieces.length) continue;
+        const src = k >= 0.3 ? c : this.mip(t, layer, c, x1 - x0) ?? c;
+        const sx = src.width / (x1 - x0), sy = src.height / (y1 - y0);
+        for (const p of pieces) ctx.drawImage(src, (p[0] - x0) * sx, (p[1] - y0) * sy, (p[2] - p[0]) * sx, (p[3] - p[1]) * sy, p[0], p[1], p[2] - p[0], p[3] - p[1]);
+      }
+      covered.push(...added);
+    }
+  }
+
   /** Blit a tile set's back or front bitmaps (device-px space; scaled when the set is from another zoom). */
   private blitTiles(set: TileSet, layer: 'back' | 'front', W: number, H: number, ox: number, oy: number, now = -1, skip?: { x: number; y: number; w: number; h: number }) {
     const ctx = this.ctx;
@@ -1228,8 +1271,9 @@ export class Renderer {
       const y0 = Math.round(t.j * TILE * k) + oy, y1 = Math.round((t.j + 1) * TILE * k) + oy;
       if (x1 <= 0 || y1 <= 0 || x0 >= W || y0 >= H) continue;
       if (skip && Math.max(x0, 0) >= skip.x && Math.max(y0, 0) >= skip.y && Math.min(x1, W) <= skip.x + skip.w && Math.min(y1, H) <= skip.y + skip.h) continue;
-      const age = now >= 0 && t.born !== undefined ? now - t.born : FADE_MS;
-      ctx.globalAlpha = age < FADE_MS ? base * fadeAlpha(age) : base;
+      const ms = t.fade ?? FADE_MS;
+      const age = now >= 0 && t.born !== undefined ? now - t.born : ms;
+      ctx.globalAlpha = age < ms ? base * fadeAlpha(age, ms) : base;
       if (k === 1) ctx.drawImage(c, x0, y0);
       else if (k >= 0.3) ctx.drawImage(c, x0, y0, x1 - x0, y1 - y0);
       else ctx.drawImage(this.mip(t, layer, c, x1 - x0) ?? c, x0, y0, x1 - x0, y1 - y0);
@@ -1331,8 +1375,14 @@ export class Renderer {
         if (ts === coarse) for (const layer of ['back', 'front'] as const) { const c = layer === 'back' ? tile.back : tile.front; if (c) this.mip(tile, layer, c, 8, true); }
         const key = `${i},${j}`;
         const old = ts.tiles.get(key);
-        // a tile appearing where there was none fades in; a rebuild of one already showing just swaps
-        if (opts.fade && ts === fine && !old) tile.born = performance.now();
+        // a tile appearing where there was none fades in — quickly over a blurry stand-in, softly into
+        // a gap; a rebuild of one already showing just swaps
+        if (opts.fade && ts === fine && !old) {
+          tile.born = performance.now();
+          const v = this.tileView(i, j, ts.s), wx = v.x + v.w / 2, wy = v.y + v.h / 2;
+          const under = (o: TileSet | null) => !!o && o !== ts && o.tiles.has(`${Math.floor((wx * o.s) / TILE)},${Math.floor((wy * o.s) / TILE)}`);
+          tile.fade = under(coarse) || this.levels.some(under) ? QUICK_FADE_MS : FADE_MS;
+        }
         this.dropTile(old);
         ts.tiles.set(key, tile);
         return true;
@@ -1420,9 +1470,9 @@ export class Renderer {
       for (let j = j0; j <= j1; j++) {
         for (let i = i0; i <= i1; i++) {
           const t = tiles.get(`${i},${j}`);
-          const fadingIn = !!t && t.born !== undefined && nowMs - t.born < FADE_MS;
+          const fadingIn = !!t && t.born !== undefined && nowMs - t.born < (t.fade ?? FADE_MS);
           if (v) {
-            const a = !t ? 0 : fadingIn ? fadeAlpha(nowMs - t.born!) : 1;
+            const a = !t ? 0 : fadingIn ? fadeAlpha(nowMs - t.born!, t.fade) : 1;
             v[(j - j0) * cols + (i - i0)] = a;
             if (a < 1) { ci0 = Math.min(ci0, i); ci1 = Math.max(ci1, i); cj0 = Math.min(cj0, j); cj1 = Math.max(cj1, j); }
           }
@@ -1432,7 +1482,7 @@ export class Renderer {
             holes.rect(x0, y0, w, h);
             holed = true;
             if (!t) { missingHoles.rect(x0, y0, w, h); anyMissing = true; }
-            else { fadingRects.push([x0, y0, w, h, fadeAlpha(nowMs - t.born!)]); fading = true; }
+            else { fadingRects.push([x0, y0, w, h, fadeAlpha(nowMs - t.born!, t.fade)]); fading = true; }
           }
         }
       }
@@ -1471,12 +1521,19 @@ export class Renderer {
         }
       }
       if (dimmed) ctx.globalAlpha = 0.3;
-      const under = (w = W, h = H, x = ox, y = oy) => {
-        if (coarse?.tiles.size) this.blitTiles(coarse, layer, w, h, x, y);
-        for (const l of others) this.blitTiles(l, layer, w, h, x, y);
-      };
+      // stand-ins: each spot from ONE of them, the best there (the closest sharper level, then
+      // coarser ones, the overview last) — stacked, see-through ink (Pencil, a translucent marker)
+      // showed once per level, darker and darker while zooming
+      const best = (sets: TileSet[]) => sets.sort((a, b) => rank(a) - rank(b));
+      const target = this.levelFor(camera.zoom);
+      const rank = (t: TileSet) => (t.draft ? 1e9 : t.s >= target * 0.999 ? t.s / target : 100 + target / t.s);
+      const standIns = best([...others, ...(coarse?.tiles.size ? [coarse] : [])]);
+      const under = (w = W, h = H, x = ox, y = oy) => this.blitCover(standIns, layer, w, h, x, y);
       if (!settled) {
-        under(); // mid-zoom across levels: what we have, scaled
+        // mid-zoom across levels: what we have, scaled — the current set too, in its place among them
+        this.blitCover(best([fine, ...standIns.filter((t) => t !== fine)]), layer, W, H, ox, oy);
+        ctx.restore();
+        return;
       } else if (cover) {
         // feathered: in the band, sharp × coverage over the stand-ins × (1 − coverage), the
         // coverage a soft mask (one value per tile, eased across edges); elsewhere the sharp tiles
@@ -2560,7 +2617,7 @@ export class Renderer {
         W: vw * dpr, H: vh * dpr, dpr, s: wm0.s, ox: wm0.ox, oy: wm0.oy,
         dim: this.focusAreaId() ? 0.3 : 1, paper,
         grid: this.opts.grid && pat !== 'blank' ? { kind: pat === 'dots' ? 1 : pat === 'lines' ? 2 : 3, sp, x: o.x, y: o.y, dark: darkPaper(paper) } : null,
-        els, far: crowded ? (r: View) => { const l = this.stillIn(r); return l.filter((el) => el.layer === 'back').concat(l.filter((el) => el.layer !== 'back')); } : undefined,
+        els, crowded, query: (r: View) => { const l = this.stillIn(r); return l.filter((el) => el.layer === 'back').concat(l.filter((el) => el.layer !== 'back')); },
         moving: frameStart < this.movingUntil, detail: this.detail(), budget: Math.max(4, this.buildBudget()),
       });
       if (gpu.pending || gpu.farPending) this.dirty = true;
