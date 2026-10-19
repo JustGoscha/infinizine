@@ -110,7 +110,7 @@ export function buildUI(
       <div class="set-row"><span>Two-finger tap</span>
         <div class="seg" id="set-fundo"><button data-v="1">Undo · redo</button><button data-v="0">Off</button></div></div>
       <div class="set-row"><span>Renderer</span>
-        <div class="seg" id="set-engine"><button data-v="canvas">Canvas</button><button data-v="webgpu">GPU</button></div></div>
+        <div class="seg" id="set-engine"><button data-v="canvas">Canvas</button><button data-v="webgpu">GPU</button><button data-v="metal" class="app-only">Metal</button></div></div>
       <div class="set-row"><span>Performance readout</span>
         <div class="seg" id="set-perf"><button data-v="1">On</button><button data-v="0">Off</button></div></div>
 
@@ -1698,6 +1698,9 @@ export function buildUI(
     settingsPop.querySelectorAll<HTMLElement>('#set-engine button').forEach((b) => b.classList.toggle('active', b.dataset.v === engineChoice()));
   };
   // the renderer reads its options from here at start; a change is announced to it right away
+  // (Metal: only the iPad app has the native view; GPU: only where the browser has WebGPU)
+  if (!window.__izineNativeApp) settingsPop.querySelector<HTMLElement>('#set-engine [data-v="metal"]')!.remove();
+  if (!('gpu' in navigator)) { const b = settingsPop.querySelector<HTMLElement>('#set-engine [data-v="webgpu"]')!; b.title = 'This browser has no WebGPU'; b.style.opacity = '0.4'; }
   const engineChoice = () => { try { return JSON.parse(localStorage.getItem('izine-render-opts') ?? '{}').engine ?? 'canvas'; } catch { return 'canvas'; } };
   settingsPop.querySelector('#set-engine')!.addEventListener('click', (e) => {
     const v = (e.target as HTMLElement).closest('button')?.dataset.v;

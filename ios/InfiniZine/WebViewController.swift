@@ -10,6 +10,7 @@ final class WebViewController: UIViewController, WKScriptMessageHandler, WKNavig
     private(set) var webView: WKWebView!
     private(set) var pencil: PencilCapture!
     private var overlay: InkOverlay!
+    private var metal: MetalInk?
     private var ready = false
     private var pendingImports: [URL] = []
     private var downloads: [ObjectIdentifier: URL] = [:]
@@ -37,6 +38,7 @@ final class WebViewController: UIViewController, WKScriptMessageHandler, WKNavig
         if let t = Self.testMode { info["test"] = t }
         if Self.flag("-izineLogStrokes") { info["logStrokes"] = true }
         if Self.flag("-izineMousePencil") { info["mousePencil"] = true }
+        if let i = ProcessInfo.processInfo.arguments.firstIndex(of: "-izineEngine"), i + 1 < ProcessInfo.processInfo.arguments.count { info["engine"] = ProcessInfo.processInfo.arguments[i + 1] }
         let json = String(data: try! JSONSerialization.data(withJSONObject: info), encoding: .utf8)!
         config.userContentController.addUserScript(WKUserScript(
             source: "window.__izineNativeApp = \(json);", injectionTime: .atDocumentStart, forMainFrameOnly: true))
@@ -64,6 +66,13 @@ final class WebViewController: UIViewController, WKScriptMessageHandler, WKNavig
         root.backgroundColor = UIColor(named: "Paper")
         wv.frame = root.bounds
         wv.autoresizingMask = [.flexibleWidth, .flexibleHeight]
+        // the native Metal view for the still ink (the page's 'metal' engine): under the page, shown when it asks
+        if let m = MetalInk(frame: root.bounds) {
+            m.view.autoresizingMask = [.flexibleWidth, .flexibleHeight]
+            root.addSubview(m.view)
+            metal = m
+            AppSchemeHandler.onGPU = { [weak m] data in m?.receive(data) }
+        }
         root.addSubview(wv)
         overlay = InkOverlay(frame: root.bounds)
         overlay.autoresizingMask = [.flexibleWidth, .flexibleHeight]
@@ -128,6 +137,16 @@ final class WebViewController: UIViewController, WKScriptMessageHandler, WKNavig
             #if DEBUG
             (simulator as? PencilSimulator)?.finish(body)
             #endif
+        case "gpu":
+            // the page's GPU engine switched to (or away from) the native Metal view: the page goes see-through over it
+            let on = body["on"] as? Bool ?? false
+            metal?.setActive(on)
+            webView.backgroundColor = on ? .clear : UIColor(named: "Paper")
+            webView.scrollView.backgroundColor = on ? .clear : nil
+            NSLog("[izine] metal ink \(on ? "on" : "off")")
+        case "metalStats":
+            let line = metal?.report(reset: body["reset"] as? Bool ?? false) ?? "metal: none"
+            if !(body["reset"] as? Bool ?? false) { NSLog("[izine:web] bench \(line)") }
         case "log":
             NSLog("[izine:web] \(body["msg"] ?? "")")
         default: break

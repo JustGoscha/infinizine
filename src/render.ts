@@ -2,7 +2,9 @@
 // culling + cached outlines), live stroke, lasso/selection overlays.
 
 import { GLPencil, STAMP_FLOATS } from './glpencil';
-import { WebGPURenderer } from './webgpu';
+import { WebGPUBackend } from './webgpu';
+import { GpuEngine } from './gpuplan';
+import { MetalBridge } from './metal';
 import type { SceneSource } from './gpuscene';
 import { SpatialGrid } from './spatial';
 import { Camera, baseZoom } from './camera';
@@ -82,8 +84,9 @@ export interface RenderOpts {
    * edge (off: each tile fades in as a square) */
   feather: boolean;
   /** what draws the still ink: 'canvas' the 2D renderer (tiles / vectors, all of the above) ·
-   * 'webgpu' everything on the GPU every frame (see webgpu.ts), where the browser has WebGPU */
-  engine: 'canvas' | 'webgpu';
+   * 'webgpu' everything on the GPU every frame (see webgpu.ts), where the browser has WebGPU ·
+   * 'metal' the same, drawn by a native Metal view in the iPad app (see metal.ts) */
+  engine: 'canvas' | 'webgpu' | 'metal';
 }
 export const RENDER_DEFAULTS: RenderOpts = { schedule: 'adaptive', levels: true, fade: true, motion: true, prefetchDir: true, draft: true, grid: true, gridMode: 'canvas', vector: 'auto', feather: true, engine: 'canvas' };
 const FADE_MS = 300;
@@ -219,8 +222,9 @@ export class Renderer {
    * and moved with them; `landing` once dropped, until the tiles under them have them again */
   private floating = new Map<string, { snap: HTMLCanvasElement | null; x: number; y: number; s: number; ax: number; ay: number; w: number; h: number; touched: number; landing: boolean }>();
   // ---- the GPU engine (opts.engine 'webgpu') ----
-  private gpu: WebGPURenderer | null = null;
+  private gpu: GpuEngine | null = null;
   private gpuState: 'off' | 'starting' | 'on' | 'failed' = 'off';
+  private gpuKind: 'webgpu' | 'metal' | null = null;
   private gpuCanvas: HTMLCanvasElement | null = null;
   private gpuShown = false;
   private gpuHidden = new Set<string>();
@@ -233,35 +237,63 @@ export class Renderer {
   };
   /** True when the GPU draws the still ink this frame (starting it the first time it's asked for). */
   private gpuActive(): boolean {
-    const want = this.opts.engine === 'webgpu' && this.canvas.id === 'canvas';
-    if (want && this.gpuState === 'off') {
+    const e = this.opts.engine;
+    const kind = this.canvas.id !== 'canvas' ? null : e === 'webgpu' ? 'webgpu' : e === 'metal' && nativeApp ? 'metal' : null;
+    if (kind !== this.gpuKind && this.gpuState !== 'starting') {
+      // switched: the old engine goes, the new one starts
+      if (this.gpu) {
+        this.gpu.drop();
+        const b = this.gpu.backend as { stop?(): void; destroy?(): void };
+        b.stop?.(); b.destroy?.();
+        this.gpu = null;
+      }
+      this.gpuState = 'off';
+      this.gpuKind = kind;
+      this.setGpuShown(false);
+    }
+    if (kind && this.gpuState === 'off') {
       this.gpuState = 'starting';
-      const c = document.createElement('canvas');
-      c.id = 'gpu';
-      c.style.cssText = 'position:fixed;inset:0;width:100%;height:100%;pointer-events:none;display:none';
-      this.canvas.parentElement!.insertBefore(c, this.canvas);
-      this.gpuCanvas = c;
-      void WebGPURenderer.create(c, this.sceneSource).then((r) => {
-        this.gpu = r;
-        this.gpuState = r ? 'on' : 'failed';
-        this.invalidate();
-      });
+      if (kind === 'metal') {
+        this.gpu = new GpuEngine(new MetalBridge(this.sceneSource), this.sceneSource);
+        this.gpuState = 'on';
+      } else {
+        if (!this.gpuCanvas) {
+          const c = document.createElement('canvas');
+          c.id = 'gpu';
+          c.style.cssText = 'position:fixed;inset:0;width:100%;height:100%;pointer-events:none;display:none';
+          this.canvas.parentElement!.insertBefore(c, this.canvas);
+          this.gpuCanvas = c;
+        }
+        void WebGPUBackend.create(this.gpuCanvas, this.sceneSource).then((b) => {
+          this.gpu = b ? new GpuEngine(b, this.sceneSource) : null;
+          this.gpuState = b ? 'on' : 'failed';
+          this.invalidate();
+        });
+      }
     }
-    const on = want && this.gpuState === 'on' && !!this.gpu?.ok;
-    if (on !== this.gpuShown && this.gpuCanvas) {
-      this.gpuShown = on;
-      this.gpuCanvas.style.display = on ? 'block' : 'none';
-      if (!on) this.gpu?.drop(); // (the 2D renderer takes over: free the GPU copies)
-    }
+    const on = !!kind && this.gpuState === 'on' && !!this.gpu?.ok;
+    this.setGpuShown(on);
     return on;
   }
+  private setGpuShown(on: boolean) {
+    if (on === this.gpuShown) return;
+    this.gpuShown = on;
+    // webgpu: its canvas under this one · metal: the native view under the whole (now see-through) page
+    if (this.gpuCanvas) this.gpuCanvas.style.display = on && this.gpuKind === 'webgpu' ? 'block' : 'none';
+    document.documentElement.classList.toggle('native-gpu', on && this.gpuKind === 'metal');
+    if (!on) this.gpu?.drop(); // (the 2D renderer takes over: free the GPU copies)
+  }
+  /** Which engine is drawing now (for the benchmark and the settings readout). */
+  engineNow(): string { return this.gpuShown ? this.gpuKind ?? 'canvas' : 'canvas'; }
+
   /** The GPU engine's memory and draw counts (benchmark). */
   gpuMemory(): string { return this.gpu?.memory() ?? 'no gpu'; }
-  /** Which engine is drawing now (for the benchmark and the settings readout). */
-  engineNow(): string { return this.gpuShown ? 'webgpu' : 'canvas'; }
 
   opts: RenderOpts = (() => {
-    try { return { ...RENDER_DEFAULTS, ...JSON.parse(localStorage.getItem('izine-render-opts') ?? '{}') }; } catch { return { ...RENDER_DEFAULTS }; }
+    let o: RenderOpts;
+    try { o = { ...RENDER_DEFAULTS, ...JSON.parse(localStorage.getItem('izine-render-opts') ?? '{}') }; } catch { o = { ...RENDER_DEFAULTS }; }
+    if (nativeApp?.engine) o.engine = nativeApp.engine as RenderOpts['engine']; // (app launched with -izineEngine)
+    return o;
   })();
   /** ms a sharp tile takes to build here (smoothed): what 'adaptive' scheduling goes by */
   private tileCost = 16;
@@ -2414,7 +2446,7 @@ export class Renderer {
         W: vw * dpr, H: vh * dpr, dpr, s: wm0.s, ox: wm0.ox, oy: wm0.oy,
         dim: this.focusAreaId() ? 0.3 : 1, paper,
         grid: this.opts.grid && pat !== 'blank' ? { kind: pat === 'dots' ? 1 : pat === 'lines' ? 2 : 3, sp, x: o.x, y: o.y, dark: darkPaper(paper) } : null,
-        els, far: crowded ? (r) => { const l = this.stillIn(r); return l.filter((el) => el.layer === 'back').concat(l.filter((el) => el.layer !== 'back')); } : undefined,
+        els, far: crowded ? (r: View) => { const l = this.stillIn(r); return l.filter((el) => el.layer === 'back').concat(l.filter((el) => el.layer !== 'back')); } : undefined,
         moving: frameStart < this.movingUntil, detail: this.detail(), budget: Math.max(4, this.buildBudget()),
       });
       if (gpu.pending || gpu.farPending) this.dirty = true;

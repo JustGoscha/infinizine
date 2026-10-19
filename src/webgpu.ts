@@ -1,5 +1,5 @@
 /// <reference types="@webgpu/types" />
-// The WebGPU renderer: the paper, its grid and every still element drawn on the GPU each
+// The WebGPU backend of the GPU engine (planning: gpuplan.ts): the paper, its grid and every still element drawn on the GPU each
 // frame, straight from geometry kept on the GPU (see gpuscene.ts) — the Figma way: no tiles
 // to fill in after a pan or a zoom, and Pencil is thousands of stamps in one draw.
 // It sits under the 2D canvas, which keeps drawing what moves (animated areas, the live
@@ -11,15 +11,13 @@
 // in one table the shaders index — so a draw is just "these vertices, item n", no per-element
 // state to bind. Neighbouring fills that don't overlap share one cover pass.
 //
-// Far out over a crowded zine (thousands of elements in view), drawing every element every
-// frame stops paying: the view comes from tiles instead — 512 px bitmaps the GPU renders the
-// ink into once (at zoom levels √2 apart), a few each frame from the centre out, and keeps;
-// a change re-renders just the tiles under it. Elements whose geometry hasn't been used for a
-// while are let go (their tiles keep the picture), so memory stays bounded however big the zine.
+// Far out over a crowded zine the view comes from tiles instead: 512 px bitmaps the GPU renders
+// the ink into once and keeps (which, and when: gpuplan.ts).
 
-import type { Element, TextBox } from './types';
+import type { TextBox } from './types';
 import type { BBox } from './geometry';
-import { compile, shapeSig, anchorOf, STAMP_F, type Compiled, type GItem, type GBlend, type SceneSource, type RGB } from './gpuscene';
+import { STAMP_F, type Compiled, type GItem, type GBlend, type SceneSource, type RGB } from './gpuscene';
+import { GPU_TILE as TILE, type FrameCmd, type GpuBackend, type TileRef } from './gpuplan';
 import { patternTile } from './patterns';
 import { paintTextBox } from './text';
 
@@ -28,9 +26,6 @@ const STENCIL: GPUTextureFormat = 'stencil8';
 const ITEM_BYTES = 64;
 const STAMP_WORDS = STAMP_F + 1; // + the item index
 const DOT_WORDS = 3; // x, y, item
-const TILE = 512; // far-out tiles, device px
-const FAN_BUDGET = 8_000_000; // fill vertices kept (~64 MB); past it, the least recently used elements go
-const STAMP_BUDGET = 3_000_000; // Pencil stamps kept (~84 MB)
 
 const HEADER = /* wgsl */ `
 struct G { view: vec4f, size: vec4f, grid: vec4f, gridKind: vec4f, gridColor: vec4f };
@@ -205,27 +200,12 @@ interface Ref {
   inst?: number; n?: number; // stamps / dots in theirs
   tint?: Ref;
   texKey?: string; tex?: GPUTexture; group?: GPUBindGroup; nearest?: GPUBindGroup;
-  texts?: Map<number, { tex: GPUTexture; group: GPUBindGroup }>; // a text box's bitmaps by scale (the view's and the far tiles')
+  texts?: Map<number, { tex: GPUTexture; group: GPUBindGroup; pad: number }>; // a text box's bitmaps by scale (the view's and the far tiles')
   box: BBox; // for batching (world, without the drag offset)
 }
-interface GpuEl { c: Compiled; refs: Ref[]; off: [number, number]; used: number }
-/** a far-out tile: the ink of world rect (i, j) at L device px per world unit */
-interface FarTile { i: number; j: number; L: number; tex: GPUTexture; group: GPUBindGroup; slot: number; stale: boolean; used: number }
-type View = { x: number; y: number; w: number; h: number };
-
-export interface GpuFrame {
-  W: number; H: number; dpr: number;
-  s: number; ox: number; oy: number; // world → device px
-  dim: number; // focus dimming (1 = none)
-  paper: string;
-  grid: { kind: 0 | 1 | 2 | 3; sp: number; x: number; y: number; dark: boolean } | null; // CSS px
-  els: Element[]; // in drawing order
-  /** crowded far-out view: tiles instead of elements — the still ink in a world rect, in drawing order */
-  far?: (r: View) => Element[];
-  moving: boolean;
-  detail: number;
-  budget: number; // ms of compiling this frame
-}
+interface El { refs: Ref[]; off: [number, number] }
+/** a far-out tile's bitmap, and its item (its world rect, for drawing it) */
+interface FarTex { tex: GPUTexture; group: GPUBindGroup; slot: number }
 
 const BLENDS: Record<GBlend, GPUBlendState> = {
   over: { color: { srcFactor: 'one', dstFactor: 'one-minus-src-alpha' }, alpha: { srcFactor: 'one', dstFactor: 'one-minus-src-alpha' } },
@@ -234,7 +214,7 @@ const BLENDS: Record<GBlend, GPUBlendState> = {
   screen: { color: { srcFactor: 'one', dstFactor: 'one-minus-src' }, alpha: { srcFactor: 'one', dstFactor: 'one-minus-src-alpha' } },
 };
 
-export class WebGPURenderer {
+export class WebGPUBackend implements GpuBackend {
   private context: GPUCanvasContext;
   private format: GPUTextureFormat;
   private msaa: GPUTexture | null = null;
@@ -257,25 +237,21 @@ export class WebGPURenderer {
   private coverCap = 4096;
   private cover = new Uint32Array(4096);
   private coverN = 0;
-  private els = new Map<string, GpuEl>();
+  private els = new Map<number, El>();
   private patTex = new Map<string, GPUTexture>();
   private nibTex: GPUTexture | null = null;
   private nibGroup: GPUBindGroup | null = null;
-  private far = new Map<string, FarTile>(); // key `${L}|${i},${j}`
+  private far = new Map<string, FarTex>();
   private tileMsaa: GPUTexture | null = null;
   private tileStencil: GPUTexture | null = null;
-  private frameNo = 0;
+  private tileBuffers: GPUBuffer[] = [];
   lost = false;
-  /** far-out tiles still to render for the view (0 = complete) */
-  farPending = 0;
-  /** elements not drawn last frame (still compiling) */
-  pending = 0;
   /** draw calls last frame */
   draws = 0;
-  /** profiling: ms spent compiling (by element kind) and elements compiled; ms encoding the last frame */
-  stats = { compileMs: {} as Record<string, number>, compiled: {} as Record<string, number>, encodeMs: 0 };
+  /** ms encoding the last frame */
+  encodeMs = 0;
 
-  static async create(canvas: HTMLCanvasElement, src: SceneSource & { nibs(): HTMLCanvasElement[] }): Promise<WebGPURenderer | null> {
+  static async create(canvas: HTMLCanvasElement, src: SceneSource & { nibs(): HTMLCanvasElement[] }): Promise<WebGPUBackend | null> {
     try {
       if (!navigator.gpu) return null;
       const adapter = await navigator.gpu.requestAdapter();
@@ -283,7 +259,7 @@ export class WebGPURenderer {
       // (as big as the adapter allows: a crowded zine's geometry can pass the 256 MB default)
       const device = await adapter.requestDevice({ requiredLimits: { maxBufferSize: adapter.limits.maxBufferSize, maxStorageBufferBindingSize: adapter.limits.maxStorageBufferBindingSize } });
       device.addEventListener('uncapturederror', (e) => console.warn('[InfiniZine] WebGPU error', (e as GPUUncapturedErrorEvent).error.message));
-      const r = new WebGPURenderer(canvas, device, src);
+      const r = new WebGPUBackend(canvas, device, src);
       device.lost.then(() => { r.lost = true; });
       return r;
     } catch (e) {
@@ -354,25 +330,36 @@ export class WebGPURenderer {
   }
 
   get ok(): boolean { return !this.lost; }
-  /** what's held on the GPU (for the benchmark) */
-  memory(): string {
+
+  usage() { return { fill: this.fanA.used, stamps: this.stampA.used }; }
+  describe(): string {
     const mb = (n: number) => (n / 1e6).toFixed(0);
-    return `els ${this.els.size} · fill ${mb(this.fanA.used * 8)}/${mb(this.fanA.cap * 8)}MB · stamps ${mb(this.stampA.used * STAMP_WORDS * 4)}/${mb(this.stampA.cap * STAMP_WORDS * 4)}MB · dots ${mb(this.dotA.used * 12)}MB · items ${this.itemsA.used} · far tiles ${this.far.size} · draws ${this.draws}`;
+    return `fill ${mb(this.fanA.used * 8)}/${mb(this.fanA.cap * 8)}MB · stamps ${mb(this.stampA.used * STAMP_WORDS * 4)}/${mb(this.stampA.cap * STAMP_WORDS * 4)}MB · dots ${mb(this.dotA.used * DOT_WORDS * 4)}MB · items ${this.itemsA.used} · encode ${this.encodeMs.toFixed(1)}ms`;
   }
 
   // ---- scene ----
 
-  /** Forget elements (changed, deleted) — or all of them. */
-  drop(ids?: Iterable<string>) {
-    if (!ids) { this.dropTiles(); for (const id of [...this.els.keys()]) this.dropEl(id, false); return; }
-    for (const id of ids) this.dropEl(id);
-  }
-  private dropEl(id: string, stale = true) {
-    const e = this.els.get(id);
+  add(h: number, c: Compiled) { this.els.set(h, { refs: this.build(c), off: [0, 0] }); }
+  remove(h: number) {
+    const e = this.els.get(h);
     if (!e) return;
-    if (stale && this.far.size) this.staleRects([this.boxNow(e)]);
     for (const r of e.refs) this.freeRef(r);
-    this.els.delete(id);
+    this.els.delete(h);
+  }
+  move(h: number, dx: number, dy: number) {
+    const e = this.els.get(h);
+    if (!e) return;
+    e.off = [dx, dy];
+    const off = new Float32Array([dx, dy, 0, 0]);
+    const put = (r: Ref) => { this.device.queue.writeBuffer(this.itemsA.buf, r.slot * ITEM_BYTES + 48, off); if (r.tint) put(r.tint); };
+    e.refs.forEach(put);
+  }
+  dropTile(key: string) {
+    const t = this.far.get(key);
+    if (!t) return;
+    t.tex.destroy();
+    this.itemsA.release(t.slot, 1);
+    this.far.delete(key);
   }
   private freeRef(r: Ref) {
     this.itemsA.release(r.slot, 1);
@@ -381,31 +368,6 @@ export class WebGPURenderer {
     r.tex?.destroy();
     for (const t of r.texts?.values() ?? []) t.tex.destroy();
     if (r.tint) this.freeRef(r.tint);
-  }
-
-  private boxNow(e: GpuEl): BBox {
-    const b = e.c.bbox, [dx, dy] = e.off;
-    return { minX: b.minX + dx, minY: b.minY + dy, maxX: b.maxX + dx, maxY: b.maxY + dy };
-  }
-
-  /** An element changed: a pure move keeps its geometry (drawn shifted); anything else compiles again. */
-  touch(el: Element, patternsToo = false) {
-    const e = this.els.get(el.id);
-    if (!e) return;
-    if (this.far.size) this.staleRects([this.boxNow(e)]); // (where it was)
-    const movable = !(patternsToo && el.kind === 'fill' && el.pattern); // (a moved pattern re-anchors to the world once dropped)
-    if (movable && e.c.sig === shapeSig(el)) {
-      const a = anchorOf(el);
-      const dx = a.x - e.c.anchor.x, dy = a.y - e.c.anchor.y;
-      if (dx !== e.off[0] || dy !== e.off[1]) {
-        e.off = [dx, dy];
-        const off = new Float32Array([dx, dy, 0, 0]);
-        const put = (r: Ref) => { this.device.queue.writeBuffer(this.itemsA.buf, r.slot * ITEM_BYTES + 48, off); if (r.tint) put(r.tint); };
-        e.refs.forEach(put);
-      }
-      return;
-    }
-    this.dropEl(el.id);
   }
 
   private newItem(color: RGB, alpha: number, box: BBox, p: [number, number, number, number] = [0, 0, 0, 0]): number {
@@ -420,7 +382,7 @@ export class WebGPURenderer {
     return { item: it, slot: this.newItem(it.color, it.alpha, it.bbox, p), v, vn, box: it.bbox };
   }
 
-  private build(c: Compiled): GpuEl {
+  private build(c: Compiled): Ref[] {
     const refs: Ref[] = [];
     for (const it of c.items) {
       if (it.k === 'fan') refs.push(this.fanRef(it));
@@ -449,16 +411,7 @@ export class WebGPURenderer {
         refs.push({ item: it, slot: this.newItem([0, 0, 0], it.alpha, box), box, tint: it.tint ? this.fanRef(it.tint) : undefined });
       }
     }
-    return { c, refs, off: [0, 0], used: this.frameNo };
-  }
-
-  private compileTimed(el: Element, detail: number): GpuEl {
-    const t0 = performance.now();
-    const e = this.build(compile(el, detail, this.src));
-    const k = el.kind === 'stroke' ? el.tool : el.kind === 'fill' ? (el.pattern ? el.pattern.replace(/-\d+$/, '') : 'fill') : el.kind;
-    this.stats.compileMs[k] = (this.stats.compileMs[k] ?? 0) + performance.now() - t0;
-    this.stats.compiled[k] = (this.stats.compiled[k] ?? 0) + 1;
-    return e;
+    return refs;
   }
 
   // ---- textures ----
@@ -547,7 +500,7 @@ export class WebGPURenderer {
       if (!t) {
         const { c, pad } = this.textCanvas(src.el, scale);
         const tex = this.upload(c, c.width, c.height, undefined, false);
-        t = { tex, group: this.texGroup(tex, this.linearClamp) };
+        t = { tex, group: this.texGroup(tex, this.linearClamp), pad };
         r.texts.set(scale, t);
         // (two scales kept: the view's and the far tiles')
         if (r.texts.size > 2) { const [k0, t0] = r.texts.entries().next().value!; if (k0 !== scale) { t0.tex.destroy(); r.texts.delete(k0); } }
@@ -582,7 +535,8 @@ export class WebGPURenderer {
       this.stencil = this.device.createTexture({ size: [W, H], format: STENCIL, sampleCount: SAMPLES, usage: GPUTextureUsage.RENDER_ATTACHMENT });
     }
   }
-  private group0(): GPUBindGroup {
+  private group0(globals: GPUBuffer = this.globals): GPUBindGroup {
+    if (globals !== this.globals) return this.device.createBindGroup({ layout: this.gLayout, entries: [{ binding: 0, resource: { buffer: globals } }, { binding: 1, resource: { buffer: this.itemsA.buf } }] });
     if (!this.globalsGroup || this.groupGen !== this.itemsA.gen) {
       this.groupGen = this.itemsA.gen;
       this.globalsGroup = this.device.createBindGroup({ layout: this.gLayout, entries: [{ binding: 0, resource: { buffer: this.globals } }, { binding: 1, resource: { buffer: this.itemsA.buf } }] });
@@ -595,169 +549,33 @@ export class WebGPURenderer {
     this.cover[this.coverN] = slot;
     return this.coverN++;
   }
-
-  /** The elements' compiled parts (compiling what's missing while the budget lasts). */
-  private gather(f: GpuFrame): GpuEl[] {
-    const b = { spent: 0, pending: 0 };
-    const out = this.gatherEls(f.els, f, b);
-    this.pending = b.pending;
-    return out;
-  }
-  private gatherEls(els: Element[], f: GpuFrame, b: { spent: number; pending: number }): GpuEl[] {
-    const out: GpuEl[] = [];
-    let { spent, pending } = b;
-    for (const el of els) {
-      let e = this.els.get(el.id);
-      if (e && !e.c.zoomFree && e.c.detail !== f.detail && spent < f.budget) {
-        // finer (or coarser) outlines for this zoom, while there's time (the old ones draw meanwhile)
-        const t0 = performance.now();
-        const moved = e.off[0] || e.off[1];
-        this.dropEl(el.id, false);
-        e = this.compileTimed(el, f.detail);
-        this.els.set(el.id, e);
-        if (moved) this.touch(el);
-        spent += performance.now() - t0;
-      }
-      if (!e) {
-        if (spent >= f.budget) { pending++; continue; }
-        const t0 = performance.now();
-        e = this.compileTimed(el, f.detail);
-        this.els.set(el.id, e);
-        spent += performance.now() - t0;
-      }
-      e.used = this.frameNo;
-      out.push(e);
-    }
-    b.spent = spent; b.pending = pending;
+  private list(hs: number[]): El[] {
+    const out: El[] = [];
+    for (const h of hs) { const e = this.els.get(h); if (e) out.push(e); }
     return out;
   }
 
-  /** Let go of the geometry of elements unused the longest while over budget (their tiles keep the picture). */
-  private evict() {
-    if (this.fanA.used <= FAN_BUDGET && this.stampA.used <= STAMP_BUDGET) return;
-    const old = [...this.els.entries()].filter(([, e]) => e.used < this.frameNo).sort((a, b) => a[1].used - b[1].used);
-    for (const [id] of old) {
-      if (this.fanA.used <= FAN_BUDGET * 0.75 && this.stampA.used <= STAMP_BUDGET * 0.75) break;
-      this.dropEl(id, false);
-    }
-  }
-
-  // ---- far-out tiles ----
-
-  /** The tile level for a scale: √2 steps at or above it, so a tile is drawn at most √2 smaller. */
-  private static level(s: number): number { return Math.pow(2, Math.ceil(Math.log2(s) * 2 - 1e-9) / 2); }
-
-  /** Tiles under these world boxes are rendered again (the old picture shows until then). */
-  staleRects(boxes: BBox[]) {
-    for (const t of this.far.values()) {
-      const x0 = (t.i * TILE) / t.L, y0 = (t.j * TILE) / t.L, x1 = ((t.i + 1) * TILE) / t.L, y1 = ((t.j + 1) * TILE) / t.L;
-      if (boxes.some((b) => b.minX < x1 && b.maxX > x0 && b.minY < y1 && b.maxY > y0)) t.stale = true;
-    }
-  }
-  /** Forget every far tile (paper or grid changed, a big edit). */
-  dropTiles() {
-    for (const t of this.far.values()) { t.tex.destroy(); this.itemsA.release(t.slot, 1); }
-    this.far.clear();
-  }
-
-  /** Plan this frame's far view: which tiles it shows, and the ones to render now (centre out, within budget). */
-  private planFar(f: GpuFrame): { show: FarTile[]; build: { t: FarTile; list: GpuEl[] }[] } {
-    const L = WebGPURenderer.level(f.s);
-    const k = f.s / L; // a level tile on screen: TILE·k device px
-    const T = TILE * k;
-    const i0 = Math.floor(-f.ox / T), i1 = Math.floor((f.W - 1 - f.ox) / T);
-    const j0 = Math.floor(-f.oy / T), j1 = Math.floor((f.H - 1 - f.oy) / T);
-    const cx = (f.W / 2 - f.ox) / T, cy = (f.H / 2 - f.oy) / T;
-    const want: [number, number, number][] = [];
-    for (let j = j0; j <= j1; j++) for (let i = i0; i <= i1; i++) want.push([i, j, Math.hypot(i + 0.5 - cx, j + 0.5 - cy)]);
-    want.sort((a, b) => a[2] - b[2]);
-    const build: { t: FarTile; list: GpuEl[] }[] = [];
-    const b = { spent: 0, pending: 0 };
-    let drawsLeft = f.moving ? 4000 : 20000; // element parts rendered into tiles this frame
-    let missing = 0;
-    for (const [i, j] of want) {
-      const key = `${L}|${i},${j}`;
-      let t = this.far.get(key);
-      if (t && !t.stale) { t.used = this.frameNo; continue; }
-      missing++;
-      if (drawsLeft <= 0 || b.spent >= f.budget) continue;
-      const rect = { x: (i * TILE) / L, y: (j * TILE) / L, w: TILE / L, h: TILE / L };
-      const els = f.far!(rect);
-      const before = b.pending;
-      const list = this.gatherEls(els, f, b);
-      if (b.pending > before) continue; // (not all compiled yet: next frame)
-      if (!t) {
-        const tex = this.device.createTexture({ size: [TILE, TILE], format: this.format, usage: GPUTextureUsage.RENDER_ATTACHMENT | GPUTextureUsage.TEXTURE_BINDING });
-        t = { i, j, L, tex, group: this.texGroup(tex, this.linearClamp), slot: this.newItem([0, 0, 0], 1, { minX: rect.x, minY: rect.y, maxX: rect.x + rect.w, maxY: rect.y + rect.h }), stale: true, used: this.frameNo };
-        this.far.set(key, t);
-      }
-      t.stale = false;
-      t.used = this.frameNo;
-      for (const e of list) drawsLeft -= e.refs.length;
-      build.push({ t, list });
-      missing--;
-    }
-    this.farPending = missing;
-    this.pending = b.pending;
-    // what to show: this level's tiles, and under the gaps other levels' (coarse first, sharper on top)
-    const show: FarTile[] = [];
-    const view = { minX: -f.ox / f.s, minY: -f.oy / f.s, maxX: (f.W - f.ox) / f.s, maxY: (f.H - f.oy) / f.s };
-    const others = [...this.far.values()].filter((t) => t.L !== L && (t.i * TILE) / t.L < view.maxX && ((t.i + 1) * TILE) / t.L > view.minX && (t.j * TILE) / t.L < view.maxY && ((t.j + 1) * TILE) / t.L > view.minY);
-    if (missing) show.push(...others.sort((a, b) => a.L - b.L));
-    for (const [i, j] of want) { const t = this.far.get(`${L}|${i},${j}`); if (t) show.push(t); }
-    // forget tiles of levels far from this one, and this level's well off screen
-    for (const [key, t] of this.far) {
-      const off = t.L === L ? (t.i < i0 - 3 || t.i > i1 + 3 || t.j < j0 - 3 || t.j > j1 + 3) : (t.L > L * 2.9 || t.L < L / 2.9);
-      if (off && t.used < this.frameNo - 30) { t.tex.destroy(); this.itemsA.release(t.slot, 1); this.far.delete(key); }
-    }
-    return { show, build };
-  }
-
-  /** Render a tile's elements into its texture (one pass, its own camera). */
-  private encodeTile(enc: GPUCommandEncoder, t: FarTile, list: GpuEl[], f: GpuFrame) {
-    const d = this.device;
-    if (!this.tileMsaa) {
-      this.tileMsaa = d.createTexture({ size: [TILE, TILE], format: this.format, sampleCount: SAMPLES, usage: GPUTextureUsage.RENDER_ATTACHMENT });
-      this.tileStencil = d.createTexture({ size: [TILE, TILE], format: STENCIL, sampleCount: SAMPLES, usage: GPUTextureUsage.RENDER_ATTACHMENT });
-    }
-    const gl = d.createBuffer({ size: 80, usage: GPUBufferUsage.UNIFORM | GPUBufferUsage.COPY_DST });
-    d.queue.writeBuffer(gl, 0, new Float32Array([t.L, -t.i * TILE, -t.j * TILE, 1, TILE, TILE, f.dpr, 0.75, 1, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0]));
-    const group = d.createBindGroup({ layout: this.gLayout, entries: [{ binding: 0, resource: { buffer: gl } }, { binding: 1, resource: { buffer: this.itemsA.buf } }] });
-    const paper = rgb(f.paper);
-    const pass = enc.beginRenderPass({
-      colorAttachments: [{ view: this.tileMsaa.createView(), resolveTarget: t.tex.createView(), clearValue: { r: paper[0], g: paper[1], b: paper[2], a: 1 }, loadOp: 'clear', storeOp: 'discard' }],
-      depthStencilAttachment: { view: this.tileStencil!.createView(), stencilClearValue: 0, stencilLoadOp: 'clear', stencilStoreOp: 'discard' },
-    });
-    pass.setBindGroup(0, group);
-    this.encode(pass, list, t.L);
-    pass.end();
-    this.tileBuffers.push(gl);
-  }
-  private tileBuffers: GPUBuffer[] = [];
-
-  render(f: GpuFrame) {
+  frame(cmd: FrameCmd) {
     if (this.lost) return;
     const d = this.device;
-    this.frameNo++;
-    this.ensureTargets(f.W, f.H);
-    const farPlan = f.far ? this.planFar(f) : null;
-    const list = farPlan ? [] : this.gather(f);
-    if (!farPlan) this.farPending = 0;
-    const tEnc = performance.now();
-    const paper = rgb(f.paper);
-    const gr = f.grid;
+    const t0 = performance.now();
+    this.ensureTargets(cmd.W, cmd.H);
+    const paper = cmd.paper;
+    const gr = cmd.grid;
     const gridColor = gr ? (gr.dark ? [1, 1, 1, gr.kind === 1 ? 0.14 : 0.07] : [120 / 255, 105 / 255, 80 / 255, gr.kind === 1 ? 0.18 : 0.1]) : [0, 0, 0, 0];
     d.queue.writeBuffer(this.globals, 0, new Float32Array([
-      f.s, f.ox, f.oy, f.dim,
-      f.W, f.H, f.dpr, 0.75,
-      gr ? gr.sp * f.dpr : 1, gr ? gr.x * f.dpr : 0, gr ? gr.y * f.dpr : 0, 2 * f.dpr,
-      gr ? gr.kind : 0, f.dpr, 0, 0,
+      cmd.s, cmd.ox, cmd.oy, cmd.dim,
+      cmd.W, cmd.H, cmd.dpr, 0.75,
+      gr ? gr.sp * cmd.dpr : 1, gr ? gr.x * cmd.dpr : 0, gr ? gr.y * cmd.dpr : 0, 2 * cmd.dpr,
+      gr ? gr.kind : 0, cmd.dpr, 0, 0,
       ...gridColor,
     ]));
-    // every part draws at most one cover-type instance: make room for all of them before encoding
-    let bound = 8 + (farPlan?.show.length ?? 0);
-    for (const e of list) bound += e.refs.length;
-    for (const b of farPlan?.build ?? []) for (const e of b.list) bound += e.refs.length;
+    const main = cmd.els ? this.list(cmd.els) : [];
+    const builds = cmd.build.map((b) => ({ t: b, list: this.list(b.els) }));
+    // every part draws at most one cover-type instance: room for all of them before encoding
+    let bound = 8 + cmd.show.length;
+    for (const e of main) bound += e.refs.length;
+    for (const b of builds) for (const e of b.list) bound += e.refs.length;
     if (bound > this.coverCap) {
       this.coverBuf.destroy();
       while (this.coverCap < bound) this.coverCap *= 2;
@@ -766,37 +584,69 @@ export class WebGPURenderer {
     this.coverN = 0;
     const enc = d.createCommandEncoder();
     // (far tiles first: a pass can't open inside another)
-    for (const b of farPlan?.build ?? []) this.encodeTile(enc, b.t, b.list, f);
+    for (const b of builds) this.encodeTile(enc, b.t, b.list, cmd);
     const pass = enc.beginRenderPass({
       colorAttachments: [{ view: this.msaa!.createView(), resolveTarget: this.context.getCurrentTexture().createView(), clearValue: { r: paper[0], g: paper[1], b: paper[2], a: 1 }, loadOp: 'clear', storeOp: 'discard' }],
       depthStencilAttachment: { view: this.stencil!.createView(), stencilClearValue: 0, stencilLoadOp: 'clear', stencilStoreOp: 'discard' },
     });
     pass.setBindGroup(0, this.group0());
     let draws = 0;
-    if (farPlan) {
+    if (!cmd.els) {
       // far: the tiles (opaque: paper and ink), then the paper's marks over them
       pass.setPipeline(this.p['tex-over']);
       pass.setVertexBuffer(0, this.coverBuf);
-      for (const t of farPlan.show) { pass.setBindGroup(1, t.group); pass.draw(4, 1, 0, this.pushCover(t.slot)); draws++; }
+      for (const t of cmd.show) {
+        const f = this.far.get(t.key);
+        if (!f) continue;
+        pass.setBindGroup(1, f.group);
+        pass.draw(4, 1, 0, this.pushCover(f.slot));
+        draws++;
+      }
       if (gr && gr.kind) { pass.setPipeline(gr.dark ? this.p.gridScreen : this.p.gridMultiply); pass.draw(3); draws++; }
     } else {
       if (gr && gr.kind) { pass.setPipeline(this.p.grid); pass.draw(3); draws++; }
-      draws += this.encode(pass, list, f.s);
+      draws += this.encode(pass, main, cmd.s);
     }
     pass.end();
     // (the cover indices were gathered while encoding: they go up before the commands run)
     d.queue.writeBuffer(this.coverBuf, 0, this.cover.subarray(0, this.coverN));
     d.queue.submit([enc.finish()]);
-    this.draws = draws;
     for (const b of this.tileBuffers) b.destroy();
     this.tileBuffers = [];
-    this.stats.encodeMs = performance.now() - tEnc;
-    this.evict();
+    this.draws = draws;
+    this.encodeMs = performance.now() - t0;
+  }
+
+  /** Render a far tile's elements into its bitmap (one pass, its own camera). */
+  private encodeTile(enc: GPUCommandEncoder, t: TileRef, list: El[], cmd: FrameCmd) {
+    const d = this.device;
+    if (!this.tileMsaa) {
+      this.tileMsaa = d.createTexture({ size: [TILE, TILE], format: this.format, sampleCount: SAMPLES, usage: GPUTextureUsage.RENDER_ATTACHMENT });
+      this.tileStencil = d.createTexture({ size: [TILE, TILE], format: STENCIL, sampleCount: SAMPLES, usage: GPUTextureUsage.RENDER_ATTACHMENT });
+    }
+    let f = this.far.get(t.key);
+    if (!f) {
+      const tex = d.createTexture({ size: [TILE, TILE], format: this.format, usage: GPUTextureUsage.RENDER_ATTACHMENT | GPUTextureUsage.TEXTURE_BINDING });
+      const x = (t.i * TILE) / t.L, y = (t.j * TILE) / t.L, w = TILE / t.L;
+      f = { tex, group: this.texGroup(tex, this.linearClamp), slot: this.newItem([0, 0, 0], 1, { minX: x, minY: y, maxX: x + w, maxY: y + w }) };
+      this.far.set(t.key, f);
+    }
+    const gl = d.createBuffer({ size: 80, usage: GPUBufferUsage.UNIFORM | GPUBufferUsage.COPY_DST });
+    d.queue.writeBuffer(gl, 0, new Float32Array([t.L, -t.i * TILE, -t.j * TILE, 1, TILE, TILE, cmd.dpr, 0.75, 1, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0]));
+    this.tileBuffers.push(gl);
+    const paper = cmd.paper;
+    const pass = enc.beginRenderPass({
+      colorAttachments: [{ view: this.tileMsaa.createView(), resolveTarget: f.tex.createView(), clearValue: { r: paper[0], g: paper[1], b: paper[2], a: 1 }, loadOp: 'clear', storeOp: 'discard' }],
+      depthStencilAttachment: { view: this.tileStencil!.createView(), stencilClearValue: 0, stencilLoadOp: 'clear', stencilStoreOp: 'discard' },
+    });
+    pass.setBindGroup(0, this.group0(gl));
+    this.encode(pass, list, t.L);
+    pass.end();
   }
 
   /** Encode elements into a pass (bind group 0 set). Fills that don't overlap are batched: their
    * windings all go into the stencil, then one instanced cover colours them all. */
-  private encode(pass: GPURenderPassEncoder, list: GpuEl[], s: number): number {
+  private encode(pass: GPURenderPassEncoder, list: El[], s: number): number {
     let draws = 0;
     let cur: GPURenderPipeline | null = null;
     const use = (p: GPURenderPipeline) => { if (p !== cur) { pass.setPipeline(p); cur = p; } };
@@ -883,18 +733,12 @@ export class WebGPURenderer {
 
   /** Free everything GPU-side. */
   destroy() {
-    this.drop();
-    this.dropTiles();
+    for (const h of [...this.els.keys()]) this.remove(h);
+    for (const k of [...this.far.keys()]) this.dropTile(k);
     for (const t of this.patTex.values()) t.destroy();
     this.patTex.clear();
     this.nibTex?.destroy();
     this.msaa?.destroy(); this.stencil?.destroy();
     this.device.destroy();
   }
-}
-
-function rgb(c: string): RGB {
-  const m = /^#([0-9a-f]{6})$/i.exec(c);
-  const n = m ? parseInt(m[1], 16) : 0xf7f4ec;
-  return [((n >> 16) & 255) / 255, ((n >> 8) & 255) / 255, (n & 255) / 255];
 }

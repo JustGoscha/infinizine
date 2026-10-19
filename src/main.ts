@@ -65,6 +65,10 @@ if (nativeApp) {
     const existing = new Set(store.listDocs().map((m) => m.id));
     void import('./pentest').then((m) => m.runPanBench(store, camera, renderer, existing, nativeApp!.test!));
   }
+  else if (nativeApp.test === 'sync') {
+    const existing = new Set(store.listDocs().map((m) => m.id));
+    void import('./pentest').then((m) => m.runSyncTest(store, camera, renderer, existing));
+  }
   else if (nativeApp.test) void import('./pentest').then((m) => m.installPenTest(store, camera, state, canvas, nativeApp!.test!));
   // automation hooks (cross-play checks, simulator runs)
   (window as unknown as { __izineDebug: unknown }).__izineDebug = {

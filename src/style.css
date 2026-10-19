@@ -32,6 +32,9 @@ html, body {
 
 /* the paper and its dot / grid / line marks, behind the (transparent) canvas: moved and scaled with
    compositor transforms, so the marks follow every pan and zoom for free (see Renderer.updatePaper) */
+/* the iPad app's Metal view draws the paper and the still ink under the page: see-through */
+html.native-gpu, html.native-gpu body { background: transparent; }
+html.native-gpu #paper { display: none; }
 #paper {
   position: fixed;
   inset: 0;

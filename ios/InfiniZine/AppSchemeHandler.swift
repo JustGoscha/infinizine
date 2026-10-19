@@ -7,10 +7,29 @@ import WebKit
 final class AppSchemeHandler: NSObject, WKURLSchemeHandler {
     static let scheme = "izine"
     static let start = URL(string: "izine://app/index.html")!
+    /// packets for the native Metal view (izine://gpu/)
+    static var onGPU: ((Data) -> Void)?
     private let root = Bundle.main.resourceURL!.appendingPathComponent("web", isDirectory: true).standardizedFileURL
 
     func webView(_ webView: WKWebView, start task: WKURLSchemeTask) {
         guard let url = task.request.url else { return }
+        if url.host == "gpu" {
+            // the page's GPU engine, Metal backend: one packet per frame (see MetalInk)
+            var body = task.request.httpBody
+            if body == nil, let st = task.request.httpBodyStream {
+                var d = Data()
+                st.open()
+                var buf = [UInt8](repeating: 0, count: 1 << 16)
+                while st.hasBytesAvailable { let k = st.read(&buf, maxLength: buf.count); if k <= 0 { break }; d.append(buf, count: k) }
+                st.close()
+                body = d
+            }
+            if let body { Self.onGPU?(body) }
+            // (the page is izine://app: another host, so the reply needs CORS to count as delivered)
+            task.didReceive(HTTPURLResponse(url: url, statusCode: 200, httpVersion: "HTTP/1.1", headerFields: ["Access-Control-Allow-Origin": "*", "Content-Length": "0"])!)
+            task.didFinish()
+            return
+        }
         var path = url.path
         if path.isEmpty || path == "/" { path = "/index.html" }
         let file = root.appendingPathComponent(String(path.dropFirst())).standardizedFileURL
