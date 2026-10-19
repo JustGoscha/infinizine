@@ -43,12 +43,13 @@ if (!nativeApp && new URLSearchParams(location.search).has('bench')) {
     pre.textContent = `render bench — ${navigator.userAgent}\n${screen.width}×${screen.height} @${devicePixelRatio} · ${store.doc.elements.length} elements\n`;
     document.body.appendChild(pre);
     const cam = { x: camera.x, y: camera.y, zoom: camera.zoom };
-    const { runRenderBench, runVectorBench, runStressBench } = await import('./pentest');
+    const { runRenderBench, runAnimBench, runVectorBench, runStressBench } = await import('./pentest');
     const which = new URLSearchParams(location.search).get('bench') || 'all';
     const out = (m: string) => { pre.textContent += m + '\n'; };
     if (which === 'stress') await runStressBench(store, camera, renderer, out);
     if (which === 'vector' || which === 'all') await runVectorBench(store, camera, renderer, out);
     if (which === 'pan' || which === 'all' || which === '') await runRenderBench(store, camera, renderer, out);
+    if (which === 'anim' || which === 'all') await runAnimBench(store, camera, renderer, out);
     Object.assign(camera, cam);
     renderer.invalidate();
     pre.textContent += 'done — select and copy this text';
@@ -60,7 +61,7 @@ if (nativeApp) {
   // (after the library has loaded: an import during startup was overridden by the zine that was open last)
   (window as unknown as { __izineImport: (text: string) => Promise<boolean> }).__izineImport = (text) => store.ready.then(() => store.importJSON(text));
   // debug builds launched with -izineTest: the scripted Pencil benchmark
-  if (nativeApp.test === 'pan' || nativeApp.test === 'vector' || nativeApp.test === 'all' || nativeApp.test === 'stress') {
+  if (nativeApp.test === 'pan' || nativeApp.test === 'vector' || nativeApp.test === 'all' || nativeApp.test === 'stress' || nativeApp.test === 'anim') {
     // every zine that exists before the import: the bench never touches (or deletes) these
     const existing = new Set(store.listDocs().map((m) => m.id));
     void import('./pentest').then((m) => m.runPanBench(store, camera, renderer, existing, nativeApp!.test!));

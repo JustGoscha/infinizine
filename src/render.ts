@@ -87,9 +87,12 @@ export interface RenderOpts {
    * 'webgpu' everything on the GPU every frame (see webgpu.ts), where the browser has WebGPU ·
    * 'metal' the same, drawn by a native Metal view in the iPad app (see metal.ts) */
   engine: 'canvas' | 'webgpu' | 'metal';
+  /** animated areas' keyframes from bitmaps rendered once (and ahead), instead of redrawn every frame */
+  frames: boolean;
 }
-export const RENDER_DEFAULTS: RenderOpts = { schedule: 'adaptive', levels: true, fade: true, motion: true, prefetchDir: true, draft: true, grid: true, gridMode: 'canvas', vector: 'auto', feather: true, engine: 'canvas' };
+export const RENDER_DEFAULTS: RenderOpts = { schedule: 'adaptive', levels: true, fade: true, motion: true, prefetchDir: true, draft: true, grid: true, gridMode: 'canvas', vector: 'auto', feather: true, engine: 'canvas', frames: true };
 const FADE_MS = 300;
+const FRAME_BITMAP_BUDGET = 16_000_000; // px of keyframe bitmaps kept (~64 MB)
 /** elements in view past which the view counts as crowded: the 2D renderer stops listing them per
  * frame (it can't draw that many straight from vectors anyway), the GPU one draws its far tiles */
 const CANVAS_CROWD = 3000;
@@ -604,6 +607,7 @@ export class Renderer {
     for (const id of [...this.pencilCache.keys()]) this.dropPencilRaster(id);
     for (const id of [...this.pencilJobs.keys()]) this.dropPencilJob(id);
     for (const id of [...this.fillRasters.keys()]) this.dropFillRaster(id);
+    for (const fid of [...this.frameBitmaps.keys()]) this.dropFrameBitmap(fid);
     this.gpu?.drop();
     this.tileGen++;
   }
@@ -612,6 +616,12 @@ export class Renderer {
    * tiles when the change is a fresh append we can paint on top of. */
   docChanged(info?: ChangeInfo) {
     this.animBake.key = ''; // frozen areas may have changed
+    // keyframe bitmaps of the frames touched (before and after the change)
+    if (!info) { for (const fid of [...this.frameBitmaps.keys()]) this.dropFrameBitmap(fid); }
+    else {
+      for (const id of info.ids) { const f = this.ix.byId.get(id)?.frame; if (f) this.dropFrameBitmap(f); }
+      for (const el of info.added ?? []) if (el.frame) this.dropFrameBitmap(el.frame);
+    }
     if (!info) { this.ix.stale = true; this.clearCache(); this.invalidate(); return; }
     // where the touched elements were painted, before their caches go
     const before = info.ids.map((id) => this.tileBoxes.get(id));
@@ -2260,6 +2270,110 @@ export class Renderer {
     this.warmed = key;
   }
 
+  /** Keyframe bitmaps: each keyframe of a playing area rendered once at the zoom level (√2 steps,
+   * like the tiles), drawn scaled in between; a frame's bitmap is redone when its ink changes or
+   * the zoom settles on another level. Playback is then a blit per layer, however heavy the ink. */
+  private frameBitmaps = new Map<string, { c: HTMLCanvasElement; x: number; y: number; w: number; h: number; s: number; key: string }>();
+  private frameBitmapPx = 0;
+  private frameKey(els: Element[]): string { return `${this.contentKey()}|${els.length}`; }
+  /** Draw keyframe `fid` from its bitmap (made now if missing and there's time); false → draw it the usual way. */
+  private blitFrame(fid: string, els: Element[], dim: number): boolean {
+    let b = this.frameBitmaps.get(fid);
+    const s = this.levelFor(this.camera.zoom);
+    const zooming = performance.now() - this.lastZoomChangeAt < 180;
+    const key = this.frameKey(els);
+    if (!b || b.key !== key || (b.s !== s && !zooming)) {
+      if (b && b.key === key && zooming) { /* (mid-zoom: the old level, scaled) */ } else {
+        b = this.renderFrame(fid, els, s) ?? undefined;
+        if (!b) return false;
+      }
+    }
+    if (!b.c.width) return true; // (an empty frame)
+    const ctx = this.ctx;
+    ctx.save();
+    ctx.globalAlpha = dim;
+    ctx.globalCompositeOperation = 'source-over';
+    ctx.drawImage(b.c, b.x, b.y, b.w, b.h);
+    ctx.restore();
+    // (most recently used last)
+    this.frameBitmaps.delete(fid);
+    this.frameBitmaps.set(fid, b);
+    return true;
+  }
+  private renderFrame(fid: string, els: Element[], level: number) {
+    let minX = Infinity, minY = Infinity, maxX = -Infinity, maxY = -Infinity;
+    for (const el of els) { const b = this.elBox(el); minX = Math.min(minX, b.minX); minY = Math.min(minY, b.minY); maxX = Math.max(maxX, b.maxX); maxY = Math.max(maxY, b.maxY); }
+    this.dropFrameBitmap(fid);
+    const key = this.frameKey(els);
+    if (!els.length) { const e = { c: document.createElement('canvas'), x: 0, y: 0, w: 0, h: 0, s: level, key }; e.c.width = 0; this.frameBitmaps.set(fid, e); return e; }
+    let s = level;
+    const pad = 2 / s;
+    minX -= pad; minY -= pad; maxX += pad; maxY += pad;
+    while (((maxX - minX) * s > 4096 || (maxY - minY) * s > 4096) && s > 1 / 64) s /= 2;
+    const x = Math.floor(minX * s) / s, y = Math.floor(minY * s) / s;
+    const W = Math.ceil((maxX - x) * s), H = Math.ceil((maxY - y) * s);
+    const px = W * H;
+    // room for it: the least recently used go (frames in view were just used: they stay)
+    for (const [id, b] of this.frameBitmaps) {
+      if (this.frameBitmapPx + px <= FRAME_BITMAP_BUDGET) break;
+      this.frameBitmapPx -= b.c.width * b.c.height; b.c.width = b.c.height = 0; this.frameBitmaps.delete(id);
+    }
+    if (this.frameBitmapPx + px > FRAME_BITMAP_BUDGET) return null; // (too big to keep: drawn straight)
+    const c = document.createElement('canvas');
+    c.width = W; c.height = H;
+    const g = c.getContext('2d');
+    if (!g) return null;
+    const saved = this.ctx;
+    this.ctx = g;
+    this.tileScale = s;
+    try {
+      g.setTransform(s, 0, 0, s, -x * s, -y * s);
+      const view = { x, y, w: W / s, h: H / s };
+      for (const el of els) this.paintElement(el, view, this.camera.zoom, 1);
+    } finally {
+      this.ctx = saved;
+      this.tileScale = null;
+      g.setTransform(1, 0, 0, 1, 0, 0);
+    }
+    const e = { c, x, y, w: W / s, h: H / s, s: level, key };
+    this.frameBitmaps.set(fid, e);
+    this.frameBitmapPx += px;
+    return e;
+  }
+  private dropFrameBitmap(fid: string) {
+    const b = this.frameBitmaps.get(fid);
+    if (!b) return;
+    this.frameBitmapPx -= b.c.width * b.c.height;
+    b.c.width = b.c.height = 0;
+    this.frameBitmaps.delete(fid);
+  }
+  /** With time to spare: the keyframes of the playing areas in view that have no bitmap yet,
+   * the ones coming up soonest first (about the next two seconds of every layer). */
+  private preRenderFrames(view: View, until: number, frameEls: (fid: string) => Element[]) {
+    if (performance.now() > until || performance.now() - this.lastZoomChangeAt < 180) return;
+    const s = this.levelFor(this.camera.zoom);
+    const now = animClock.now();
+    for (const area of this.store.doc.areas) {
+      if (!this.areaInView(area, view) || (area.id === this.input.activeAreaId && !this.input.playingAreas)) continue;
+      const tick = Math.floor((now - this.input.playEpoch) * area.fps);
+      for (const layer of area.layers) {
+        if (layer.hidden || layer.kind === 'live' || !layer.frames.length) continue;
+        const total = layer.frames.reduce((a, f) => a + f.duration, 0);
+        // walk the next ~2 s of this layer's timeline, in order
+        for (let k = 0, seen = 0; k < Math.min(total, area.fps * 2) && seen < layer.frames.length; k++) {
+          const fid = frameAtTick(layer.frames, ((tick + k) % total + total) % total);
+          if (!fid) continue;
+          const els = frameEls(fid);
+          const b = this.frameBitmaps.get(fid);
+          if (b && b.key === this.frameKey(els) && b.s === s) continue;
+          seen++;
+          if (!this.renderFrame(fid, els, s)) return;
+          if (performance.now() > until) { this.dirty = true; return; }
+        }
+      }
+    }
+  }
+
   /** iPad app: tell the native ink overlay how the live stroke looks and what has been painted,
    * so it draws only the newest piece (see ios/InfiniZine/InkOverlay.swift). */
   private inkReported = '';
@@ -2788,7 +2902,15 @@ export class Renderer {
             }
             ctx.restore();
           }
-          for (const f of layer.frames) if (frameVis.get(f.id) === true) for (const el of frameEls(f.id)) drawEl(el);
+          // a playing area's keyframes come from bitmaps rendered once (and ahead of time: see preRenderFrames);
+          // the area being edited is drawn straight (its frames change as you draw)
+          const live = area.id === this.input.activeAreaId && !this.input.playingAreas && !this.input.presenting;
+          for (const f of layer.frames) {
+            if (frameVis.get(f.id) !== true) continue;
+            const els = frameEls(f.id);
+            if (live || !this.opts.frames || !this.blitFrame(f.id, els, dimFactor)) for (const el of els) drawEl(el);
+            else for (const el of els) this.paintElementUi(el, z);
+          }
           // live ink is motion — hidden while editing unless explicitly shown;
           // the ACTIVE live layer shows its strokes in full so you can identify them
           const editingArea =
@@ -2872,6 +2994,7 @@ export class Renderer {
     if (nativeApp && !presenting) this.reportInk(live);
     ctx.globalAlpha = 1;
     if (!animClock.paused) this.warmAreas(view, z, frameStart + this.buildBudget());
+    if (!animClock.paused && this.opts.frames) this.preRenderFrames(view, frameStart + this.buildBudget(), frameEls);
     if (this.pencilJobs.size) this.advancePencilJobs(1);
 
     // Page borders sit on top of everything
