@@ -31,7 +31,7 @@ type Op =
   | { type: 'move-area-content'; id: string; ids: string[]; dx: number; dy: number }
   | { type: 'resize-area'; id: string; before: { x: number; y: number; w: number; h: number }; after: { x: number; y: number; w: number; h: number } }
   | { type: 'move-frame'; areaId: string; layerId: string; from: number; to: number }
-  | { type: 'recolor-elements'; items: { id: string; before: string; after: string; beforePattern?: string; afterPattern?: string }[] }
+  | { type: 'recolor-elements'; items: { id: string; before: string; after: string; beforePattern?: string; afterPattern?: string; blend?: true; beforeBlend?: FillBlend; afterBlend?: FillBlend }[] }
   | { type: 'retime-strokes'; items: { id: string; before: number; after: number }[] }
   | { type: 'z-order'; prevOrder: string[]; nextOrder: string[]; layers?: { id: string; before?: Layer; after?: Layer }[] }
   | { type: 'frame-duration'; areaId: string; layerId: string; frameId: string; before: number; after: number }
@@ -646,7 +646,10 @@ export class Store {
           const el = d.elements.find((e) => e.id === it.id);
           if (el && el.kind !== 'image') {
             el.color = it.after;
-            if (el.kind === 'fill') { if (it.afterPattern) el.pattern = it.afterPattern; else delete el.pattern; }
+            if (el.kind === 'fill') {
+              if (it.afterPattern) el.pattern = it.afterPattern; else delete el.pattern;
+              if (it.blend) { if (it.afterBlend) el.blend = it.afterBlend; else delete el.blend; }
+            }
           }
         }
         break;
@@ -770,7 +773,7 @@ export class Store {
       case 'recolor-elements':
         return {
           ...op,
-          items: op.items.map((it) => ({ ...it, before: it.after, after: it.before, beforePattern: it.afterPattern, afterPattern: it.beforePattern })),
+          items: op.items.map((it) => ({ ...it, before: it.after, after: it.before, beforePattern: it.afterPattern, afterPattern: it.beforePattern, beforeBlend: it.afterBlend, afterBlend: it.beforeBlend })),
         };
       case 'retime-strokes':
         return { ...op, items: op.items.map((it) => ({ ...it, before: it.after, after: it.before })) };
@@ -1221,12 +1224,15 @@ export class Store {
     if (items.length) this.commit({ type: 'recolor-elements', items });
   }
 
-  /** set (or clear) the fill pattern on the given fills, colour unchanged (undoable) */
-  setPatterns(ids: string[], pattern: string | null) {
+  /** set (or clear) the fill pattern on the given fills, colour unchanged (undoable) — with the blend
+   * the pattern panel shows: a fill without one draws Normal when solid and Subtract when patterned,
+   * so changing only the pattern switched its blend behind the panel's back */
+  setPatterns(ids: string[], pattern: string | null, blend?: FillBlend) {
+    const want = (blend === undefined || blend === (pattern ? 'multiply' : 'source-over')) ? undefined : blend;
     const items = ids
       .map((id) => this.doc.elements.find((e) => e.id === id))
-      .filter((e): e is Extract<Element, { kind: 'fill' }> => !!e && e.kind === 'fill' && (e.pattern ?? null) !== pattern)
-      .map((e) => ({ id: e.id, before: e.color, after: e.color, beforePattern: e.pattern, afterPattern: pattern ?? undefined }));
+      .filter((e): e is Extract<Element, { kind: 'fill' }> => !!e && e.kind === 'fill' && ((e.pattern ?? null) !== pattern || (blend !== undefined && e.blend !== want)))
+      .map((e) => ({ id: e.id, before: e.color, after: e.color, beforePattern: e.pattern, afterPattern: pattern ?? undefined, ...(blend !== undefined ? { blend: true as const, beforeBlend: e.blend, afterBlend: want } : {}) }));
     if (items.length) this.commit({ type: 'recolor-elements', items });
   }
 

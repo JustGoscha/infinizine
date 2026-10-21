@@ -176,6 +176,50 @@ function cellRule(id: string): ((i: number, j: number) => boolean) | null {
   }
 }
 
+/** Every cell (on a grid of `cell`, anchored to the world origin) whose centre is inside the polygon
+ * (non-zero), row by row as column spans [c0, c1) — found from the row's edge crossings, so the cost
+ * follows the cells inside, not the bounding box (a long thin diagonal stroke has a huge one). */
+export function cellSpans(points: { x: number; y: number }[], cell: number, span: (r: number, c0: number, c1: number) => void) {
+  const n = points.length;
+  if (n < 3) return;
+  let minY = Infinity, maxY = -Infinity;
+  for (const q of points) { if (q.y < minY) minY = q.y; if (q.y > maxY) maxY = q.y; }
+  const r0 = Math.floor(minY / cell), r1 = Math.ceil(maxY / cell);
+  // edges bucketed by the rows they span
+  const rows = r1 - r0;
+  const buckets: number[][] = Array.from({ length: Math.max(1, rows) }, () => []);
+  for (let i = 0, j = n - 1; i < n; j = i++) {
+    const ya = Math.min(points[i].y, points[j].y), yb = Math.max(points[i].y, points[j].y);
+    const a = Math.max(0, Math.floor(ya / cell - 0.5) - r0), b = Math.min(rows - 1, Math.ceil(yb / cell - 0.5) - r0);
+    for (let r = a; r <= b; r++) buckets[r].push(i);
+  }
+  const xs: number[] = [], ws: number[] = [];
+  for (let r = r0; r < r1; r++) {
+    const y = (r + 0.5) * cell;
+    xs.length = 0; ws.length = 0;
+    for (const i of buckets[r - r0]) {
+      const j = i === 0 ? n - 1 : i - 1;
+      const yi = points[i].y, yj = points[j].y;
+      // half-open in y (an edge counts at its lower end, not its upper): vertices aren't counted twice
+      if ((yj <= y && yi > y) || (yi <= y && yj > y)) {
+        const t = (y - yj) / (yi - yj);
+        xs.push(points[j].x + (points[i].x - points[j].x) * t);
+        ws.push(yi > yj ? 1 : -1);
+      }
+    }
+    if (xs.length < 2) continue;
+    const order = xs.map((_, k) => k).sort((a, b) => xs[a] - xs[b]);
+    let w = 0;
+    for (let k = 0; k < order.length - 1; k++) {
+      w += ws[order[k]];
+      if (w === 0) continue;
+      const xa = xs[order[k]], xb = xs[order[k + 1]];
+      const ca = Math.ceil(xa / cell - 0.5), cb = Math.ceil(xb / cell - 0.5); // centres in [xa, xb)
+      if (cb > ca) span(r, ca, cb);
+    }
+  }
+}
+
 /** Pixel-pattern fill as solid geometry: every "on" cell whose centre is inside
  * the polygon, merged into horizontal runs. No repeating tile → no resampling
  * seams between pixels at any zoom; whole cells only at the edge.
@@ -184,27 +228,22 @@ export function cellPath(points: { x: number; y: number }[], id: string, m = 1):
   const rule = cellRule(id);
   const cell = (patternCellSize(id) ?? 0) * m;
   if (!rule || !cell || points.length < 3) return null;
-  let minX = Infinity, minY = Infinity, maxX = -Infinity, maxY = -Infinity;
-  for (const q of points) { minX = Math.min(minX, q.x); minY = Math.min(minY, q.y); maxX = Math.max(maxX, q.x); maxY = Math.max(maxY, q.y); }
-  const c0 = Math.floor(minX / cell), c1 = Math.ceil(maxX / cell);
-  const r0 = Math.floor(minY / cell), r1 = Math.ceil(maxY / cell);
-  if ((c1 - c0) * (r1 - r0) > 600_000) return null;
   const path = new Path2D();
-  const inPoly = polygonTesterNZ(points);
   const eps = cell * 0.02; // hairline overlap between runs so rows never show antialias seams
-  for (let r = r0; r < r1; r++) {
-    const cy = (r + 0.5) * cell;
+  let cells = 0;
+  cellSpans(points, cell, (r, a, b) => {
+    cells += b - a;
     let run: number | null = null; // start column of the current run (columns may be negative)
-    for (let c = c0; c <= c1; c++) {
-      const inside = c < c1 && rule(r, c) && inPoly((c + 0.5) * cell, cy);
-      if (inside && run === null) run = c;
-      if (!inside && run !== null) {
+    for (let c = a; c <= b; c++) {
+      const on = c < b && rule(r, c);
+      if (on && run === null) run = c;
+      if (!on && run !== null) {
         path.rect(run * cell - eps, r * cell - eps, (c - run) * cell + 2 * eps, cell + 2 * eps);
         run = null;
       }
     }
-  }
-  return path;
+  });
+  return cells > 3_000_000 ? null : path;
 }
 
 /** The same cells as cellPath, as a mask with one byte per cell (255 = ink) — drawn as a tiny
@@ -220,12 +259,11 @@ export function cellMask(points: { x: number; y: number }[], id: string): { mask
   const r0 = Math.floor(minY / cell), r1 = Math.ceil(maxY / cell);
   const cols = c1 - c0, rows = r1 - r0;
   if (cols <= 0 || rows <= 0 || cols * rows > 4_000_000) return null;
-  const inPoly = polygonTesterNZ(points);
   const mask = new Uint8Array(cols * rows);
-  for (let r = r0; r < r1; r++) {
-    const cy = (r + 0.5) * cell, o = (r - r0) * cols - c0;
-    for (let c = c0; c < c1; c++) if (rule(r, c) && inPoly((c + 0.5) * cell, cy)) mask[o + c] = 255;
-  }
+  cellSpans(points, cell, (r, a, b) => {
+    const o = (r - r0) * cols - c0;
+    for (let c = Math.max(a, c0); c < Math.min(b, c1); c++) if (rule(r, c)) mask[o + c] = 255;
+  });
   return { mask, c0, r0, cols, rows, cell };
 }
 

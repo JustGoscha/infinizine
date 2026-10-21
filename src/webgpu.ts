@@ -19,7 +19,7 @@ import type { BBox } from './geometry';
 import { STAMP_F, type Compiled, type GItem, type GBlend, type SceneSource, type RGB } from './gpuscene';
 import { GPU_TILE as TILE, type FrameCmd, type GpuBackend, type TileRef } from './gpuplan';
 import { patternTile } from './patterns';
-import { paintTextBox } from './text';
+import { paintTextBox, layoutText, layoutWidth, layoutHeight, boxFamily, wrapWidth } from './text';
 
 const SAMPLES = 4;
 const STENCIL: GPUTextureFormat = 'stencil8';
@@ -74,23 +74,24 @@ struct DOut { @builtin(position) pos: vec4f, @location(0) @interpolate(perspecti
   let p = vec2f(f32((i << 1u) & 2u), f32(i & 2u));
   return vec4f(p * 2.0 - 1.0, 0.0, 1.0);
 }
-// the paper's dots / lines / grid: marks centred on the cell corners, box-filtered over the pixel
-@fragment fn fs_grid(@builtin(position) pos: vec4f) -> @location(0) vec4f {
-  let sp = g.grid.x;
-  let q = pos.xy - g.grid.yz;
+// the paper's dots / lines / grid: marks centred on the cell corners, box-filtered over the pixel —
+// two levels, the coarse (2·sp) always, the in-between ones (sp) at t (see gridSpacing in render.ts)
+fn gridCov(q: vec2f, sp: f32) -> f32 {
   let f = q - round(q / sp) * sp;
-  var cov = 0.0;
   if (g.gridKind.x == 1.0) {
     let m = g.grid.w;
     let ov = clamp(vec2f(m * 0.5 + 0.5) - abs(f), vec2f(0.0), vec2f(min(m, 1.0)));
-    cov = ov.x * ov.y;
-  } else {
-    let lw = g.gridKind.y;
-    let h = clamp(lw * 0.5 + 0.5 - abs(f.y), 0.0, min(lw, 1.0));
-    var v = 0.0;
-    if (g.gridKind.x == 3.0) { v = clamp(lw * 0.5 + 0.5 - abs(f.x), 0.0, min(lw, 1.0)); }
-    cov = max(h, v);
+    return ov.x * ov.y;
   }
+  let lw = g.gridKind.y;
+  let h = clamp(lw * 0.5 + 0.5 - abs(f.y), 0.0, min(lw, 1.0));
+  var v = 0.0;
+  if (g.gridKind.x == 3.0) { v = clamp(lw * 0.5 + 0.5 - abs(f.x), 0.0, min(lw, 1.0)); }
+  return max(h, v);
+}
+@fragment fn fs_grid(@builtin(position) pos: vec4f) -> @location(0) vec4f {
+  let q = pos.xy - g.grid.yz;
+  let cov = max(gridCov(q, 2.0 * g.grid.x), g.gridKind.z * gridCov(q, g.grid.x));
   let a = g.gridColor.a * cov;
   return vec4f(g.gridColor.rgb * a, a);
 }
@@ -356,6 +357,21 @@ export class WebGPUBackend implements GpuBackend {
     const put = (r: Ref) => { this.device.queue.writeBuffer(this.itemsA.buf, r.slot * ITEM_BYTES + 48, off); if (r.tint) put(r.tint); };
     e.refs.forEach(put);
   }
+  stretch(h: number, box: BBox) {
+    const e = this.els.get(h);
+    if (!e) return;
+    for (const r of e.refs) {
+      if (r.item.k !== 'tex') continue;
+      const text = r.item.src.kind === 'text';
+      const pad = text && r.item.src.kind === 'text' ? r.item.src.el.fontSize * 0.4 : 0;
+      const w = text ? r.item.rect.w : box.maxX - box.minX, h = text ? r.item.rect.h : box.maxY - box.minY;
+      const b = { minX: box.minX - pad, minY: box.minY - pad, maxX: box.minX + w + pad, maxY: box.minY + h + pad };
+      this.device.queue.writeBuffer(this.itemsA.buf, r.slot * ITEM_BYTES + 16, new Float32Array([b.minX, b.minY, b.maxX, b.maxY]));
+      r.box = b;
+    }
+    // (stretched in place: no drag offset on top)
+    this.move(h, 0, 0);
+  }
   dropTile(key: string) {
     const t = this.far.get(key);
     if (!t) return;
@@ -471,17 +487,20 @@ export class WebGPUBackend implements GpuBackend {
   }
 
   /** A text box rasterised at `scale` px per world unit (a power of two, so it's redone only per octave of zoom). */
-  private textCanvas(el: TextBox, scale: number): { c: HTMLCanvasElement; pad: number } {
+  private textCanvas(el: TextBox, scale: number): { c: HTMLCanvasElement; pad: number; bw: number; bh: number } {
     const pad = el.fontSize * 0.4; // italics and descenders spill past the measured box
+    // (lines can run past the box — a box made smaller than its text: the bitmap holds all of it)
+    const lines = layoutText(el.text, boxFamily(el), el.fontSize, wrapWidth(el));
+    const bw = Math.max(el.w, layoutWidth(lines, boxFamily(el))), bh = Math.max(el.h, layoutHeight(lines));
     let s = scale;
-    while ((el.w + 2 * pad) * s > 4096 || (el.h + 2 * pad) * s > 4096) s /= 2;
+    while ((bw + 2 * pad) * s > 4096 || (bh + 2 * pad) * s > 4096) s /= 2;
     const c = document.createElement('canvas');
-    c.width = Math.max(1, Math.ceil((el.w + 2 * pad) * s));
-    c.height = Math.max(1, Math.ceil((el.h + 2 * pad) * s));
+    c.width = Math.max(1, Math.ceil((bw + 2 * pad) * s));
+    c.height = Math.max(1, Math.ceil((bh + 2 * pad) * s));
     const g = c.getContext('2d')!;
     g.setTransform(s, 0, 0, s, (pad - el.x) * s, (pad - el.y) * s);
     paintTextBox(g, el);
-    return { c, pad };
+    return { c, pad, bw, bh };
   }
 
   /** Make sure a bitmap item has its texture (and the right resolution of it); false if it can't draw yet. */
@@ -500,7 +519,7 @@ export class WebGPUBackend implements GpuBackend {
       r.texts ??= new Map();
       let t = r.texts.get(scale);
       if (!t) {
-        const { c, pad } = this.textCanvas(src.el, scale);
+        const { c, pad, bw, bh } = this.textCanvas(src.el, scale);
         const tex = this.upload(c, c.width, c.height, undefined, false);
         t = { tex, group: this.texGroup(tex, this.linearClamp), pad };
         r.texts.set(scale, t);
@@ -509,7 +528,7 @@ export class WebGPUBackend implements GpuBackend {
         if (r.texKey === undefined) {
           r.texKey = 'text';
           const q = it.rect;
-          this.device.queue.writeBuffer(this.itemsA.buf, r.slot * ITEM_BYTES + 16, new Float32Array([q.x - pad, q.y - pad, q.x + q.w + pad, q.y + q.h + pad]));
+          this.device.queue.writeBuffer(this.itemsA.buf, r.slot * ITEM_BYTES + 16, new Float32Array([q.x - pad, q.y - pad, q.x + bw + pad, q.y + bh + pad]));
         }
       }
       r.group = t.group;
@@ -569,7 +588,7 @@ export class WebGPUBackend implements GpuBackend {
       cmd.s, cmd.ox, cmd.oy, cmd.dim,
       cmd.W, cmd.H, cmd.dpr, 0.75,
       gr ? gr.sp * cmd.dpr : 1, gr ? gr.x * cmd.dpr : 0, gr ? gr.y * cmd.dpr : 0, 2 * cmd.dpr,
-      gr ? gr.kind : 0, cmd.dpr, 0, 0,
+      gr ? gr.kind : 0, cmd.dpr, gr ? gr.t : 0, 0,
       ...gridColor,
     ]));
     const main = cmd.els ? this.list(cmd.els) : [];

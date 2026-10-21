@@ -56,7 +56,7 @@ final class MetalInk: NSObject, MTKViewDelegate {
     struct Frame {
         var W: Float, H: Float, dpr: Float, s: Float, ox: Float, oy: Float, dim: Float
         var paper: SIMD3<Float>
-        var gridKind: UInt32, gridSp: Float, gridX: Float, gridY: Float, gridDark: Bool
+        var gridKind: UInt32, gridSp: Float, gridX: Float, gridY: Float, gridDark: Bool, gridT: Float
         var nibTex: UInt32
         var direct: Bool
         var els: [UInt32]
@@ -276,7 +276,7 @@ final class MetalInk: NSObject, MTKViewDelegate {
         _ = r.u32() // sequence
         let W = r.f32(), H = r.f32(), dpr = r.f32(), s = r.f32(), ox = r.f32(), oy = r.f32(), dim = r.f32()
         let paper = SIMD3<Float>(r.f32(), r.f32(), r.f32())
-        let gk = r.u32(), gsp = r.f32(), gx = r.f32(), gy = r.f32(), gdark = r.u32() != 0
+        let gk = r.u32(), gsp = r.f32(), gx = r.f32(), gy = r.f32(), gdark = r.u32() != 0, gt = r.f32()
         let nib = r.u32()
         let direct = r.u32() != 0
         var list: [UInt32] = []
@@ -299,7 +299,7 @@ final class MetalInk: NSObject, MTKViewDelegate {
             _ = tile(id, L, i, j)
             show.append(id)
         }
-        frame = Frame(W: W, H: H, dpr: dpr, s: s, ox: ox, oy: oy, dim: dim, paper: paper, gridKind: gk, gridSp: gsp, gridX: gx, gridY: gy, gridDark: gdark, nibTex: nib, direct: direct, els: list, show: show)
+        frame = Frame(W: W, H: H, dpr: dpr, s: s, ox: ox, oy: oy, dim: dim, paper: paper, gridKind: gk, gridSp: gsp, gridX: gx, gridY: gy, gridDark: gdark, gridT: gt, nibTex: nib, direct: direct, els: list, show: show)
     }
 
     private func tile(_ id: UInt32, _ L: Float, _ i: Int32, _ j: Int32) -> Tile {
@@ -324,7 +324,7 @@ final class MetalInk: NSObject, MTKViewDelegate {
             SIMD4(s, ox, oy, dim),
             SIMD4(W, H, f.dpr, 0.75),
             SIMD4(f.gridSp * f.dpr, f.gridX * f.dpr, f.gridY * f.dpr, 2 * f.dpr),
-            SIMD4(grid ? Float(f.gridKind) : 0, f.dpr, 0, 0),
+            SIMD4(grid ? Float(f.gridKind) : 0, f.dpr, f.gridT, 0),
             gc,
         ]
     }
@@ -679,22 +679,23 @@ final class MetalInk: NSObject, MTKViewDelegate {
       float2 p = float2(float((vid << 1u) & 2u), float(vid & 2u));
       FullOut o; o.pos = float4(p * 2.0 - 1.0, 0.0, 1.0); return o;
     }
-    fragment float4 fs_grid(FullOut in [[stage_in]], constant G& g [[buffer(3)]]) {
-      float sp = g.grid.x;
-      float2 q = in.pos.xy - g.grid.yz;
+    // two levels: the coarse marks (2·sp) always, the in-between ones (sp) at t
+    static float gridCov(float2 q, float sp, constant G& g) {
       float2 f = q - round(q / sp) * sp;
-      float cov = 0.0;
       if (g.gridKind.x == 1.0) {
         float m = g.grid.w;
         float2 ov = clamp(float2(m * 0.5 + 0.5) - abs(f), float2(0.0), float2(min(m, 1.0)));
-        cov = ov.x * ov.y;
-      } else {
-        float lw = g.gridKind.y;
-        float h = clamp(lw * 0.5 + 0.5 - abs(f.y), 0.0, min(lw, 1.0));
-        float v = 0.0;
-        if (g.gridKind.x == 3.0) { v = clamp(lw * 0.5 + 0.5 - abs(f.x), 0.0, min(lw, 1.0)); }
-        cov = max(h, v);
+        return ov.x * ov.y;
       }
+      float lw = g.gridKind.y;
+      float h = clamp(lw * 0.5 + 0.5 - abs(f.y), 0.0, min(lw, 1.0));
+      float v = 0.0;
+      if (g.gridKind.x == 3.0) { v = clamp(lw * 0.5 + 0.5 - abs(f.x), 0.0, min(lw, 1.0)); }
+      return max(h, v);
+    }
+    fragment float4 fs_grid(FullOut in [[stage_in]], constant G& g [[buffer(3)]]) {
+      float2 q = in.pos.xy - g.grid.yz;
+      float cov = max(gridCov(q, 2.0 * g.grid.x, g), g.gridKind.z * gridCov(q, g.grid.x, g));
       float a = g.gridColor.a * cov;
       return float4(g.gridColor.rgb * a, a);
     }

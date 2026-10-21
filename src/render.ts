@@ -186,7 +186,13 @@ export class Renderer {
       }
       const el = present.get(id);
       if (!el) continue;
-      if (!ix.order.has(id)) ix.order.set(id, ix.next++); // (appended: drawn on top)
+      if (!ix.order.has(id)) {
+        // new to the index: appended → on top; put back in the middle (an undo after the order was
+        // rebuilt without it) → the order is rebuilt from the zine (it went on top before)
+        const els = this.store.doc.elements;
+        if (els[els.length - 1]?.id !== id && !ids.includes(els[els.length - 1]?.id ?? '')) { ix.stale = true; return; }
+        ix.order.set(id, ix.next++);
+      }
       ix.byId.set(id, el);
       if (el.frame || (el.kind === 'stroke' && el.area)) animated = true;
       else ix.still.insert(el, this.elBox(el));
@@ -224,7 +230,7 @@ export class Renderer {
   }
   /** elements being dragged: out of the tiles, drawn as a bitmap rendered once at the drag's start
    * and moved with them; `landing` once dropped, until the tiles under them have them again */
-  private floating = new Map<string, { snap: HTMLCanvasElement | null; x: number; y: number; s: number; ax: number; ay: number; w: number; h: number; touched: number; landing: boolean }>();
+  private floating = new Map<string, { snap: HTMLCanvasElement | null; x: number; y: number; s: number; ax: number; ay: number; w: number; h: number; touched: number; landing: boolean; resized?: boolean }>();
   // ---- the GPU engine (opts.engine 'webgpu') ----
   private gpu: GpuEngine | null = null;
   private gpuState: 'off' | 'starting' | 'on' | 'failed' = 'off';
@@ -487,7 +493,8 @@ export class Renderer {
     if (!el) return;
     if (this.gpuShown && this.gpu) {
       // the GPU draws it where it is now: a move just shifts its geometry, a reshape compiles it again
-      this.gpu.touch(el);
+      // (a box being resized: its bitmap stretched until it rests)
+      this.gpu.touch(el, false, true);
       this.dropElementCaches(id);
       this.invalidate();
       return;
@@ -495,14 +502,11 @@ export class Renderer {
     const f = this.floating.get(id);
     if (f && !f.landing) {
       f.touched = performance.now();
-      // resized (text box / image handles), not just moved: render it again — those are cheap
+      // resized (text box / image handles): the bitmap stretches along; it's rendered again once the
+      // handle rests (every step re-rendered a whole zoomed-in text box: memory piled up, the page reloaded)
       if (el.kind === 'text' || el.kind === 'image') {
         const b = elementBBox(el);
-        if (Math.abs(b.maxX - b.minX - f.w) > 0.01 || Math.abs(b.maxY - b.minY - f.h) > 0.01) {
-          if (f.snap) f.snap.width = f.snap.height = 0;
-          const a = anchorOf(el);
-          Object.assign(f, this.snapshot(el), { ax: a.x, ay: a.y, w: b.maxX - b.minX, h: b.maxY - b.minY });
-        }
+        if (Math.abs(b.maxX - b.minX - f.w) > 0.01 || Math.abs(b.maxY - b.minY - f.h) > 0.01) f.resized = true;
       }
       this.invalidate();
       return;
@@ -554,11 +558,15 @@ export class Renderer {
       const el = this.index().byId.get(id);
       if (!el || !f.snap) continue;
       const a = anchorOf(el);
+      // (a box being resized: its bitmap stretched to the new size until it's rendered again)
+      let kx = 1, ky = 1;
+      // (an image's bitmap stretched to its new size; a text's at its old size: text re-wraps, stretched it'd only look wrong)
+      if (f.resized && el.kind === 'image') { kx = el.w / Math.max(1e-6, f.w); ky = el.h / Math.max(1e-6, f.h); }
       ctx.save();
       ctx.globalAlpha = 1;
       // (a fill overprints like it does in the tiles)
       ctx.globalCompositeOperation = el.kind === 'fill' ? el.blend ?? (el.pattern ? 'multiply' : 'source-over') : 'source-over';
-      ctx.drawImage(f.snap, f.x + a.x - f.ax, f.y + a.y - f.ay, f.snap.width / f.s, f.snap.height / f.s);
+      ctx.drawImage(f.snap, a.x + (f.x - f.ax) * kx, a.y + (f.y - f.ay) * ky, (f.snap.width / f.s) * kx, (f.snap.height / f.s) * ky);
       ctx.restore();
     }
   }
@@ -584,6 +592,12 @@ export class Renderer {
     for (const [id, f] of this.floating) {
       const el = this.index().byId.get(id);
       if (!el) { this.floating.delete(id); continue; }
+      if (f.resized && now - f.touched > 120 && (el.kind === 'text' || el.kind === 'image')) {
+        // the handle rests: render the box at its new size
+        if (f.snap) f.snap.width = f.snap.height = 0;
+        const a = anchorOf(el), b = elementBBox(el);
+        Object.assign(f, this.snapshot(el), { ax: a.x, ay: a.y, w: b.maxX - b.minX, h: b.maxY - b.minY, resized: false });
+      }
       if (!f.landing && now - f.touched > 300) {
         f.landing = true;
         const a = anchorOf(el);
@@ -648,7 +662,11 @@ export class Renderer {
     }
     const set = this.tileSet;
     const current = !!set && set.content === this.contentKey() && set.s === this.levelFor(this.camera.zoom);
-    const canAppend = current && info.added && info.added.length && info.added.every((el) => this.isStill(el));
+    // (only what's really new goes on top of the tiles: an undo puts deleted ink back where it was in
+    // the order — painted over the tiles it showed above ink that's in front of it)
+    const els = this.store.doc.elements, n = info.added?.length ?? 0;
+    const atEnd = !!n && els.length >= n && info.added!.every((el, k) => els[els.length - n + k]?.id === el.id);
+    const canAppend = current && atEnd && info.added!.every((el) => this.isStill(el));
     if (canAppend) {
       const boxes = info.added!.map((el) => this.elBox(el));
       this.dropTileJobs(boxes); // unfinished tiles would miss it
@@ -2607,20 +2625,18 @@ export class Renderer {
       ctx.clearRect(0, 0, vw, vh);
       const wm0 = this.worldMatrix(vw, vh, dpr);
       const pat = this.store.doc.pattern ?? 'dots';
-      let sp = 10 * camera.zoom;
-      while (sp < 8) sp *= 2;
-      while (sp > 120) sp /= 2;
+      const { sp, t: gt } = gridSpacing(camera.zoom);
       const o = camera.worldToScreen(0, 0, vw, vh);
       const els = inViewNow.filter((el) => el.layer === 'back').concat(inViewNow.filter((el) => el.layer !== 'back'));
       const gpu = this.gpu!;
       gpu.render({
         W: vw * dpr, H: vh * dpr, dpr, s: wm0.s, ox: wm0.ox, oy: wm0.oy,
         dim: this.focusAreaId() ? 0.3 : 1, paper,
-        grid: this.opts.grid && pat !== 'blank' ? { kind: pat === 'dots' ? 1 : pat === 'lines' ? 2 : 3, sp, x: o.x, y: o.y, dark: darkPaper(paper) } : null,
+        grid: this.opts.grid && pat !== 'blank' ? { kind: pat === 'dots' ? 1 : pat === 'lines' ? 2 : 3, sp, t: gt, x: o.x, y: o.y, dark: darkPaper(paper) } : null,
         els, crowded, query: (r: View) => { const l = this.stillIn(r); return l.filter((el) => el.layer === 'back').concat(l.filter((el) => el.layer !== 'back')); },
         moving: frameStart < this.movingUntil, detail: this.detail(), budget: Math.max(4, this.buildBudget()),
       });
-      if (gpu.pending || gpu.farPending) this.dirty = true;
+      if (gpu.busy) this.dirty = true;
     } else if (useStatic) {
       this.updatePaper(vw, vh, paper, true);
       blitFront = this.drawStatic(vw, vh, dpr, frameStart);
@@ -2684,11 +2700,8 @@ export class Renderer {
           : live;
         const outline = strokeOutline(shown, 1, true).map(([x, y]) => ({ x, y }));
         let path: Path2D | null = null;
-        if (isPixelPattern(pat)) {
-          const b = elementBBox({ ...shown, points: outline.map((q) => ({ ...q, p: 1, t: 0 })) });
-          const work = ((b.maxX - b.minX) / PIXEL_CELL) * ((b.maxY - b.minY) / PIXEL_CELL) * outline.length;
-          if (work < 4e6) path = cellPath(outline, pat); // huge scribbles preview as vector
-        }
+        // (the cells inside, row by row: as cheap for a long line as for a short one)
+        if (isPixelPattern(pat)) path = cellPath(outline, pat);
         ctx.save();
         ctx.globalCompositeOperation = this.input.fillBlend;
         ctx.globalAlpha = live.opacity * this.input.inkDensity;
@@ -3465,25 +3478,29 @@ export class Renderer {
     if (pattern === 'blank') return;
     const { camera, ctx } = this;
     const dark = darkPaper(paper);
-    let sp = 10 * camera.zoom; // 5 mm cells, CSS px; doubled / halved in mm steps like drawPattern
-    while (sp < 8) sp *= 2;
-    while (sp > 120) sp /= 2;
-    const N = 64; // tile px for one cell, scaled to the real cell size by the pattern transform
-    const key = `${pattern}|${dark}|${Math.round((2 / sp) * N * 4)}`;
+    const { sp, t } = gridSpacing(camera.zoom);
+    // one tile = one coarse cell (2 sp): its corner marks full, the in-between ones at t
+    const N = 64;
+    const key = `${pattern}|${dark}|${Math.round((2 / sp) * N * 4)}|${Math.round(t * 32)}`;
     if (this.gridTile?.key !== key) {
       const c = document.createElement('canvas');
       c.width = c.height = N;
       const g = c.getContext('2d')!;
-      const mark = (2 / sp) * N; // 2 CSS px marks
+      const H = N / 2;
+      const [r, gr, b, a] = dark ? [255, 255, 255, pattern === 'dots' ? 0.14 : 0.07] : [120, 105, 80, pattern === 'dots' ? 0.18 : 0.1];
+      const style = (k: number) => `rgba(${r},${gr},${b},${a * k})`;
       if (pattern === 'dots') {
-        g.fillStyle = dark ? 'rgba(255,255,255,0.14)' : 'rgba(120,105,80,0.18)';
-        g.fillRect(0, 0, mark / 2, mark / 2); g.fillRect(N - mark / 2, 0, mark / 2, mark / 2);
-        g.fillRect(0, N - mark / 2, mark / 2, mark / 2); g.fillRect(N - mark / 2, N - mark / 2, mark / 2, mark / 2);
+        const m = (2 / (2 * sp)) * N / 2; // half a 2 CSS px mark, in tile px
+        // a mark centred on (x, y), wrapped round the tile's edges
+        const dot = (x: number, y: number) => { for (const X of x === 0 ? [0, N] : [x]) for (const Y of y === 0 ? [0, N] : [y]) g.fillRect(X - m, Y - m, 2 * m, 2 * m); };
+        g.fillStyle = style(1); dot(0, 0);
+        if (t > 0.01) { g.fillStyle = style(t); dot(H, 0); dot(0, H); dot(H, H); }
       } else {
-        g.fillStyle = dark ? 'rgba(255,255,255,0.07)' : 'rgba(120,105,80,0.1)';
-        const lw = (1 / sp) * N;
-        g.fillRect(0, 0, N, lw / 2); g.fillRect(0, N - lw / 2, N, lw / 2);
-        if (pattern === 'grid') { g.fillRect(0, 0, lw / 2, N); g.fillRect(N - lw / 2, 0, lw / 2, N); }
+        const lw = (1 / (2 * sp)) * N / 2; // half a 1 CSS px line
+        const hline = (y: number) => { g.fillRect(0, y - lw, N, 2 * lw); if (y === 0) g.fillRect(0, N - lw, N, 2 * lw); };
+        const vline = (x: number) => { g.fillRect(x - lw, 0, 2 * lw, N); if (x === 0) g.fillRect(N - lw, 0, 2 * lw, N); };
+        g.fillStyle = style(1); hline(0); if (pattern === 'grid') vline(0);
+        if (t > 0.01) { g.fillStyle = style(t); hline(H); if (pattern === 'grid') vline(H); }
       }
       const pat = ctx.createPattern(c, 'repeat');
       if (!pat) return;
@@ -3491,7 +3508,7 @@ export class Renderer {
     }
     const o = camera.worldToScreen(0, 0, vw, vh); // cells anchored to the world origin
     const pat = this.gridTile.pat;
-    pat.setTransform(new DOMMatrix().translate(o.x, o.y).scale(sp / N));
+    pat.setTransform(new DOMMatrix().translate(o.x, o.y).scale((2 * sp) / N));
     ctx.save();
     ctx.globalCompositeOperation = op ?? (dark ? 'screen' : 'multiply');
     ctx.globalAlpha = 1;
@@ -3553,6 +3570,17 @@ function anchorOf(el: Element): { x: number; y: number } {
   if (el.kind === 'text' || el.kind === 'image') return { x: el.x, y: el.y };
   const p = el.points[0];
   return p ? { x: p.x, y: p.y } : { x: 0, y: 0 };
+}
+
+/** The paper marks' spacing on screen (CSS px) — two levels at once: `sp` (8–16 px) fading in at
+ * `t` (0–1) between the coarse ones at 2·sp, always there. Zooming, the in-between marks fade in
+ * until the next step, which then looks the same: no jump, and about as many marks at every zoom
+ * (one level jumping between 8 and 120 px made some zooms look 4–200× busier than others). */
+function gridSpacing(zoom: number): { sp: number; t: number } {
+  let sp = 10 * zoom; // 5 mm cells
+  while (sp < 8) sp *= 2;
+  while (sp >= 16) sp /= 2;
+  return { sp, t: Math.log2(sp / 8) };
 }
 
 function darkPaper(paper: string): boolean {

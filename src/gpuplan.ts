@@ -26,7 +26,7 @@ export interface GpuFrame {
   budget: number; // ms of compiling this frame
 }
 /** the paper's marks: kind 1 dots · 2 lines · 3 grid; spacing and origin in CSS px */
-export interface GridParams { kind: 0 | 1 | 2 | 3; sp: number; x: number; y: number; dark: boolean }
+export interface GridParams { kind: 0 | 1 | 2 | 3; sp: number; t: number; x: number; y: number; dark: boolean }
 
 export interface TileRef { key: string; L: number; i: number; j: number }
 /** One frame for a backend to draw. */
@@ -48,6 +48,9 @@ export interface GpuBackend {
   remove(h: number): void;
   /** an element moved (drag): its geometry drawn shifted */
   move(h: number, dx: number, dy: number): void;
+  /** a text box / image being resized: an image's bitmap stretched over this box (world), a text's
+   * moved with its corner at its old size (stretched text would only look wrong: it re-wraps) */
+  stretch(h: number, box: BBox): void;
   dropTile(key: string): void;
   frame(cmd: FrameCmd): void;
   /** held geometry, in fill vertices and Pencil stamps (what eviction goes by) */
@@ -79,6 +82,8 @@ export class GpuEngine {
   constructor(readonly backend: GpuBackend, private src: SceneSource) {}
 
   get ok(): boolean { return this.backend.ok; }
+  /** more to do next frame: compiling, far tiles, resized boxes to settle */
+  get busy(): boolean { return this.pending > 0 || this.farPending > 0 || this.stretched.size > 0; }
   get draws(): number { return this.backend.draws; }
 
   memory(): string {
@@ -108,10 +113,23 @@ export class GpuEngine {
     return { minX: b.minX + dx, minY: b.minY + dy, maxX: b.maxX + dx, maxY: b.maxY + dy };
   }
 
-  /** An element changed: a pure move keeps its geometry (drawn shifted); anything else compiles again. */
-  touch(el: Element, patternsToo = false) {
+  /** text / image boxes being resized: their bitmaps stretched since (ms), compiled again once they rest */
+  private stretched = new Map<string, number>();
+
+  /** An element changed: a pure move keeps its geometry (drawn shifted); anything else compiles again.
+   * `live` (a drag in progress): a resized text box or image keeps its bitmap, stretched, for now. */
+  touch(el: Element, patternsToo = false, live = false) {
     const e = this.els.get(el.id);
     if (!e) return;
+    if (live && (el.kind === 'text' || el.kind === 'image') && e.c.sig !== shapeSig(el)) {
+      if (this.tiles.size) this.staleRects([this.boxNow(e), { minX: el.x, minY: el.y, maxX: el.x + el.w, maxY: el.y + el.h }]);
+      this.backend.stretch(e.h, { minX: el.x, minY: el.y, maxX: el.x + el.w, maxY: el.y + el.h });
+      e.off = [0, 0];
+      this.stretched.set(el.id, performance.now());
+      this.changed = true;
+      return;
+    }
+    this.stretched.delete(el.id);
     if (this.tiles.size) this.staleRects([this.boxNow(e)]); // (where it was)
     const movable = !(patternsToo && el.kind === 'fill' && el.pattern); // (a moved pattern re-anchors to the world once dropped)
     if (movable && e.c.sig === shapeSig(el)) {
@@ -198,6 +216,9 @@ export class GpuEngine {
   render(f: GpuFrame) {
     if (!this.backend.ok) return;
     this.frameNo++;
+    // resized boxes that rest: rendered at their size again
+    for (const [id, t] of this.stretched) if (performance.now() - t > 150) { this.stretched.delete(id); this.dropEl(id); }
+    if (this.stretched.size) this.changed = true; // (come back to settle them)
     const b = { spent: 0, pending: 0 };
     const cmd: FrameCmd = {
       W: f.W, H: f.H, dpr: f.dpr, s: f.s, ox: f.ox, oy: f.oy, dim: f.dim, paper: hexRGB(f.paper), grid: f.grid,
@@ -221,7 +242,7 @@ export class GpuEngine {
     this.pending = b.pending;
     // the same frame as last time (nothing of ours moved or changed — e.g. while a live stroke is drawn
     // on the page above): skip it, the GPU's picture stays up
-    let sig = `${f.W}|${f.H}|${f.s}|${f.ox}|${f.oy}|${f.dim}|${f.paper}|${f.grid ? `${f.grid.kind}|${f.grid.sp}|${f.grid.x}|${f.grid.y}` : ''}|${cmd.build.length}|${cmd.show.length}|${hs.length}`;
+    let sig = `${f.W}|${f.H}|${f.s}|${f.ox}|${f.oy}|${f.dim}|${f.paper}|${f.grid ? `${f.grid.kind}|${f.grid.sp}|${f.grid.t}|${f.grid.x}|${f.grid.y}` : ''}|${cmd.build.length}|${cmd.show.length}|${hs.length}`;
     let k = 0;
     for (const h of hs) k = (k * 31 + h) | 0;
     for (const t of cmd.show) k = (k * 31 + t.i * 7 + t.j) | 0;

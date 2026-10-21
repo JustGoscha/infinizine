@@ -11,7 +11,7 @@ import type { TextBox } from './types';
 import { STAMP_F, type Compiled, type GBlend, type GItem, type SceneSource } from './gpuscene';
 import type { FrameCmd, GpuBackend } from './gpuplan';
 import { patternTile } from './patterns';
-import { paintTextBox } from './text';
+import { paintTextBox, layoutText, layoutWidth, layoutHeight, boxFamily, wrapWidth } from './text';
 import { postNative } from './native';
 
 const enum R { Add = 1, Remove = 2, Move = 3, Tex = 4, TexSet = 5, TexFree = 6, DropTile = 7, Frame = 8 }
@@ -120,17 +120,20 @@ export class MetalBridge implements GpuBackend {
     if (!t) { t = this.sendTex([patternTile(id, '#000000', px)], px, px, true); this.patTex.set(key, t); }
     return t;
   }
-  private textCanvas(el: TextBox, scale: number): { c: HTMLCanvasElement; pad: number } {
-    const pad = el.fontSize * 0.4;
+  private textCanvas(el: TextBox, scale: number): { c: HTMLCanvasElement; pad: number; bw: number; bh: number } {
+    const pad = el.fontSize * 0.4; // italics and descenders spill past the measured box
+    // (lines can run past the box — a box made smaller than its text: the bitmap holds all of it)
+    const lines = layoutText(el.text, boxFamily(el), el.fontSize, wrapWidth(el));
+    const bw = Math.max(el.w, layoutWidth(lines, boxFamily(el))), bh = Math.max(el.h, layoutHeight(lines));
     let s = scale;
-    while ((el.w + 2 * pad) * s > 4096 || (el.h + 2 * pad) * s > 4096) s /= 2;
+    while ((bw + 2 * pad) * s > 4096 || (bh + 2 * pad) * s > 4096) s /= 2;
     const c = document.createElement('canvas');
-    c.width = Math.max(1, Math.ceil((el.w + 2 * pad) * s));
-    c.height = Math.max(1, Math.ceil((el.h + 2 * pad) * s));
+    c.width = Math.max(1, Math.ceil((bw + 2 * pad) * s));
+    c.height = Math.max(1, Math.ceil((bh + 2 * pad) * s));
     const g = c.getContext('2d')!;
     g.setTransform(s, 0, 0, s, (pad - el.x) * s, (pad - el.y) * s);
     paintTextBox(g, el);
-    return { c, pad };
+    return { c, pad, bw, bh };
   }
   /** The texture a part should draw with at scale s (sent / swapped as needed). */
   private readyTex(h: number, k: number, p: Part, s: number) {
@@ -145,9 +148,9 @@ export class MetalBridge implements GpuBackend {
       key = `t${scale}`;
       const el = it.src.el;
       make = () => {
-        const { c, pad } = this.textCanvas(el, scale);
+        const { c, pad, bw, bh } = this.textCanvas(el, scale);
         const q = it.rect;
-        return { id: this.sendTex([c], c.width, c.height, false), rect: [q.x - pad, q.y - pad, q.x + q.w + pad, q.y + q.h + pad] };
+        return { id: this.sendTex([c], c.width, c.height, false), rect: [q.x - pad, q.y - pad, q.x + bw + pad, q.y + bh + pad] };
       };
     } else if (it.k === 'tex') {
       key = 'img';
@@ -216,6 +219,22 @@ export class MetalBridge implements GpuBackend {
   move(h: number, dx: number, dy: number) {
     this.w.record(R.Move, () => { this.w.u32(h); this.w.f32(dx); this.w.f32(dy); });
   }
+  stretch(h: number, box: { minX: number; minY: number; maxX: number; maxY: number }) {
+    const e = this.els.get(h);
+    if (!e) return;
+    e.parts.forEach((p, k) => {
+      const it = p.item;
+      if (it.k !== 'tex' || !p.tex) return;
+      const text = it.src.kind === 'text';
+      const pad = it.src.kind === 'text' ? it.src.el.fontSize * 0.4 : 0;
+      const w = text ? it.rect.w : box.maxX - box.minX, hh = text ? it.rect.h : box.maxY - box.minY;
+      this.w.record(R.TexSet, () => {
+        this.w.u32(h); this.w.u32(k); this.w.u32(p.tex!); this.w.u32(1);
+        for (const v of [box.minX - pad, box.minY - pad, box.minX + w + pad, box.minY + hh + pad]) this.w.f32(v);
+      });
+    });
+    this.move(h, 0, 0);
+  }
   private tileIds = new Map<string, number>();
   private nextTile = 1;
   private tileId(key: string): number {
@@ -253,7 +272,7 @@ export class MetalBridge implements GpuBackend {
       w.f32(cmd.W); w.f32(cmd.H); w.f32(cmd.dpr); w.f32(cmd.s); w.f32(cmd.ox); w.f32(cmd.oy); w.f32(cmd.dim);
       w.f32(cmd.paper[0]); w.f32(cmd.paper[1]); w.f32(cmd.paper[2]);
       const g = cmd.grid;
-      w.u32(g ? g.kind : 0); w.f32(g?.sp ?? 1); w.f32(g?.x ?? 0); w.f32(g?.y ?? 0); w.u32(g?.dark ? 1 : 0);
+      w.u32(g ? g.kind : 0); w.f32(g?.sp ?? 1); w.f32(g?.x ?? 0); w.f32(g?.y ?? 0); w.u32(g?.dark ? 1 : 0); w.f32(g?.t ?? 0);
       w.u32(this.nibTex);
       w.u32(cmd.els ? 1 : 0);
       const els = cmd.els ?? [];

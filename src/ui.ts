@@ -465,7 +465,7 @@ export function buildUI(
     writePref('infinizine-fill-pattern3', pat ?? '');
     // selected fills take the pattern right away
     const ids = store.doc.elements.filter((el) => el.kind === 'fill' && state.selection.has(el.id)).map((el) => el.id);
-    if (ids.length) store.setPatterns(ids, pat);
+    if (ids.length) store.setPatterns(ids, pat, state.fillBlend);
     // the pens paint patterns too, so only a non-drawing tool jumps to the fill tool
     if (pat && !['pen', 'pencil', 'sketch', 'fineliner', 'marker', 'lasso-fill', 'lasso-blob'].includes(state.tool)) { state.tool = 'lasso-fill'; state.onToolChange(); }
     state.rememberTool(); // like the colour, the pattern belongs to the tool
